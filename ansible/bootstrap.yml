@@ -1,0 +1,51 @@
+# Primer paso en un VPS NUEVO (Ubuntu 24.04, root con tu llave, SSH en el 22).
+#   ansible-playbook bootstrap.yml -e ansible_user=root -e ansible_port=22
+# Crea el usuario de operación y mueve SSH a su puerto (group_vars/all.yml). La conexión se corta al final: es lo esperado.
+# Después todo va con site.yml (ver docs/runbooks/reconstruir-servidor.md).
+- name: Bootstrap de un VPS nuevo
+  hosts: homelab
+  gather_facts: false
+  vars_prompt:
+    - name: bootstrap_password
+      prompt: Contraseña de sudo del usuario de operación (guárdala en el gestor)
+      private: true
+      encrypt: sha512_crypt
+      confirm: true
+      salt_size: 16
+  tasks:
+    # Mismo UID que el servidor original: los archivos que restaura restic
+    # guardan el dueño por número.
+    - name: Usuario de operación
+      ansible.builtin.user:
+        name: "{{ homelab_user }}"
+        uid: "{{ homelab_uid }}"
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        password: "{{ bootstrap_password }}"
+        update_password: on_create
+
+    - name: Llaves autorizadas
+      ansible.posix.authorized_key:
+        user: "{{ homelab_user }}"
+        key: "{{ lookup('file', playbook_dir + '/../host/ssh/authorized_keys') }}"
+
+    - name: Directorio del override de ssh.socket
+      ansible.builtin.file:
+        path: /etc/systemd/system/ssh.socket.d
+        state: directory
+        mode: "0755"
+
+    - name: SSH en el puerto {{ homelab_ssh_port }}
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../host/systemd/ssh.socket.d/override.conf.j2"
+        dest: /etc/systemd/system/ssh.socket.d/override.conf
+        mode: "0644"
+
+    - name: Mover SSH al puerto nuevo (corta esta conexión)
+      ansible.builtin.systemd_service:
+        name: ssh.socket
+        state: restarted
+        daemon_reload: true
+      async: 30
+      poll: 0

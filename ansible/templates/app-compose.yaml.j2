@@ -1,0 +1,96 @@
+{# Imagen en GHCR = el repo de la app (app.repo, o dueño/nombre por defecto). #}
+{% set image = app.image | default('ghcr.io/' ~ (app.repo | default(homelab_github_owner ~ '/' ~ app.name) | lower)) -%}
+{% set apex = app.host == '@' -%}
+{# Dominio raíz (host "@"): sirve DOMAIN y www.DOMAIN; el router toma el nombre de la app. #}
+{% set router = app.name if apex else app.host -%}
+# {{ app.name }}: GENERADO desde app.yml por ansible/apps.yml. No editar a mano.
+# TAG (hash del commit) y los secretos vienen de .env (solo en el servidor).
+services:
+  app:
+    image: {{ image }}:${TAG:?falta TAG en .env}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_VERSION: ${TAG}
+    networks:
+      - proxy
+{% for net in app.networks | default([]) %}
+      - {{ net }}
+{% endfor %}
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+{% if apex %}
+      - traefik.http.routers.{{ router }}.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)
+{% else %}
+      - traefik.http.routers.{{ router }}.rule=Host(`{{ app.host }}.${DOMAIN}`)
+{% endif %}
+      - traefik.http.routers.{{ router }}.entrypoints=websecure
+{% if app.access | default('vpn') == 'vpn' %}
+      - traefik.http.routers.{{ router }}.middlewares=vpn-only@file
+{% endif %}
+      - traefik.http.services.{{ router }}.loadbalancer.server.port={{ app.port }}
+{% if app.health is defined %}
+      # deploy-app.sh consulta esta ruta (HTTP, desde el host) antes de dar la versión por sana.
+      - andamio.health={{ app.health }}
+{% endif %}
+    security_opt: [no-new-privileges:true]
+    mem_limit: {{ app.resources.mem }}
+    memswap_limit: {{ app.resources.mem }}
+    cpus: {{ app.resources.cpus }}
+    pids_limit: {{ app.resources.pids }}
+{% if app.worker is defined %}
+
+  # Worker: la misma imagen con otro proceso. Sin Traefik. Con heartbeat: true, su
+  # salud es un latido (toca /tmp/heartbeat cada pocos segundos; si se cuelga, deja de
+  # hacerlo). Sin él, deploy-app.sh lo da por sano si arranca y no se reinicia.
+  worker:
+    image: {{ image }}:${TAG:?falta TAG en .env}
+    command: {{ app.worker.command | to_json }}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_VERSION: ${TAG}
+{% if app.networks | default([]) %}
+    networks: [{{ app.networks | join(', ') }}]
+{% endif %}
+{% if app.worker.heartbeat | default(false) %}
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/heartbeat && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 60 ]"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+{% endif %}
+    security_opt: [no-new-privileges:true]
+    mem_limit: {{ app.worker.mem | default('256m') }}
+    memswap_limit: {{ app.worker.mem | default('256m') }}
+    cpus: {{ app.worker.cpus | default(0.25) }}
+    pids_limit: 100
+{% endif %}
+{% if app.migrate | default(false) %}
+
+  # Migraciones: deploy-app.sh las corre antes de cada deploy. migrate: true usa una
+  # imagen aparte (etapa "migrate" del Dockerfile); migrate: {command: ...} corre ese
+  # comando con la misma imagen de la app (p. ej. "python manage.py migrate").
+  migrate:
+{% if app.migrate is mapping %}
+    image: {{ image }}:${TAG:?falta TAG en .env}
+    command: {{ app.migrate.command | to_json }}
+{% else %}
+    image: {{ image }}-migrate:${TAG:?falta TAG en .env}
+{% endif %}
+    profiles: [migrate]
+    env_file: .env
+    networks: [data]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+{% endif %}
+
+networks:
+  proxy:
+    external: true
+{% for net in app.networks | default([]) %}
+  {{ net }}:
+    external: true
+{% endfor %}

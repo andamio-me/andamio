@@ -1,0 +1,10 @@
+// Configuración propia del homelab (sobrescribe 50unattended-upgrades)
+
+// Reiniciar si una actualización lo requiere (p. ej. kernel)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "08:00";
+
+// Limpiar kernels viejos y dependencias sin uso
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";

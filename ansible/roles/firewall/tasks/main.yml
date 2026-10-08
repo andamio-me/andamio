@@ -1,0 +1,42 @@
+# Orden pensado para no cortar el SSH en un servidor nuevo:
+# primero se permite el puerto SSH, después se aplican las políticas y se activa.
+
+- name: UFW instalado
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Permitir SSH antes de todo
+  community.general.ufw:
+    rule: allow
+    port: "{{ homelab_ssh_port }}"
+    proto: tcp
+
+- name: Reglas
+  community.general.ufw:
+    rule: "{{ item.rule }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment | default(omit) }}"
+  loop: "{{ firewall_rules }}"
+  loop_control:
+    label: "{{ item.rule }} {{ item.port }}/{{ item.proto }}"
+
+- name: Políticas por defecto
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    default: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+    - { direction: routed, policy: deny }
+  loop_control:
+    label: "{{ item.direction }}: {{ item.policy }}"
+
+- name: Registro de paquetes bloqueados
+  community.general.ufw:
+    logging: low
+
+- name: UFW activo
+  community.general.ufw:
+    state: enabled

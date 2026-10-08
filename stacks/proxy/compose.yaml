@@ -1,0 +1,66 @@
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: socket-proxy
+    restart: unless-stopped
+    environment:
+      INFO: 1                # cAdvisor necesita /info (solo lectura)
+      NETWORKS: 1            # Alloy: discovery.docker lista las redes (solo lectura)
+      CONTAINERS: 1          # solo lectura de contenedores; todo lo demás bloqueado
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.25
+    pids_limit: 50
+
+  traefik:
+    image: traefik:v3.7.13
+    container_name: traefik
+    restart: unless-stopped
+    user: "65532:65532"                       # sin root
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0  # permite el 80/443 sin root (solo en su namespace)
+    cap_drop: [ALL]                           # sin ninguna capability de root
+    depends_on:
+      - socket-proxy
+    env_file: .env            # CF_DNS_API_TOKEN (desde secrets.sops.env)
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"   # dashboard: solo por túnel SSH
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - traefik_acme:/acme
+    networks:
+      - proxy
+      - socket
+      - monitoring
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1
+    pids_limit: 200
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  proxy:
+    external: true
+  monitoring:
+    external: true
+  socket:
+    internal: true            # solo Traefik <-> socket-proxy
+
+volumes:
+  traefik_acme:

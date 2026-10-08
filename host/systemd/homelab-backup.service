@@ -1,0 +1,14 @@
+[Unit]
+Description=Backup del homelab a B2 (restic)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+CacheDirectory=restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
+Type=oneshot
+# Red de seguridad: un backup colgado no puede bloquear los de las noches siguientes.
+TimeoutStartSec=3h
+ExecStart=/srv/homelab/infra/scripts/backup.sh
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,26 @@
+{# Plantilla: Ansible genera dynamic/middlewares.yml (rol homelab) con group_vars/all.yml. #}
+http:
+  middlewares:
+    vpn-only:
+      ipAllowList:
+        sourceRange:
+          - 10.8.0.0/24        # clientes WireGuard
+          - 172.16.0.0/12      # contenedores (p. ej. Uptime Kuma revisando Grafana)
+          - {{ homelab_server_ip }}/32    # el propio VPS (push del backup a Kuma)
+
+    security-headers:
+      headers:
+        stsSeconds: 31536000           # HSTS: 1 año
+        stsIncludeSubdomains: true
+        frameDeny: true
+        contentTypeNosniff: true
+        referrerPolicy: strict-origin-when-cross-origin
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          Server: ""                   # vacío = quitar la cabecera
+          X-Powered-By: ""
+
+    retry:
+      retry:
+        attempts: 3              # reintenta en otro backend si falla la conexión
+        initialInterval: 100ms

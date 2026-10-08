@@ -1,0 +1,45 @@
+# Prepara cada app de apps/<app>/app.yml (corre en tu WSL, no toca el servidor):
+#   1. Completa sus secretos cifrados (DOMAIN, DATABASE_URL...) si faltan.
+#   2. Genera apps/<app>/compose.yaml.
+#   ansible-playbook apps.yml
+# Después: commit + push y `ansible-playbook site.yml -K --tags homelab`.
+- name: Preparar las apps
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    repo: "{{ playbook_dir }}/.."
+    apps_domain: "{{ homelab_domain }}"
+  tasks:
+    - name: Buscar apps
+      ansible.builtin.find:
+        paths: "{{ repo }}/apps"
+        patterns: app.yml
+        recurse: true
+        depth: 2
+      register: apps_found
+
+    - name: Secretos de cada app
+      ansible.builtin.include_tasks: tasks/app-secrets.yml
+      loop: "{{ apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+      loop_control:
+        loop_var: app_name
+
+    - name: Llave de deploy de cada app
+      ansible.builtin.include_tasks: tasks/app-deploy-key.yml
+      loop: "{{ apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+      loop_control:
+        loop_var: app_name
+
+    - name: Compose de cada app (compose.yaml)
+      ansible.builtin.template:
+        src: templates/app-compose.yaml.j2
+        dest: "{{ item.path | dirname }}/compose.yaml"
+        mode: "0644"
+        trim_blocks: true
+        lstrip_blocks: true
+      vars:
+        app: "{{ lookup('ansible.builtin.file', item.path) | from_yaml }}"
+      loop: "{{ apps_found.files }}"
+      loop_control:
+        label: "{{ item.path | dirname | basename }}"

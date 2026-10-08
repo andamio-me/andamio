@@ -1,0 +1,6 @@
+# Puerto UDP de la VPN (el firewall lo abre).
+wireguard_port: 51820
+# Primer cliente que se crea en un servidor nuevo (10.8.0.2), normalmente tu PC.
+wireguard_first_client: mi-pc
+# Dónde queda su configuración en TU máquina (0600: tiene su llave privada).
+wireguard_client_dir: "{{ lookup('env', 'HOME') }}/andamio-vpn"

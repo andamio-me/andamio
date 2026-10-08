@@ -1,0 +1,8 @@
+# ansible-lint (lo corre el CI de homelab-infra).
+skip_list:
+  # Los nombres llevan la app o el stack donde se lee mejor
+  # ("{{ app }}: ¿existen el usuario y la base?"), no siempre al final.
+  - name[template]
+  # Nombres en español: "¿Existen…?" empieza con "¿", y "cloud-init" o
+  # "homelab-infra" son nombres propios en minúscula.
+  - name[casing]

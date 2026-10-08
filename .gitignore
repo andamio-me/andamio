@@ -1,0 +1,18 @@
+# Secretos: nunca al repo
+.env
+.env.*
+!.env.example
+secrets/
+
+# Logs y temporales
+*.log
+*.tmp
+
+# Generado por Ansible en el servidor (hashes de Redis, config de Traefik)
+stacks/data/redis-acl/
+stacks/proxy/traefik.yml
+stacks/proxy/dynamic/middlewares.yml
+
+# Python
+__pycache__/
+stacks/monitoring/grafana/provisioning/alerting/contact-points.yml

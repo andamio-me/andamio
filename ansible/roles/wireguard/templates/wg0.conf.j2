@@ -1,0 +1,6 @@
+# Generado por Ansible (rol wireguard) en un servidor nuevo. Los clientes ([Peer]) los
+# agrega wg-add-client al final de este archivo.
+[Interface]
+Address = 10.8.0.1/24
+ListenPort = {{ wireguard_port }}
+PrivateKey = {{ wireguard_server_key.content | b64decode | trim }}

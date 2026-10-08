@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# Mini-PaaS del homelab. Se usa desde tu WSL.
+#
+#   homelab app create <nombre> [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
+#   homelab app list
+#   homelab app logs <nombre>
+#   homelab app rollback <nombre>
+#   homelab app destroy <nombre>
+#
+# create: repo desde homelab-app-template, apps/<nombre>/app.yml, secretos y llave de
+# deploy (apps.yml), commit + push de homelab-infra y configuración del servidor.
+set -euo pipefail
+
+INFRA=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+# La configuración de este servidor vive en un solo lugar: ansible/group_vars/all.yml.
+cfg() { python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' \
+  "$INFRA/ansible/group_vars/all.yml" "$1"; }
+OWNER=$(cfg homelab_github_owner)
+DOMAIN=$(cfg homelab_domain)
+# Este repo en GitHub (dueño/nombre), de homelab_repo: ahí vive el workflow app-build.yml.
+INSTANCE_REPO=$(cfg homelab_repo | sed -E 's#^[^:]+:##; s#\.git$##')
+# Plantilla para apps nuevas sin --repo (opcional: homelab_app_template en la config).
+# El servidor: alias SSH = primer host de ansible/inventory.yml (~/.ssh/config lo resuelve).
+SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["homelab"]["hosts"])))'   "$INFRA/ansible/inventory.yml")
+TEMPLATE=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("homelab_app_template") or "")' \
+  "$INFRA/ansible/group_vars/all.yml")
+PROJECTS=$HOME/projects
+export PATH=$HOME/.local/bin:$PATH
+
+die() { echo "✗ $*" >&2; exit 1; }
+step() { printf '\n==> %s\n' "$*"; }
+usage() { sed -n '2,10p' "$0"; exit 1; }
+# URL pública de un host: "@" es el dominio raíz.
+app_url() { if [ "$1" = "@" ]; then echo "https://$DOMAIN"; else echo "https://$1.$DOMAIN"; fi; }
+valid_name() { [[ $1 =~ ^[a-z][a-z0-9-]{1,28}[a-z0-9]$ ]] || die "Nombre inválido: minúsculas, números y guiones (3-30)"; }
+
+app_create() {
+  local name=${1:-}; shift || true
+  [ -n "$name" ] || usage
+  valid_name "$name"
+  local access=vpn db=false redis=false host=$name mem=256m repo="" port=3000 health=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --public) access=public ;;
+      --db) db=true ;;
+      --redis) redis=true ;;
+      --host) host=${2:?falta el valor de --host}; shift ;;
+      --mem) mem=${2:?falta el valor de --mem}; shift ;;
+      --repo) repo=${2:?falta el valor de --repo}; shift ;;       # repo existente (cualquier lenguaje)
+      --port) port=${2:?falta el valor de --port}; shift ;;
+      --health) health=${2:?falta el valor de --health}; shift ;;
+      *) die "Opción desconocida: $1" ;;
+    esac
+    shift
+  done
+  [[ $host == "@" || $host =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || die "Host inválido: $host (subdominio o @ para el dominio raíz)"
+  [[ $mem =~ ^[0-9]+[mg]$ ]] || die "Memoria inválida: $mem (ej. 256m, 1g)"
+  [[ $port =~ ^[0-9]{2,5}$ ]] || die "Puerto inválido: $port"
+  [[ -z $health || $health =~ ^/[A-Za-z0-9._/-]*$ ]] || die "Ruta de salud inválida: $health (ej. /healthz)"
+  [[ -z $repo || $repo =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || die "Repo inválido: $repo (dueño/nombre)"
+
+  local dir=$INFRA/apps/$name
+  [ -e "$dir" ] && die "Ya existe $dir"
+  grep -rqsE "^host: \"?$host\"?( |$)" "$INFRA"/apps/*/app.yml && die "El host '$host' ya lo usa otra app"
+  [ -z "$repo" ] && [ -e "$PROJECTS/$name" ] && die "Ya existe $PROJECTS/$name"
+  [ -n "$repo" ] || [ -n "$TEMPLATE" ] \
+    || die "Indica el repo de tu app con --repo dueño/nombre (o define homelab_app_template en la config)"
+  git -C "$INFRA" diff --quiet && git -C "$INFRA" diff --cached --quiet \
+    || die "Este repo tiene cambios sin commitear; súbelos o descártalos antes"
+  gh auth status > /dev/null 2>&1 || die "gh no está autenticado (gh auth login)"
+  [ -z "$repo" ] || gh repo view "$repo" --json name > /dev/null 2>&1 || die "No existe $repo (o gh no tiene acceso)"
+
+  echo "App:      $name"
+  echo "Repo:     ${repo:-$OWNER/$name (nuevo, desde $TEMPLATE)}"
+  echo "URL:      $(app_url "$host")  ($access)"
+  echo "Recursos: PostgreSQL=$db Redis=$redis RAM=$mem  puerto=$port${health:+  salud=$health}"
+  read -rp "¿Crear? [s/N] " ok; [[ $ok =~ ^[sS]$ ]] || die "Cancelado"
+
+  if [ -z "$repo" ]; then
+    step "Repo $OWNER/$name desde la plantilla"
+    gh repo create "$OWNER/$name" --private --template "$TEMPLATE" --clone=false > /dev/null
+    # GitHub copia la plantilla en segundo plano: esperar a que exista main.
+    for _ in $(seq 1 15); do gh api "repos/$OWNER/$name/branches/main" > /dev/null 2>&1 && break; sleep 2; done
+    git clone -q "git@github.com:$OWNER/$name.git" "$PROJECTS/$name"
+  fi
+
+  step "apps/$name/app.yml"
+  mkdir -p "$dir"
+  local nets=""
+  { $db || $redis; } && nets="data"
+  # La imagen de migraciones (Prisma, plantilla) necesita la base: sin --db no hay
+  # migrate. Un repo existente declara sus migraciones a mano en app.yml si las tiene.
+  local migrate=$db; [ -n "$repo" ] && migrate=false
+  cat > "$dir/app.yml" <<EOF
+# Creada con: homelab app create $name. compose.yaml se genera de aquí (ansible/apps.yml).
+name: $name
+${repo:+repo: $repo
+}host: "$host"
+port: $port
+${health:+health: $health
+}access: $access
+networks: [${nets}]
+migrate: $migrate
+db: $db
+redis: $redis
+resources:
+  mem: $mem
+  cpus: 0.5
+  pids: 200
+EOF
+
+  step "Secretos, llave de deploy y compose (ansible/apps.yml)"
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'msg|fatal|ok=')
+  [ -f "$dir/deploy_key.pub" ] || die "No se creó la llave de deploy (¿el repo existe y gh tiene permiso?)"
+
+  step "Commit y push de este repo"
+  git -C "$INFRA" add "apps/$name"
+  git -C "$INFRA" commit -qm "feat(apps): $name (homelab app create)"
+  git -C "$INFRA" push -q
+
+  step "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)"
+  "$INFRA/ansible/hl" aplicar homelab
+
+  if [ -n "$repo" ]; then
+    local sha; sha=$(git -C "$INFRA" rev-parse "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*')")
+    cat <<EOF
+
+✓ $name registrada. Falta que $repo use el pipeline: agrega .github/workflows/ci.yml
+  (su Dockerfile despliega la última etapa; si tiene una etapa "test", se corre antes):
+
+name: CI/CD
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+jobs:
+  build:
+    uses: $INSTANCE_REPO/.github/workflows/app-build.yml@$sha
+    permissions: { contents: read, packages: write }
+    with:
+      image: \${{ github.event.repository.name }}
+      deploy: true
+      deploy_host: \${{ vars.DEPLOY_HOST }}
+      deploy_port: \${{ vars.DEPLOY_PORT }}
+      deploy_user: \${{ vars.DEPLOY_USER }}
+      deploy_known_hosts: \${{ vars.DEPLOY_KNOWN_HOSTS }}
+    secrets:
+      DEPLOY_SSH_KEY: \${{ secrets.DEPLOY_SSH_KEY }}
+
+  Con ese archivo en main, cada push despliega. Luego: $(app_url "$host")$( [ "$access" = vpn ] && echo "  (con la VPN)")
+EOF
+    return
+  fi
+
+  cat <<EOF
+
+✓ $name lista. Primer deploy:
+    cd $PROJECTS/$name
+    git commit --allow-empty -m "primer deploy" && git push
+    gh run watch \$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+  Luego: $(app_url "$host")$( [ "$access" = vpn ] && echo "  (con la VPN)")
+EOF
+}
+
+app_list() {
+  printf '%-22s %-40s %-7s %s\n' APP URL ACCESO ESTADO
+  local status; status=$(ssh -n "$SERVER" "docker ps --format '{{.Names}} {{.Status}}'")
+  for f in "$INFRA"/apps/*/app.yml; do
+    local name host access st
+    name=$(basename "$(dirname "$f")")
+    host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$f"); access=$(awk '$1 == "access:" {print $2}' "$f")
+    st=$(grep -E "^$name-app-[0-9]+ " <<< "$status" | cut -d' ' -f2- || true)
+    printf '%-22s %-40s %-7s %s\n' "$name" "$(app_url "$host")" "${access:-vpn}" "${st:-sin desplegar}"
+  done
+}
+
+app_logs() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  ssh -t "$SERVER" "docker logs -f --tail 100 \$(docker ps -q --filter name=^$name-app- | head -1)"
+}
+
+app_rollback() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  # Penúltimo deploy exitoso, leído de la tabla deployments de la app.
+  local prev
+  prev=$(ssh -n "$SERVER" "cd /srv/homelab/infra/apps/$name && url=\$(grep '^DATABASE_URL=' .env | cut -d= -f2-) && \
+    docker run --rm --network data postgres:18.6-alpine psql -tA \"\$url\" -c \
+    \"SELECT commit_sha || ' ' || version FROM deployments WHERE status = 'success' ORDER BY id DESC OFFSET 1 LIMIT 1\"")
+  [ -n "$prev" ] || die "No hay un deploy exitoso anterior para volver"
+  read -r sha version <<< "$prev"
+  read -rp "Volver $name a $version (${sha:0:7})? [s/N] " ok; [[ $ok =~ ^[sS]$ ]] || die "Cancelado"
+  ssh -n "$SERVER" "/srv/homelab/infra/scripts/deploy-app.sh $name $sha $version"
+}
+
+app_destroy() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local dir=$INFRA/apps/$name
+  [ -f "$dir/app.yml" ] || die "No existe la app $name"
+  [ "$name" = homelab-dashboard ] && die "homelab-dashboard es parte de la plataforma: no se destruye con este comando"
+  git -C "$INFRA" diff --quiet && git -C "$INFRA" diff --cached --quiet \
+    || die "Este repo tiene cambios sin commitear; súbelos o descártalos antes"
+
+  cat <<EOF
+Esto DESTRUYE la app $name:
+  - sus contenedores (web y worker) en el servidor
+  - su base y su usuario de PostgreSQL (antes: respaldo en /srv/homelab/archive/, que entra en restic)
+  - sus claves y su usuario de Redis
+  - apps/$name en homelab-infra (revoca su llave de deploy y la quita del registro)
+No toca: el repo de GitHub, sus imágenes en GHCR ni $PROJECTS/$name.
+EOF
+  read -rp "Para confirmar, escribe el nombre de la app: " ok
+  [ "$ok" = "$name" ] || die "Cancelado"
+
+  step "Servidor: respaldo, contenedores, base y Redis"
+  ssh "$SERVER" bash -s -- "$name" <<'REMOTE'
+set -euo pipefail
+name=$1; cd "/srv/homelab/infra/apps/$name"
+dbname=""; role=""
+url=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || true)
+if [ -n "$url" ]; then
+  dbname=${url##*/}; role=$(sed -E 's#^postgres(ql)?://([^:]+):.*#\2#' <<< "$url")
+  [[ $dbname =~ ^[a-z0-9_]+$ && $role =~ ^[a-z0-9_]+$ ]] || { echo "DATABASE_URL inesperada; no sigo"; exit 1; }
+  install -d -m 700 /srv/homelab/archive
+  out=/srv/homelab/archive/$name-$(date +%Y%m%d-%H%M%S).sql.gz
+  docker run --rm --network data postgres:18.6-alpine pg_dump "$url" | gzip > "$out"
+  [ "$(gunzip -c "$out" | wc -c)" -gt 0 ] || { echo "El respaldo quedó vacío; no sigo"; exit 1; }
+  echo "Respaldo: $out ($(du -h "$out" | cut -f1))"
+fi
+echo "Apagando contenedores"
+# TAG de relleno: una app nunca desplegada no tiene TAG y compose se negaría a leer el archivo.
+TAG=destroy docker compose --profile migrate down --remove-orphans
+if [ -n "$dbname" ]; then
+  docker exec -i postgres sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d postgres' <<SQL
+DROP DATABASE IF EXISTS "$dbname" WITH (FORCE);
+DROP ROLE IF EXISTS "$role";
+SQL
+  echo "PostgreSQL: base $dbname y usuario $role borrados"
+fi
+if grep -q '^REDIS_URL=' .env 2>/dev/null; then
+  n=$(docker exec redis sh -c "redis-cli --no-auth-warning --scan --pattern '$name:*' | xargs -r redis-cli --no-auth-warning DEL | awk '{s += \$1} END {print s + 0}'")
+  echo "Redis: $n claves borradas (el usuario se quita al aplicar homelab)"
+fi
+rm -f .env
+REMOTE
+
+  step "Quitar apps/$name de este repo"
+  git -C "$INFRA" rm -rq "apps/$name"
+  git -C "$INFRA" commit -qm "feat(apps): destruir $name (homelab app destroy)"
+  git -C "$INFRA" push -q
+
+  step "Servidor: revocar llave, quitar del registro y de Redis (pide tu contraseña de sudo)"
+  "$INFRA/ansible/hl" aplicar homelab
+
+  cat <<EOF
+
+✓ $name destruida. Si ya no la quieres en GitHub:
+    gh repo archive $OWNER/$name     (o gh repo delete $OWNER/$name, irreversible)
+EOF
+}
+
+[ "${1:-}" = app ] || usage
+shift
+case ${1:-} in
+  create) shift; app_create "$@" ;;
+  list) app_list ;;
+  logs) shift; app_logs "$@" ;;
+  rollback) shift; app_rollback "$@" ;;
+  destroy) shift; app_destroy "$@" ;;
+  *) usage ;;
+esac

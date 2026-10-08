@@ -1,0 +1,11 @@
+# Endurecimiento SSH del homelab.
+# Prefijo 00- para leerse antes que cualquier otro: en sshd gana el PRIMER valor.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers {{ homelab_user }}
+# Llaves personales en ~/.ssh/authorized_keys; las de deploy de cada app (con
+# comando forzado) en /etc/ssh/deploy_keys/<usuario>, generado por Ansible.
+AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/deploy_keys/%u

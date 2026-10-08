@@ -1,0 +1,99 @@
+# VPN para lo privado (paneles, almacenamiento): solo los clientes del túnel pasan el
+# middleware vpn-only de Traefik.
+# wg0.conf tiene la llave privada del servidor y las de los peers: no va en el repo.
+#  - Servidor nuevo: se genera aquí, con el primer cliente (wireguard_first_client).
+#  - Reconstrucción: se restaura desde restic ANTES de este playbook
+#    (docs/runbooks/reconstruir-servidor.md); si existe, no se toca.
+
+- name: WireGuard
+  ansible.builtin.apt:
+    name: wireguard
+    state: present
+
+- name: Permisos de /etc/wireguard
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Comando para agregar clientes (también lo usa el primer cliente, más abajo).
+- name: Comando wg-add-client
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/wg-add-client.sh"
+    dest: /usr/local/sbin/wg-add-client
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: ¿Existe wg0.conf?
+  ansible.builtin.stat:
+    path: /etc/wireguard/wg0.conf
+  register: wireguard_conf
+
+- name: Servidor nuevo, generar la VPN
+  when: not wireguard_conf.stat.exists
+  block:
+    - name: Llaves del servidor (la privada nunca sale de /etc/wireguard)
+      ansible.builtin.shell: |
+        set -o pipefail
+        umask 077
+        wg genkey | tee /etc/wireguard/server.key | wg pubkey > /etc/wireguard/server.pub
+      args:
+        executable: /bin/bash
+        creates: /etc/wireguard/server.key
+
+    - name: Leer la llave privada del servidor
+      ansible.builtin.slurp:
+        src: /etc/wireguard/server.key
+      register: wireguard_server_key
+      no_log: true
+
+    - name: wg0.conf
+      ansible.builtin.template:
+        src: wg0.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: VPN arriba antes de agregar clientes
+      ansible.builtin.systemd_service:
+        name: wg-quick@wg0
+        state: started
+        enabled: true
+
+    - name: Primer cliente ({{ wireguard_first_client }})
+      ansible.builtin.command: /usr/local/sbin/wg-add-client {{ wireguard_first_client }} 2
+      environment:
+        HOMELAB_SERVER_IP: "{{ homelab_server_ip }}"
+      changed_when: true
+
+    - name: Traer la configuración del cliente a tu máquina (privada, 0600)
+      ansible.builtin.fetch:
+        src: /etc/wireguard/clients/{{ wireguard_first_client }}.conf
+        dest: "{{ wireguard_client_dir }}/{{ wireguard_first_client }}.conf"
+        flat: true
+
+    - name: Proteger la copia local
+      delegate_to: localhost
+      become: false
+      ansible.builtin.file:
+        path: "{{ wireguard_client_dir }}/{{ wireguard_first_client }}.conf"
+        mode: "0600"
+
+    - name: Cómo conectarte
+      ansible.builtin.debug:
+        msg:
+          - "VPN lista. Tu primer cliente: {{ wireguard_client_dir }}/{{ wireguard_first_client }}.conf"
+          - "PC: importa ese archivo en la app de WireGuard."
+          - "Celular: qrencode -t ansiutf8 < {{ wireguard_client_dir }}/{{ wireguard_first_client }}.conf  (y escanéalo con la app)"
+          - "Más clientes: sudo wg-add-client <nombre> <3-254> en el servidor."
+
+- name: VPN activa al arrancar
+  ansible.builtin.systemd_service:
+    name: wg-quick@wg0
+    state: started
+    enabled: true

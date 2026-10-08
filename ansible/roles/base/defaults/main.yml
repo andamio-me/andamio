@@ -1,0 +1,27 @@
+base_timezone: UTC
+base_swap_size: 4G
+
+base_packages:
+  - jq
+  - bzip2
+  - unattended-upgrades
+
+# restic oficial: el de Ubuntu 24.04 (0.16) no sabe "ocultar" en B2, y la llave
+# de B2 del VPS no tiene permiso de borrar (backups inmutables, ADR 0014).
+base_restic_version: "0.19.1"
+
+# Servicios de escritorio/hardware que un VPS no usa.
+base_masked_units:
+  - ModemManager.service
+  - udisks2.service
+  - fwupd.service
+  - multipathd.service
+  - multipathd.socket
+  - NetworkManager.service
+  - wpa_supplicant.service
+
+# Se desactivan pero no se enmascaran (dependen de los de arriba).
+base_disabled_units:
+  - fwupd-refresh.timer
+  - NetworkManager-wait-online.service
+  - NetworkManager-dispatcher.service

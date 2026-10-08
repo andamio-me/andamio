@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Atajos para el playbook del servidor. Guarda la salida completa en /tmp/hl.log
+# y muestra solo lo que cambia (o cambiaría) y el resumen.
+#
+#   ./hl revisar [rol]   simula, no toca nada   (--check --diff)
+#   ./hl aplicar [rol]   aplica los cambios
+#
+# [rol]: base, ssh, firewall, docker, wireguard, homelab, secretos (por defecto: todos)
+set -euo pipefail
+cd "$(dirname "$0")"
+export PATH=$HOME/.local/bin:$PATH
+
+modo=${1:-}; rol=${2:-}
+case $modo in
+  revisar) extra=(--check --diff) ;;
+  aplicar) extra=() ;;
+  *) sed -n '2,8p' "$0"; exit 1 ;;
+esac
+tags=(); [ -n "$rol" ] && tags=(--tags "$rol")
+
+user=$(python3 -c 'import yaml; print(yaml.safe_load(open("group_vars/all.yml"))["homelab_user"])')
+echo "Contraseña de sudo de $user en el SERVIDOR. Log completo: /tmp/hl.log"
+ansible-playbook site.yml -K "${extra[@]}" "${tags[@]}" 2>&1 | tee /tmp/hl.log \
+  | grep --line-buffered -E "^(TASK|changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok=" \
+  | grep --line-buffered -E -B1 "^(changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok="

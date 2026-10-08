@@ -1,0 +1,10 @@
+- name: Recargar sshd
+  ansible.builtin.systemd_service:
+    name: ssh.service
+    state: reloaded
+
+- name: Reiniciar ssh.socket
+  ansible.builtin.systemd_service:
+    name: ssh.socket
+    state: restarted
+    daemon_reload: true

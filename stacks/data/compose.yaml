@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    command: postgres -c shared_buffers=256MB -c max_connections=100
+    shm_size: 256m              # Docker da 64 MB por defecto; PostgreSQL lo usa en consultas paralelas
+    volumes:
+      - pgdata:/var/lib/postgresql   # PG18+: ya no es /var/lib/postgresql/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.5
+    pids_limit: 300
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.10.2-alpine
+    container_name: redis
+    restart: unless-stopped
+    # Usuarios en users.acl (lo genera Ansible: admin "default" + uno por app).
+    command: >
+      redis-server
+      --aclfile /etc/redis/acl/users.acl
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}   # para que redis-cli (y el healthcheck) se autentiquen solos
+    volumes:
+      - redisdata:/data
+      # Carpeta, no archivo suelto: Ansible reemplaza users.acl (archivo nuevo) y un
+      # bind mount de archivo seguiría viendo el viejo; ACL LOAD no vería los cambios.
+      - ./redis-acl:/etc/redis/acl:ro
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m             # 256 MB de datos + margen para el fork del AOF
+    memswap_limit: 384m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  data:
+    external: true
+
+volumes:
+  pgdata:
+  redisdata:

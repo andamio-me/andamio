@@ -1,0 +1,427 @@
+# --- Nivel de monitoreo y stacks activos ---
+
+- name: Nivel de monitoreo
+  ansible.builtin.set_fact:
+    homelab_monitoring_level: >-
+      {{ homelab_monitoring if homelab_monitoring != 'auto'
+         else ('completo' if ansible_memtotal_mb >= 2900 else 'minimo') }}
+
+- name: Stacks activos (Uptime Kuma solo en el nivel completo)
+  ansible.builtin.set_fact:
+    homelab_stacks_active: >-
+      {{ homelab_stacks if homelab_monitoring_level == 'completo'
+         else homelab_stacks | reject('equalto', 'stacks/uptime-kuma') | list }}
+
+# --- Secretos del host: cifrados en host/sops/, descifrados en tu WSL ---
+
+- name: Directorios de secretos del host
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/restic, group: root, mode: "0700" }
+    - { path: /etc/homelab, group: "{{ homelab_user }}", mode: "0750" }
+  tags: secretos
+
+- name: Configuración no secreta para los scripts del servidor
+  ansible.builtin.template:
+    src: andamio.env.j2
+    dest: /etc/homelab/andamio.env
+    owner: root
+    group: "{{ homelab_user }}"
+    mode: "0640"
+  tags: secretos
+
+- name: Secretos del host (desde sops)
+  ansible.builtin.copy:
+    content: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item.src,
+                input_type='json', output_type='binary', rstrip=false) }}
+    dest: "{{ item.dest }}"
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ homelab_sops_files }}"
+  no_log: true
+  diff: false
+  tags: secretos
+
+# El resto vuelve con restic restore (runbook reconstruir-servidor.md).
+- name: ¿Existen los secretos del host?
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ homelab_host_secrets }}"
+  register: homelab_secrets
+
+- name: Secretos del host restaurados
+  ansible.builtin.assert:
+    that: item.stat.exists
+    fail_msg: "Falta {{ item.item }}. Ver docs/runbooks/restaurar-backup.md"
+    quiet: true
+  loop: "{{ homelab_secrets.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# --- Repo ---
+
+- name: Raíz del homelab
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ homelab_root }}", mode: "0750" }
+    - { path: "{{ homelab_root }}/apps", mode: "0755" }
+
+# Falla si hay cambios locales sin commitear: nunca los pisa.
+- name: homelab-infra al día
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.git:
+    repo: "{{ homelab_repo }}"
+    dest: "{{ homelab_infra }}"
+    version: main
+    accept_newhostkey: true
+
+# .env de cada stack: vienen cifrados del repo (<stack>/secrets.sops.env) y se
+# descifran en tu WSL con tu llave age. El servidor nunca tiene la llave.
+# (Las apps tienen el suyo en app.yml de este rol.)
+
+- name: .env de cada stack (desde sops)
+  ansible.builtin.copy:
+    # Comillas dobles: así YAML convierte \n en salto de línea (en >- quedaría literal).
+    # Al final, lo no secreto que necesitan los stacks (group_vars/all.yml).
+    content: "{{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item ~ '/secrets.sops.env',
+      input_type='dotenv', output_type='dotenv') ~ '\nHOMELAB_HOSTNAME=' ~ homelab_hostname ~ '\n'
+      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and homelab_monitoring_level == 'completo' else '') }}"
+    dest: "{{ homelab_infra }}/{{ item }}/.env"
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "0600"
+  loop: "{{ homelab_stacks_active + (homelab_db_stacks | map(attribute='stack')) }}"
+  no_log: true   # nunca mostrar secretos, ni en errores
+  diff: false
+
+# --- Acceso: tu llave + llaves de deploy con comando forzado ---
+
+- name: Llaves autorizadas de {{ homelab_user }}
+  ansible.posix.authorized_key:
+    user: "{{ homelab_user }}"
+    key: "{{ lookup('file', playbook_dir + '/../host/ssh/authorized_keys') }}"
+    exclusive: false
+
+- name: Sin líneas de plantilla en authorized_keys
+  ansible.builtin.lineinfile:
+    path: /home/{{ homelab_user }}/.ssh/authorized_keys
+    regexp: LLAVE_PUBLICA
+    state: absent
+
+# --- Sistema ---
+
+- name: Comando `system`
+  ansible.builtin.file:
+    src: "{{ homelab_infra }}/scripts/system-status.sh"
+    dest: /usr/local/bin/system
+    state: link
+
+- name: polkit, el bot solo puede lanzar el backup
+  when: homelab_backups | bool and homelab_telegram | bool
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../host/polkit/50-homelab-backup.rules.j2"
+    dest: /etc/polkit-1/rules.d/50-homelab-backup.rules
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Cockpit (solo por túnel SSH)
+  ansible.builtin.apt:
+    name: cockpit
+    state: present
+
+- name: Directorio del override de cockpit.socket
+  ansible.builtin.file:
+    path: /etc/systemd/system/cockpit.socket.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Cockpit escucha solo en localhost
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/systemd/cockpit.socket.d/listen.conf"
+    dest: /etc/systemd/system/cockpit.socket.d/listen.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Recargar systemd
+
+# template (no copy): las que llevan el usuario de operación son .j2 (group_vars/all.yml).
+- name: Units del homelab
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../host/systemd/{{ item }}{{ '.j2' if (playbook_dir ~ '/../host/systemd/' ~ item ~ '.j2') is file else '' }}"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ homelab_units }}"
+  notify:
+    - Recargar systemd
+    - Reiniciar bot de Telegram
+
+- name: Aplicar units nuevos antes de activarlos
+  ansible.builtin.meta: flush_handlers
+
+- name: Units activos
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: "{{ homelab_enabled_units }}"
+
+# --- Docker: login, redes y stacks ---
+
+- name: Login en GHCR hecho
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: grep -q '"ghcr.io"' /home/{{ homelab_user }}/.docker/config.json
+  changed_when: false
+  check_mode: false
+  register: homelab_ghcr
+  failed_when: false
+
+- name: GHCR disponible para bajar imágenes privadas
+  ansible.builtin.assert:
+    that: homelab_ghcr.rc == 0
+    fail_msg: >-
+      Falta el login en GHCR. Como {{ homelab_user }}:
+      docker login ghcr.io -u {{ homelab_github_owner }} (PAT clásico solo con read:packages)
+    quiet: true
+
+- name: Redes compartidas
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: "{{ homelab_infra }}/scripts/create-networks.sh"
+  register: homelab_networks
+  changed_when: "'creada' in homelab_networks.stdout"
+
+- name: Buscar apps (apps/*/app.yml en el repo de tu WSL)
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../apps"
+    patterns: app.yml
+    recurse: true
+    depth: 2
+  register: homelab_apps_found
+
+- name: Nombres de las apps
+  ansible.builtin.set_fact:
+    homelab_app_names: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+
+# También la usa homelab-container-health.service (StateDirectory).
+- name: Carpeta del textfile de node-exporter
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Registro de apps para Prometheus (textfile de node-exporter)
+  ansible.builtin.template:
+    src: apps.prom.j2
+    dest: /var/lib/node_exporter/textfile/apps.prom
+    owner: root
+    group: root
+    mode: "0644"
+    trim_blocks: true
+    lstrip_blocks: true
+
+# --- Llaves de deploy: una por app (apps/<app>/deploy_key.pub) ---
+# sshd las lee de /etc/ssh/deploy_keys/<usuario> (host/ssh/00-homelab-hardening.conf).
+# El archivo se reescribe completo: borrar un .pub revoca esa llave.
+
+- name: Llaves de deploy de las apps
+  ansible.builtin.set_fact:
+    homelab_deploy_keys: >-
+      {{ (homelab_deploy_keys | default([]))
+         + ([{'app': item, 'key': lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore')}]
+            if lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore') else []) }}
+  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+
+- name: Directorio de llaves de deploy (solo root escribe)
+  ansible.builtin.file:
+    path: /etc/ssh/deploy_keys
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Llaves de deploy autorizadas
+  ansible.builtin.template:
+    src: deploy-keys.j2
+    dest: /etc/ssh/deploy_keys/{{ homelab_user }}
+    owner: root
+    group: root
+    mode: "0644"
+
+# Después de escribir el archivo de arriba: nunca queda una app sin llave.
+- name: Sin llaves de deploy en ~/.ssh/authorized_keys (ahora viven en deploy_keys)
+  ansible.builtin.lineinfile:
+    path: /home/{{ homelab_user }}/.ssh/authorized_keys
+    regexp: 'deploy-app\.sh'
+    state: absent
+
+# --- Redis: un usuario por app (REDIS_URL en su secrets.sops.env) ---
+# Va antes de los stacks: Redis no arranca si falta su aclfile.
+
+- name: Usuarios de Redis de las apps
+  vars:
+    homelab_redis_match: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../apps/' ~ item ~ '/secrets.sops.env',
+                input_type='dotenv', output_type='dotenv')
+         | regex_search('^REDIS_URL=redis://([a-z0-9-]+):([A-Za-z0-9]+)@', '\1', '\2', multiline=True)
+         | default([], true) }}
+  ansible.builtin.set_fact:
+    homelab_redis_users: >-
+      {{ (homelab_redis_users | default([]))
+         + ([{'name': homelab_redis_match[0], 'hash': homelab_redis_match[1] | hash('sha256')}]
+            if homelab_redis_match | length == 2 else []) }}
+  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+  no_log: true
+
+- name: Usuario admin de Redis (REDIS_PASSWORD de stacks/data)
+  ansible.builtin.set_fact:
+    homelab_redis_default_hash: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../stacks/data/secrets.sops.env',
+                input_type='dotenv', output_type='dotenv')
+         | regex_search('^REDIS_PASSWORD=(.+)$', '\1', multiline=True) | first | hash('sha256') }}
+    homelab_redis_users: "{{ homelab_redis_users | default([]) }}"
+  no_log: true
+
+# 999 = usuario redis dentro de la imagen oficial.
+- name: Carpeta del aclfile de Redis
+  ansible.builtin.file:
+    path: "{{ homelab_infra }}/stacks/data/redis-acl"
+    state: directory
+    owner: "999"
+    group: "999"
+    mode: "0700"
+
+- name: Sin el aclfile viejo (montado como archivo suelto)
+  ansible.builtin.file:
+    path: "{{ homelab_infra }}/stacks/data/users.acl"
+    state: absent
+
+- name: aclfile de Redis
+  ansible.builtin.template:
+    src: redis-users.acl.j2
+    dest: "{{ homelab_infra }}/stacks/data/redis-acl/users.acl"
+    owner: "999"
+    group: "999"
+    mode: "0600"
+  notify: Recargar usuarios de Redis
+
+# Archivos de Seafile: dentro de /srv/homelab para que entren al backup diario.
+# 0711: se puede atravesar pero no listar. El nginx del contenedor corre como
+# www-data y sirve avatares y miniaturas desde aquí (con 0700 daba 403).
+- name: Carpeta de datos de Seafile
+  when: "'stacks/seafile' in homelab_stacks_active"
+  ansible.builtin.file:
+    path: "{{ homelab_root }}/data/seafile"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+# Config de Traefik con el dominio, el email y la IP de este servidor. El estático se lee
+# al arrancar (cambio = reinicio); el dinámico se recarga solo.
+- name: Configuración de Traefik
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../{{ item.src }}"
+    dest: "{{ homelab_infra }}/{{ item.dest }}"
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "0644"
+  loop:
+    - { src: stacks/proxy/traefik.yml.j2, dest: stacks/proxy/traefik.yml }
+    - { src: stacks/proxy/middlewares.yml.j2, dest: stacks/proxy/dynamic/middlewares.yml }
+  loop_control:
+    label: "{{ item.dest }}"
+  register: homelab_traefik_conf
+
+- name: Reiniciar Traefik si cambió su configuración estática
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: docker restart traefik
+  when: homelab_traefik_conf.results[0].changed and not ansible_check_mode
+  changed_when: true
+
+# Alertas de Grafana por Telegram: solo si está activado (sin token, Grafana no arranca
+# con ese contact point). Sin él, las alertas se evalúan pero no se envían.
+- name: Contact point de Telegram en Grafana
+  when: homelab_telegram | bool
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../stacks/monitoring/grafana/contact-points.telegram.yml"
+    dest: "{{ homelab_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "0644"
+
+- name: Sin contact point de Telegram (desactivado)
+  when: not (homelab_telegram | bool)
+  ansible.builtin.file:
+    path: "{{ homelab_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
+    state: absent
+
+- name: Stacks levantados
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: "{{ homelab_infra }}/{{ item }}"
+  loop: "{{ homelab_stacks_active }}"
+  register: homelab_up
+  changed_when: homelab_up.stderr is search('Creat|Recreat|Start')
+
+# Seafile (stack propio, no de la plataforma): crea su seafile.conf en el primer
+# arranque; la cuota va después.
+- name: Cuota de Seafile
+  when: "'stacks/seafile' in homelab_stacks_active"
+  block:
+    - name: seafile.conf creado por Seafile
+      ansible.builtin.wait_for:
+        path: "{{ homelab_root }}/data/seafile/seafile/conf/seafile.conf"
+        timeout: 300
+
+    - name: Cuota de Seafile ({{ homelab_seafile_quota_gb }} GB por usuario)
+      community.general.ini_file:
+        path: "{{ homelab_root }}/data/seafile/seafile/conf/seafile.conf"
+        section: quota
+        option: default
+        value: "{{ homelab_seafile_quota_gb }}"
+        mode: "0644"
+      notify: Reiniciar Seafile
+
+# --- Stacks con base en el Postgres compartido ---
+# Crear usuario y base ANTES de levantarlos: su instalación inicial la necesita.
+
+- name: Stacks con base propia
+  ansible.builtin.include_tasks: db-stack.yml
+  loop: "{{ homelab_db_stacks }}"
+  loop_control:
+    loop_var: homelab_db_stack
+
+# --- Apps (apps/<app>/app.yml) ---
+
+- name: Apps
+  ansible.builtin.include_tasks: app.yml
+  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+  loop_control:
+    loop_var: homelab_app_name

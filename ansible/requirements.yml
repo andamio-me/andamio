@@ -1,0 +1,5 @@
+# Colecciones que usan los roles (ansible-lint y el CI las necesitan para validar).
+collections:
+  - name: ansible.posix
+  - name: community.general
+  - name: community.sops

@@ -1,0 +1,85 @@
+{# Plantilla: Ansible genera traefik.yml (rol homelab) con group_vars/all.yml. #}
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+accessLog: {}            # una línea por petición en stdout (para Loki, Fase 6)
+
+ping: {}                 # endpoint de salud para el healthcheck
+
+api:
+  dashboard: true
+  insecure: true         # dashboard en :8080, publicado solo en 127.0.0.1
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+    http:
+{% if homelab_tls == 'cloudflare' %}
+      # Por defecto, todo *.{{ homelab_domain }} usa un solo certificado comodín (DNS-01, ADR 0016):
+      # una app nueva tiene HTTPS al instante, sin pedir un certificado propio.
+      tls:
+        certResolver: cf
+        domains:
+          - main: {{ homelab_domain }}
+            sans: ["*.{{ homelab_domain }}"]
+{% else %}
+      # Un certificado de Let's Encrypt por app (HTTP-01, puerto 80): no necesita cuenta
+      # en ningún proveedor de DNS. Cada nombre queda en los registros públicos de
+      # certificados, también el de las apps privadas (con Cloudflare, un comodín lo evita).
+      tls:
+        certResolver: le
+{% endif %}
+      middlewares:
+        - security-headers@file   # para todas las apps públicas
+        - retry@file              # deploys sin caída: reintenta si un backend desaparece
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true               # recarga en caliente al cambiar los archivos
+  docker:
+    endpoint: "tcp://socket-proxy:2375"
+    exposedByDefault: false   # solo se publica lo que tenga traefik.enable=true
+    network: proxy
+
+certificatesResolvers:
+{% if homelab_tls == 'cloudflare' %}
+  # {{ homelab_domain }}: DNS-01 con un token de Cloudflare limitado a esa zona (CF_DNS_API_TOKEN,
+  # cifrado en stacks/proxy/secrets.sops.env). Permite el comodín *.{{ homelab_domain }}.
+  cf:
+    acme:
+      email: {{ homelab_acme_email }}
+      storage: /acme/acme-cf.json
+      dnsChallenge:
+        provider: cloudflare
+        resolvers: ["1.1.1.1:53", "1.0.0.1:53"]
+  # HTTP-01: dominios fuera de la zona de Cloudflare (p. ej. un dominio anterior que redirige).
+{% else %}
+  # Let's Encrypt por HTTP-01: Traefik responde el desafío en el puerto 80 (por eso el
+  # firewall lo deja abierto aunque todo redirija a HTTPS).
+{% endif %}
+  le:
+    acme:
+      email: {{ homelab_acme_email }}
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+
+metrics:
+  prometheus:
+    entryPoint: traefik        # :8080, solo accesible por la red de Docker y 127.0.0.1
+    addRoutersLabels: true     # métricas por router (por app)
+
+serversTransport:
+  forwardingTimeouts:
+    dialTimeout: 3s            # por defecto 30 s: un backend que ya no existe colgaba la petición

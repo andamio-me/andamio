@@ -1,0 +1,49 @@
+# Un error aquí deja el servidor sin acceso: todo se valida antes de aplicarse
+# y al final se comprueba que una conexión nueva sigue entrando.
+
+- name: Endurecimiento de sshd
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../host/ssh/00-homelab-hardening.conf.j2"
+    dest: /etc/ssh/sshd_config.d/00-homelab-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Recargar sshd
+
+- name: Sin el archivo de cloud-init que activaba contraseñas
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/50-cloud-init.conf
+    state: absent
+  notify: Recargar sshd
+
+- name: Directorio del override de ssh.socket
+  ansible.builtin.file:
+    path: /etc/systemd/system/ssh.socket.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: SSH en el puerto {{ homelab_ssh_port }} (socket activation de Ubuntu 24.04)
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../host/systemd/ssh.socket.d/override.conf.j2"
+    dest: /etc/systemd/system/ssh.socket.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar ssh.socket
+
+- name: Configuración completa válida
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  check_mode: false   # solo lee: también corre en --check
+
+- name: Aplicar cambios de SSH ahora
+  ansible.builtin.meta: flush_handlers
+
+- name: Reconectar desde cero
+  ansible.builtin.meta: reset_connection
+
+- name: Una conexión nueva sigue entrando
+  ansible.builtin.ping:

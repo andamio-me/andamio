@@ -1,0 +1,33 @@
+# Docker de los repos de Ubuntu (docker.io): se actualiza con unattended-upgrades
+# como el resto del sistema, sin repos ni llaves de terceros.
+
+- name: Docker y Compose
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose-v2
+      - docker-buildx
+    state: present
+
+- name: Configuración del daemon (logs rotados, live-restore)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/docker/daemon.json"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    validate: dockerd --validate --config-file=%s
+  notify: Reiniciar Docker
+
+- name: Docker activo al arrancar
+  ansible.builtin.systemd_service:
+    name: docker.service
+    state: started
+    enabled: true
+
+# El grupo docker equivale a root: solo el usuario de operación.
+- name: Usuario de operación en el grupo docker
+  ansible.builtin.user:
+    name: "{{ homelab_user }}"
+    groups: docker
+    append: true

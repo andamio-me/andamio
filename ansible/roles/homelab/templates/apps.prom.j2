@@ -1,0 +1,8 @@
+# GENERADO por Ansible desde apps/*/app.yml: el registro de apps de la plataforma.
+# node-exporter lo publica (textfile); el dashboard lo usa para saber qué apps esperar.
+# HELP homelab_app_info App registrada en la plataforma (1 = existe su app.yml).
+# TYPE homelab_app_info gauge
+{% for name in homelab_app_names %}
+{% set a = lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ name ~ '/app.yml') | from_yaml %}
+homelab_app_info{name="{{ name }}",host="{{ a.host }}",access="{{ a.access | default('vpn') }}",worker="{{ (a.worker is defined) | lower }}"} 1
+{% endfor %}

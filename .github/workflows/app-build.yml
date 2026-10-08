@@ -1,0 +1,236 @@
+# Workflow reutilizable: check, build, escaneo y deploy de una app del homelab.
+# Uso desde el repo de la app (ver homelab-dashboard/.github/workflows/ci.yml).
+# Las apps lo fijan por SHA (tag app-build-vN). Runner fijo en ubuntu-24.04:
+# cambiar de Ubuntu es una decisión, no algo que pase solo con ubuntu-latest.
+name: app-build
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Nombre de la imagen en GHCR (p. ej. homelab-dashboard)
+        required: true
+        type: string
+      target:
+        description: Etapa del Dockerfile que se despliega (vacío = la última)
+        type: string
+        default: ""
+      migrate:
+        description: Construir también la imagen de migraciones (target "migrate")
+        type: boolean
+        default: false
+      deploy:
+        description: Desplegar en el VPS después del build (solo en push)
+        type: boolean
+        default: false
+      # A dónde desplegar: variables de Actions DEPLOY_* del repo de la app (las fija
+      # `homelab app create`). Obligatorias si deploy es true.
+      deploy_host:
+        description: IP o nombre del servidor (vars.DEPLOY_HOST)
+        type: string
+        default: ""
+      deploy_port:
+        description: Puerto SSH del servidor (vars.DEPLOY_PORT)
+        type: string
+        default: "22"
+      deploy_user:
+        description: Usuario de operación en el servidor (vars.DEPLOY_USER)
+        type: string
+        default: ""
+      deploy_known_hosts:
+        description: Línea de known_hosts con la llave de host verificada (vars.DEPLOY_KNOWN_HOSTS)
+        type: string
+        default: ""
+    secrets:
+      DEPLOY_SSH_KEY:
+        description: Llave SSH de deploy de la app (forced command en el VPS)
+        required: false
+    outputs:
+      tag:
+        description: Tag de la imagen publicada (hash del commit)
+        value: ${{ jobs.build.outputs.tag }}
+
+env:
+  # Escáner de vulnerabilidades, fijado por digest (un tag se puede mover).
+  TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+
+jobs:
+  # Revisión, sea cual sea el lenguaje de la app:
+  #  - siempre: secretos (gitleaks);
+  #  - si el Dockerfile tiene una etapa "test": se construye, y si falla no se despliega
+  #    (los tests corren en la imagen, con las herramientas del lenguaje de la app);
+  #  - si es un proyecto pnpm (pnpm-lock.yaml): lint, typecheck y test de package.json.
+  check:
+    name: Revisión
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # gitleaks revisa todo el historial
+      - name: Secretos (gitleaks)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "$GITLEAKS_SHA256  $f" | sha256sum -c -
+          tar xzf "$f" -C "$RUNNER_TEMP" gitleaks && rm "$f"
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact .
+
+      - name: Etapa "test" del Dockerfile (cualquier lenguaje)
+        run: |
+          if grep -qiE '^[[:space:]]*FROM[[:space:]].+[[:space:]]AS[[:space:]]+test[[:space:]]*$' Dockerfile; then
+            docker build --target test --progress plain .
+          else
+            echo "El Dockerfile no tiene etapa \"test\": sin tests en imagen."
+          fi
+
+      - name: pnpm
+        if: hashFiles('pnpm-lock.yaml') != ''
+        uses: pnpm/action-setup@v6
+      - if: hashFiles('pnpm-lock.yaml') != ''
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: hashFiles('pnpm-lock.yaml') != ''
+        run: pnpm install --frozen-lockfile
+      - if: hashFiles('pnpm-lock.yaml') != ''
+        run: pnpm run --if-present lint
+      - if: hashFiles('pnpm-lock.yaml') != ''
+        run: pnpm run --if-present typecheck
+      - if: hashFiles('pnpm-lock.yaml') != ''
+        run: pnpm run --if-present test
+
+  build:
+    name: Construir y publicar imágenes
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Nombres y tags
+        id: meta
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"   # GHCR exige minúsculas
+          echo "registry=ghcr.io/${owner}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # La imagen se construye SIN publicar, Trivy la revisa y solo si pasa se sube a
+      # GHCR: una imagen con vulnerabilidades graves y con arreglo nunca llega al
+      # registro ni al servidor.
+      - name: Imagen de la app (sin publicar)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: ${{ inputs.target }}
+          load: true
+          tags: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=${{ inputs.image }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image }}
+
+      - name: Escaneo de vulnerabilidades (Trivy)
+        env:
+          IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}:${{ steps.meta.outputs.tag }}
+        # Corta el pipeline con CRITICAL o HIGH que ya tengan versión corregida.
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --scanners vuln --no-progress "$IMAGE" && exit 0
+          # Lo más común: el gestor de paquetes de la imagen base (npm, pip, ...) trae sus
+          # propias vulnerabilidades y en producción no se usa.
+          echo "::error title=Imagen con vulnerabilidades::La imagen tiene vulnerabilidades CRITICAL/HIGH con arreglo (tabla de arriba). Si vienen del gestor de paquetes de la imagen base (npm, pip, setuptools, ...), quítalo de la etapa final del Dockerfile: en producción no se usa. Si vienen de tus dependencias, actualízalas."
+          exit 1
+
+      - name: Publicar la imagen de la app
+        env:
+          IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          docker push "$IMAGE:$TAG"
+          if [ -n "$VERSION" ]; then docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION" && docker push "$IMAGE:$VERSION"; fi
+
+      - name: Imagen de migraciones (sin publicar)
+        if: inputs.migrate
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: migrate
+          load: true
+          tags: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=${{ inputs.image }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image }}-migrate
+
+      # Solo informa: corre una vez por deploy, en la red interna, y lleva el CLI de
+      # Prisma con sus dependencias de build. Queda en el log, no bloquea.
+      - name: Escaneo de migraciones (informativo)
+        if: inputs.migrate
+        env:
+          IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 --scanners vuln --no-progress "$IMAGE"
+
+      - name: Publicar la imagen de migraciones
+        if: inputs.migrate
+        env:
+          IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
+        run: docker push "$IMAGE"
+
+  deploy:
+    name: Desplegar en el VPS
+    needs: build
+    if: inputs.deploy && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions: {}
+    concurrency:
+      group: deploy-${{ inputs.image }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ inputs.deploy_host }}
+      DEPLOY_PORT: ${{ inputs.deploy_port }}
+      DEPLOY_USER: ${{ inputs.deploy_user }}
+      DEPLOY_KNOWN_HOSTS: ${{ inputs.deploy_known_hosts }}
+    steps:
+      # Sin destino o sin llave de host verificada, no se intenta conectar a nada.
+      - name: Destino del deploy configurado
+        run: |
+          missing=()
+          for v in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_KNOWN_HOSTS; do [ -n "${!v}" ] || missing+=("$v"); done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Faltan variables de Actions en el repo de la app: ${missing[*]} (las fija 'homelab app create', o ansible-playbook apps.yml)"
+            exit 1
+          fi
+
+      - name: Configurar SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy (sin caída, con migraciones)
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          VERSION="${VERSION:-${TAG::7}}"
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "$TAG $VERSION"

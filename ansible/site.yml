@@ -1,0 +1,14 @@
+# Reconstruye el servidor del homelab.
+#   Revisar sin tocar nada:  ansible-playbook site.yml -K --check --diff
+#   Aplicar:                 ansible-playbook site.yml -K
+#   Un solo rol:             ... --tags firewall
+- name: Servidor del homelab
+  hosts: homelab
+  become: true
+  roles:
+    - { role: base, tags: base }
+    - { role: ssh, tags: ssh }
+    - { role: firewall, tags: firewall }
+    - { role: docker, tags: docker }
+    - { role: wireguard, tags: wireguard }
+    - { role: homelab, tags: homelab }

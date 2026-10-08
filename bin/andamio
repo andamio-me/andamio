@@ -1,0 +1,624 @@
+#!/usr/bin/env python3
+"""andamio: prepara tu configuración y tu VPS.
+
+  andamio init      preguntas guiadas -> configuración, llave de cifrado y secretos
+                    (parte 1: solo en tu máquina; no toca ningún servidor)
+  andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
+                    VPN, llave del repo, GHCR y los stacks (parte 2; se puede repetir)
+
+Todo lo que genera queda en este repo (cifrado donde corresponde). Nada se sobreescribe:
+si un archivo ya existe, se respeta.
+"""
+from __future__ import annotations
+
+import argparse
+import getpass
+import ipaddress
+import os
+import re
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG = ROOT / "ansible" / "group_vars" / "all.yml"
+SOPS_CONFIG = ROOT / ".sops.yaml"
+AGE_KEY = Path(os.environ.get("SOPS_AGE_KEY_FILE", Path.home() / ".config" / "sops" / "age" / "keys.txt"))
+INVENTORY = ROOT / "ansible" / "inventory.yml"
+AUTH_KEYS = ROOT / "host" / "ssh" / "authorized_keys"
+SSH_DIR = Path.home() / ".ssh"
+LOCAL_KEY = SSH_DIR / "id_ed25519"
+DEFAULT_ALIAS = "andamio"
+
+# Herramientas que necesitas en TU máquina, y cómo instalarlas.
+TOOLS = {
+    "git": "sudo apt install git  |  brew install git",
+    "ssh": "sudo apt install openssh-client",
+    "ssh-keygen": "sudo apt install openssh-client",
+    "gh": "https://cli.github.com  (y luego: gh auth login)",
+    "sops": "https://github.com/getsops/sops/releases",
+    "age-keygen": "sudo apt install age  |  brew install age",
+    "ansible-playbook": "pipx install --include-deps ansible",
+}
+
+
+# ---------- salida ----------
+
+def title(t: str) -> None:
+    print(f"\n\033[1m{t}\033[0m")
+
+
+def note(t: str) -> None:
+    for line in t.strip("\n").splitlines():
+        print(f"  \033[2m{line}\033[0m")
+
+
+def ok(t: str) -> None:
+    print(f"  \033[32m✓\033[0m {t}")
+
+
+def warn(t: str) -> None:
+    print(f"  \033[33m!\033[0m {t}")
+
+
+def die(t: str) -> None:
+    print(f"\n\033[31m✗ {t}\033[0m", file=sys.stderr)
+    sys.exit(1)
+
+
+def ask(question: str, default: str | None = None, check=None, hint: str = "") -> str:
+    """Pregunta hasta tener una respuesta válida. check devuelve un error o None."""
+    suffix = f" [{default}]" if default else ""
+    while True:
+        try:
+            value = input(f"  {question}{suffix}: ").strip()
+        except EOFError:
+            die("Entrada terminada antes de responder todo.")
+        value = value or (default or "")
+        error = check(value) if check else (None if value else "No puede quedar vacío.")
+        if not error:
+            return value
+        warn(error + (f" {hint}" if hint else ""))
+
+
+def ask_yes(question: str, default: bool) -> bool:
+    answer = ask(question, "s" if default else "n", lambda v: None if v.lower() in ("s", "si", "sí", "n", "no") else "Responde s o n.")
+    return answer.lower().startswith("s")
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=False, text=True, capture_output=True, **kw)
+
+
+# ---------- validaciones ----------
+
+def check_ip(v: str):
+    try:
+        ip = ipaddress.ip_address(v)
+    except ValueError:
+        return "No es una IP válida."
+    if ip.version != 4 or ip.is_private or ip.is_loopback:
+        return "Tiene que ser la IPv4 pública del VPS."
+    return None
+
+
+def check_domain(v: str):
+    return None if re.fullmatch(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}", v) else "Dominio inválido (ej. midominio.com)."
+
+
+def check_email(v: str):
+    return None if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v) else "Email inválido."
+
+
+def check_user(v: str):
+    if v == "root":
+        return "No uses root: el punto es entrar con un usuario propio."
+    return None if re.fullmatch(r"[a-z][a-z0-9-]{1,30}", v) else "Minúsculas, números y guiones (2-31)."
+
+
+def check_port(v: str):
+    if not v.isdigit() or not 1024 <= int(v) <= 65535:
+        return "Entre 1024 y 65535."
+    if int(v) in (8080, 51820):
+        return "Ese puerto lo usa andamio (Traefik o la VPN)."
+    return None
+
+
+def resolves_to(name: str) -> set[str]:
+    try:
+        return {a[4][0] for a in socket.getaddrinfo(name, None, socket.AF_INET)}
+    except socket.gaierror:
+        return set()
+
+
+# ---------- pasos ----------
+
+def check_tools() -> None:
+    title("1. Herramientas en tu máquina")
+    missing = [t for t in TOOLS if not shutil.which(t)]
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        missing.append("python3-yaml")
+        TOOLS["python3-yaml"] = "sudo apt install python3-yaml  |  pip install pyyaml"
+    for t in missing:
+        warn(f"Falta {t}: {TOOLS[t]}")
+    if missing:
+        die("Instala lo que falta y vuelve a correr andamio init.")
+    ok("git, ssh, gh, sops, age y ansible disponibles")
+    if run(["gh", "auth", "status"]).returncode != 0:
+        die("gh no está autenticado: corre `gh auth login` y vuelve a intentar.")
+    ok("gh autenticado")
+
+
+def questions() -> dict:
+    title("2. Tu servidor")
+    note("""
+La IP pública del VPS que compraste (la ves en el panel de tu proveedor).""")
+    a = {"ip": ask("IP del VPS", check=check_ip)}
+
+    title("3. Tu dominio")
+    note("""
+andamio publica cada app como <app>.tudominio. En el DNS de tu dominio necesitas dos
+registros A apuntando a la IP del VPS: uno para el dominio y otro para *.dominio.""")
+    a["domain"] = ask("Dominio", check=check_domain).lower()
+    apex, wild = resolves_to(a["domain"]), resolves_to(f"andamio-check.{a['domain']}")
+    if a["ip"] in apex and a["ip"] in wild:
+        ok(f"{a['domain']} y *.{a['domain']} ya apuntan a {a['ip']}")
+    else:
+        warn(f"{a['domain']} -> {', '.join(apex) or 'nada'}; *.{a['domain']} -> {', '.join(wild) or 'nada'}")
+        note(f"""
+Crea en tu DNS:  A  {a['domain']}  ->  {a['ip']}   y   A  *.{a['domain']}  ->  {a['ip']}
+Sin eso no habrá certificados HTTPS. Puedes seguir y corregirlo antes de preparar el servidor.""")
+    a["email"] = ask("Email para Let's Encrypt (avisos de certificados)", check=check_email)
+
+    title("4. Acceso seguro")
+    note("""
+andamio crea un usuario propio (root deja de poder entrar), SSH solo con llave y en un
+puerto distinto del 22 (menos ruido de bots que prueban contraseñas).""")
+    a["user"] = ask("Usuario de operación", "andamio", check_user)
+    a["port"] = ask("Puerto SSH", str(secrets.choice(range(20000, 30000))), check_port)
+
+    title("5. GitHub")
+    note("""
+Tus apps viven en repos de GitHub y sus imágenes en GHCR. El CI construye y despliega.""")
+    login = run(["gh", "api", "user", "-q", ".login"]).stdout.strip()
+    a["owner"] = ask("Usuario u organización de GitHub", login or None)
+    remote = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).stdout.strip()
+    m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", remote)
+    a["repo"] = ask("Repo de esta configuración (dueño/nombre)", m.group(1) if m else None,
+                    lambda v: None if re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", v) else "Formato dueño/nombre.")
+
+    title("6. HTTPS")
+    note("""
+http (recomendado para empezar): un certificado de Let's Encrypt por app; funciona con
+  cualquier DNS. Los nombres de tus apps (también las privadas) quedan en los registros
+  públicos de certificados.
+cloudflare: un solo certificado comodín; no publica los nombres. Necesita el DNS del
+  dominio en Cloudflare y un token con permiso Zone:DNS:Edit para esa zona.""")
+    a["tls"] = ask("Modo (http/cloudflare)", "http", lambda v: None if v in ("http", "cloudflare") else "http o cloudflare.")
+    a["cf_token"] = ask("Token de Cloudflare (no se muestra en ningún log)") if a["tls"] == "cloudflare" else ""
+
+    title("7. Módulos")
+    note("""
+Monitoreo: "auto" elige según la RAM del VPS (completo con 3 GB o más: métricas, logs,
+  Grafana con alertas y Uptime Kuma; mínimo: solo métricas, ~115 MiB).
+Backups y alertas por Telegram necesitan cuentas en otros servicios: se activan después.
+  Sin backups, tus datos solo viven en el VPS.""")
+    a["monitoring"] = ask("Monitoreo (auto/minimo/completo)", "auto",
+                          lambda v: None if v in ("auto", "minimo", "completo") else "auto, minimo o completo.")
+    return a
+
+
+def age_recipient() -> str:
+    title("8. Llave de cifrado (age)")
+    if AGE_KEY.exists():
+        ok(f"Uso tu llave existente: {AGE_KEY}")
+    else:
+        AGE_KEY.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        r = run(["age-keygen", "-o", str(AGE_KEY)])
+        if r.returncode != 0:
+            die(f"age-keygen falló: {r.stderr.strip()}")
+        AGE_KEY.chmod(0o600)
+        ok(f"Llave creada: {AGE_KEY} (solo tú la puedes leer)")
+        warn("Guárdala también en tu gestor de contraseñas: sin ella no se pueden descifrar tus secretos.")
+    pub = run(["age-keygen", "-y", str(AGE_KEY)]).stdout.strip()
+    if not pub.startswith("age1"):
+        die("No pude leer la llave pública de age.")
+    return pub
+
+
+def write_if_missing(path: Path, content: str, mode: int = 0o644) -> bool:
+    rel = path.relative_to(ROOT)
+    if path.exists():
+        warn(f"{rel} ya existe: no lo toco")
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    path.chmod(mode)
+    ok(f"{rel}")
+    return True
+
+
+def write_config(a: dict, recipient: str) -> None:
+    title("9. Configuración")
+    write_if_missing(SOPS_CONFIG, f"""# Secretos cifrados con sops + age. La llave privada vive solo en tu máquina
+# ({AGE_KEY}) y en tu gestor de contraseñas.
+creation_rules:
+  - path_regex: \\.sops(\\.env)?$
+    age: {recipient}
+""")
+    write_if_missing(CONFIG, f"""# Configuración de este servidor (generada por andamio init). Lo único propio:
+# roles, plantillas y scripts la leen de aquí.
+homelab_user: {a['user']}              # usuario de operación (SSH, docker)
+homelab_uid: 1001
+homelab_ssh_port: {a['port']}
+homelab_ssh_host_key: ""           # la completa andamio init al conectar por primera vez
+homelab_server_ip: {a['ip']}
+homelab_hostname: {a['domain'].split('.')[0]}
+homelab_domain: {a['domain']}
+homelab_tls: {a['tls']}
+homelab_acme_email: {a['email']}
+homelab_github_owner: {a['owner']}
+homelab_repo: git@github-homelab-infra:{a['repo']}.git
+homelab_monitoring: {a['monitoring']}
+homelab_backups: false              # se activa con su configuración (destino de restic)
+homelab_telegram: false             # se activa con su configuración (bot y chat)
+""")
+
+
+def encrypt(path: Path, values: dict[str, str]) -> None:
+    """Cifra un .env con sops. El texto en claro vive solo en una carpeta 0700 y se borra."""
+    rel = path.relative_to(ROOT)
+    if path.exists():
+        warn(f"{rel} ya existe: no lo toco")
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="andamio-"))
+    plain = tmp / "secrets.env"
+    try:
+        plain.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+        plain.chmod(0o600)
+        r = run(["sops", "encrypt", "--input-type", "dotenv", "--output-type", "dotenv",
+                 "--filename-override", str(rel), str(plain)], cwd=ROOT)
+        if r.returncode != 0:
+            die(f"sops no pudo cifrar {rel}: {r.stderr.strip()}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(r.stdout)
+        ok(f"{rel} (cifrado)")
+    finally:
+        plain.write_bytes(b"\0" * 256)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def write_secrets(a: dict) -> None:
+    title("10. Secretos de la plataforma (contraseñas aleatorias, cifradas)")
+    pw = lambda: secrets.token_urlsafe(32).replace("-", "").replace("_", "")[:40]  # noqa: E731
+    encrypt(ROOT / "stacks/proxy/secrets.sops.env", {"CF_DNS_API_TOKEN": a["cf_token"]})
+    encrypt(ROOT / "stacks/data/secrets.sops.env",
+            {"POSTGRES_USER": "andamio", "POSTGRES_PASSWORD": pw(), "REDIS_PASSWORD": pw()})
+    encrypt(ROOT / "stacks/monitoring/secrets.sops.env",
+            {"DOMAIN": a["domain"], "GF_ADMIN_PASSWORD": pw(), "TELEGRAM_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
+    for stack in ("uptime-kuma", "whoami"):
+        encrypt(ROOT / f"stacks/{stack}/secrets.sops.env", {"DOMAIN": a["domain"]})
+    note("""
+La contraseña de Grafana (usuario admin):  sops decrypt stacks/monitoring/secrets.sops.env""")
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    print("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).")
+    if CONFIG.exists() and "homelab_server_ip:" in CONFIG.read_text() and not args.force:
+        die(f"Ya hay una configuración en {CONFIG.relative_to(ROOT)}. No la sobreescribo (usa --force para "
+            "completar lo que falte; lo existente se respeta igual).")
+    check_tools()
+    a = questions()
+    recipient = age_recipient()
+    write_config(a, recipient)
+    write_secrets(a)
+    title("Listo")
+    note(f"""
+Configuración en {CONFIG.relative_to(ROOT)} y secretos cifrados en stacks/*/secrets.sops.env.
+Revísalos, haz commit y push de este repo. Próximo paso: preparar el servidor
+(acceso SSH, endurecimiento, VPN, Traefik y los stacks).""")
+
+
+# ================= parte 2: el servidor =================
+
+def load_config() -> dict:
+    import yaml
+    if not CONFIG.exists():
+        die("Falta la configuración: corre primero `andamio init`.")
+    cfg = yaml.safe_load(CONFIG.read_text()) or {}
+    for k in ("homelab_user", "homelab_ssh_port", "homelab_server_ip", "homelab_repo", "homelab_github_owner"):
+        if not cfg.get(k):
+            die(f"Falta {k} en {CONFIG.relative_to(ROOT)}.")
+    return cfg
+
+
+def set_config(key: str, value: str) -> None:
+    """Cambia una línea de la configuración (solo la usa para completar la llave de host)."""
+    text = CONFIG.read_text()
+    line = f'{key}: "{value}"'
+    new, n = re.subn(rf"^{re.escape(key)}:.*$", line, text, flags=re.M)
+    CONFIG.write_text(new if n else text.rstrip("\n") + "\n" + line + "\n")
+
+
+def ssh_ok(target: list[str]) -> bool:
+    """¿Entra por SSH sin pedir nada? (solo llave, sin preguntar huellas)."""
+    r = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=yes", *target, "true"])
+    return r.returncode == 0
+
+
+def interactive(cmd: list[str], **kw) -> int:
+    """Corre un comando que habla con la persona (contraseñas, confirmaciones)."""
+    return subprocess.run(cmd, check=False, **kw).returncode
+
+
+def step_local_key() -> str:
+    title("1. Tu llave SSH")
+    pub = LOCAL_KEY.with_suffix(".pub")
+    if not pub.exists():
+        note("""
+No tienes una llave ed25519: la creo ahora. Te pedirá una frase de paso (recomendado:
+protege la llave si alguien copia tu disco). Enter dos veces = sin frase.""")
+        SSH_DIR.mkdir(mode=0o700, exist_ok=True)
+        if interactive(["ssh-keygen", "-t", "ed25519", "-f", str(LOCAL_KEY), "-C", f"andamio-{getpass.getuser()}"]) != 0:
+            die("ssh-keygen falló.")
+    key = pub.read_text().strip()
+    ok(f"Uso {pub}")
+    if not AUTH_KEYS.exists():
+        AUTH_KEYS.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_KEYS.write_text(key + "\n")
+        ok(f"{AUTH_KEYS.relative_to(ROOT)}: tu llave pública (la que podrá entrar al servidor)")
+    elif key.split()[1] not in AUTH_KEYS.read_text():
+        warn(f"Tu llave no está en {AUTH_KEYS.relative_to(ROOT)}: no podrías entrar con ella.")
+        if ask_yes("¿Agregarla?", True):
+            with AUTH_KEYS.open("a") as f:
+                f.write(key + "\n")
+            ok("Agregada")
+    return str(pub)
+
+
+def step_host_key(cfg: dict) -> None:
+    title("2. ¿Es tu servidor?")
+    ip, port = cfg["homelab_server_ip"], cfg["homelab_ssh_port"]
+    known = cfg.get("homelab_ssh_host_key") or ""
+    if known:
+        ok("Llave del servidor ya verificada (homelab_ssh_host_key)")
+        return
+    note("""
+La primera conexión es la delicada: si alguien se interpusiera, te mostraría su propia
+llave. Compara esta huella con la que muestra el panel de tu proveedor (consola web o
+log de arranque del VPS). Si no la encuentras, puedes seguir: el riesgo es bajo, pero
+existe.""")
+    r = run(["ssh-keyscan", "-t", "ed25519", "-p", "22", ip])
+    lines = [l for l in r.stdout.splitlines() if l and not l.startswith("#")]
+    if not lines:
+        r = run(["ssh-keyscan", "-t", "ed25519", "-p", str(port), ip])
+        lines = [l for l in r.stdout.splitlines() if l and not l.startswith("#")]
+    if not lines:
+        die(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). ¿El VPS está encendido?")
+    host_key = " ".join(lines[0].split()[1:3])
+    fp = run(["ssh-keygen", "-lf", "-"], input=f"{ip} {host_key}\n").stdout.split()[1]
+    print(f"\n    Huella del servidor:  {fp}\n")
+    if not ask_yes("¿Coincide con la de tu proveedor (o decides seguir sin comprobarla)?", True):
+        die("No sigo. Revisa la IP o pregunta a tu proveedor por la huella SSH (ED25519).")
+    for host in (ip, f"[{ip}]:{port}"):
+        run(["ssh-keygen", "-R", host])
+    SSH_DIR.mkdir(mode=0o700, exist_ok=True)
+    with (SSH_DIR / "known_hosts").open("a") as f:
+        f.write(f"{ip} {host_key}\n[{ip}]:{port} {host_key}\n")
+    set_config("homelab_ssh_host_key", host_key)
+    ok("Guardada en known_hosts y en la configuración (el CI la usa para desplegar)")
+
+
+def step_ssh_alias(cfg: dict) -> str:
+    """Alias en ~/.ssh/config e inventario de Ansible. Respeta lo que exista."""
+    import yaml
+    alias = DEFAULT_ALIAS
+    if INVENTORY.exists():
+        inv = yaml.safe_load(INVENTORY.read_text()) or {}
+        hosts = (((inv.get("all") or {}).get("children") or {}).get("homelab") or {}).get("hosts") or {}
+        alias = next(iter(hosts), alias)
+    else:
+        INVENTORY.write_text(f"""# Host, usuario, puerto y llave salen de ~/.ssh/config (alias "{alias}").
+all:
+  children:
+    homelab:
+      hosts:
+        {alias}:
+""")
+        ok(f"{INVENTORY.relative_to(ROOT)} (alias {alias})")
+    cfg_file = SSH_DIR / "config"
+    current = cfg_file.read_text() if cfg_file.exists() else ""
+    if not re.search(rf"^Host\s+{re.escape(alias)}\s*$", current, re.M):
+        with cfg_file.open("a") as f:
+            f.write(f"""
+Host {alias}
+    HostName {cfg['homelab_server_ip']}
+    User {cfg['homelab_user']}
+    Port {cfg['homelab_ssh_port']}
+    IdentityFile {LOCAL_KEY}
+    IdentitiesOnly yes
+    ServerAliveInterval 60
+""")
+        cfg_file.chmod(0o600)
+        ok(f"~/.ssh/config: alias '{alias}' (ssh {alias})")
+    return alias
+
+
+def step_bootstrap(cfg: dict, alias: str, pub: str) -> None:
+    title("3. Usuario propio y SSH en tu puerto")
+    if ssh_ok([alias]):
+        ok(f"Ya entras como {cfg['homelab_user']} por el puerto {cfg['homelab_ssh_port']}: bootstrap hecho")
+        return
+    ip = cfg["homelab_server_ip"]
+    initial = ask("Usuario que te dio el proveedor para entrar", "root", check_user_initial)
+    target = ["-p", "22", f"{initial}@{ip}"]
+    if not ssh_ok(target):
+        note(f"""
+Tu llave todavía no entra como {initial}: tu proveedor te dio una contraseña. La instalo
+con ssh-copy-id (escribes la contraseña UNA vez); desde ahí, solo llave.""")
+        if interactive(["ssh-copy-id", "-i", pub, *target]) != 0 or not ssh_ok(target):
+            die(f"No pude instalar tu llave en {initial}@{ip}. Revisa la contraseña o el usuario.")
+    ok(f"Entras como {initial} con tu llave")
+    note("""
+Ahora bootstrap: crea tu usuario (te pedirá su contraseña de sudo: guárdala en tu gestor)
+y mueve SSH a tu puerto. La conexión se corta al final: es lo esperado.""")
+    extra = ["-e", f"ansible_user={initial}", "-e", "ansible_port=22"]
+    if initial != "root":
+        extra += ["--become", "-K"]
+    interactive(["ansible-playbook", "bootstrap.yml", *extra], cwd=ROOT / "ansible")
+    for _ in range(10):
+        if ssh_ok([alias]):
+            ok(f"Entras como {cfg['homelab_user']} por el puerto {cfg['homelab_ssh_port']}")
+            return
+        import time
+        time.sleep(3)
+    die(f"No logro entrar con `ssh {alias}`. Revisa el firewall de tu proveedor (el puerto {cfg['homelab_ssh_port']}).")
+
+
+def check_user_initial(v: str):
+    return None if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", v) else "Usuario inválido."
+
+
+def step_repo_pushed() -> None:
+    title("4. Tu configuración en GitHub")
+    note("""
+El servidor se configura desde tu repo en GitHub: lo que no esté subido, no existe para él.""")
+    if run(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip():
+        die("Hay cambios sin commit (la configuración, la llave del servidor...). Corre:\n"
+            "    git add -A && git commit -m 'andamio: configuración' && git push\n"
+            "y vuelve a correr `andamio servidor`: retoma donde quedó.")
+    run(["git", "-C", str(ROOT), "fetch", "-q"])
+    if run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout != run(["git", "-C", str(ROOT), "rev-parse", "@{u}"]).stdout:
+        die("Tus commits no están en GitHub: corre `git push` y vuelve a correr `andamio servidor`.")
+    ok("Todo subido")
+
+
+def step_harden(alias: str) -> None:
+    title("5. Endurecimiento: SSH, firewall, parches, Docker y VPN")
+    note("""
+Pide la contraseña de sudo de tu usuario (la que pusiste en bootstrap).""")
+    if interactive(["ansible-playbook", "site.yml", "-K", "--tags", "base,ssh,firewall,docker,wireguard"],
+                   cwd=ROOT / "ansible") != 0:
+        die("El endurecimiento falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.")
+    ok("Servidor endurecido")
+
+
+def remote(alias: str, script: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+    """Corre en el servidor. Sin stdin: el script entra por la entrada estándar (bash -s).
+    Con stdin (p. ej. un token): el script va como comando y stdin es solo ese dato."""
+    if stdin is None:
+        return run(["ssh", "-o", "BatchMode=yes", alias, "bash", "-s"], input=script)
+    return run(["ssh", "-o", "BatchMode=yes", alias, script], input=stdin)
+
+
+def step_repo_key(cfg: dict, alias: str) -> None:
+    title("6. Llave del servidor para leer tu repo")
+    note("""
+El servidor baja tu configuración de GitHub con una llave propia, de SOLO LECTURA y solo
+para ese repo. Se genera en el servidor: la privada nunca sale de ahí.""")
+    m = re.search(r":([^/]+/[^/]+?)(\.git)?$", cfg["homelab_repo"])
+    repo = m.group(1) if m else die("homelab_repo no tiene el formato git@github-homelab-infra:dueño/repo.git")
+    gh_keys = run(["gh", "api", "meta", "-q", '.ssh_keys[] | "github.com " + .']).stdout
+    if "github.com ssh-" not in gh_keys:
+        die("No pude leer las llaves de host de GitHub (gh api meta).")
+    r = remote(alias, f"""set -e
+umask 077
+k=~/.ssh/id_ed25519_homelab_infra
+[ -f $k ] || ssh-keygen -q -t ed25519 -N '' -C "andamio-server" -f $k
+grep -q '^Host github-homelab-infra$' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
+Host github-homelab-infra
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_homelab_infra
+    IdentitiesOnly yes
+EOF
+grep -q '^github.com ' ~/.ssh/known_hosts 2>/dev/null || cat >> ~/.ssh/known_hosts <<'EOF'
+{gh_keys.strip()}
+EOF
+cat $k.pub
+""")
+    if r.returncode != 0 or "ssh-ed25519" not in r.stdout:
+        die(f"No pude preparar la llave en el servidor: {r.stderr.strip()}")
+    pub = r.stdout.strip().splitlines()[-1]
+    listed = run(["gh", "repo", "deploy-key", "list", "--repo", repo]).stdout
+    if pub.split()[1][:20] in listed or "andamio-server" in listed:
+        ok("Ya registrada en GitHub")
+    else:
+        tmp = Path(tempfile.mkstemp(suffix=".pub")[1])
+        tmp.write_text(pub + "\n")
+        r = run(["gh", "repo", "deploy-key", "add", str(tmp), "--repo", repo, "--title", "andamio-server"])
+        tmp.unlink()
+        if r.returncode != 0:
+            die(f"GitHub rechazó la llave: {r.stderr.strip()}")
+        ok(f"Registrada en {repo} como deploy key de solo lectura")
+
+
+def step_ghcr(cfg: dict, alias: str) -> None:
+    title("7. Acceso a tus imágenes (GHCR)")
+    if remote(alias, "grep -q '\"ghcr.io\"' ~/.docker/config.json 2>/dev/null").returncode == 0:
+        ok("El servidor ya puede bajar imágenes de GHCR")
+        return
+    note("""
+Las imágenes de tus apps son privadas: el servidor necesita un token de GitHub de solo
+lectura de paquetes. Créalo en  https://github.com/settings/tokens/new  (classic):
+  - Note: andamio-server   - Expiration: la que prefieras
+  - Scope: SOLO read:packages
+y pégalo aquí (no se muestra ni queda en el historial).""")
+    token = getpass.getpass("  Token (read:packages): ").strip()
+    if not re.fullmatch(r"gh[pousr]_[A-Za-z0-9]{20,}", token):
+        die("Eso no parece un token de GitHub (empiezan con ghp_).")
+    r = remote(alias, f"docker login ghcr.io -u {cfg['homelab_github_owner']} --password-stdin", stdin=token + "\n")
+    token = ""
+    if r.returncode != 0:
+        die(f"docker login falló: {r.stderr.strip()}")
+    ok("Login en GHCR hecho (el token queda solo en el servidor)")
+
+
+def step_platform() -> None:
+    title("8. Plataforma: Traefik, datos, monitoreo")
+    if interactive(["ansible-playbook", "site.yml", "-K", "--tags", "homelab"], cwd=ROOT / "ansible") != 0:
+        die("La plataforma falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.")
+    ok("Plataforma arriba")
+
+
+def cmd_servidor(args: argparse.Namespace) -> None:
+    print("\033[1mandamio servidor\033[0m: prepara tu VPS (parte 2). Se puede volver a correr: retoma donde quedó.")
+    check_tools()
+    cfg = load_config()
+    pub = step_local_key()
+    step_host_key(cfg)
+    cfg = load_config()
+    alias = step_ssh_alias(cfg)
+    step_bootstrap(cfg, alias, pub)
+    step_repo_pushed()
+    step_harden(alias)
+    step_repo_key(cfg, alias)
+    step_ghcr(cfg, alias)
+    step_platform()
+    title("Listo: tu VPS está seguro y preparado")
+    note(f"""
+VPN: importa ~/andamio-vpn/mi-pc.conf en WireGuard (paneles privados solo por VPN).
+Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
+Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta""")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="andamio", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p_init = sub.add_parser("init", help="configuración guiada (parte 1, local)")
+    p_init.add_argument("--force", action="store_true", help="completar una configuración existente")
+    p_init.set_defaults(func=cmd_init)
+    p_srv = sub.add_parser("servidor", aliases=["server"], help="prepara el VPS (parte 2; se puede repetir)")
+    p_srv.set_defaults(func=cmd_servidor)
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

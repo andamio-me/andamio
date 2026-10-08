@@ -1,0 +1,138 @@
+# Archivos de configuración: se copian desde host/, la fuente de verdad.
+
+- name: Zona horaria
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+- name: Paquetes base
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Sin el restic de Ubuntu (viejo)
+  ansible.builtin.apt:
+    name: restic
+    state: absent
+
+- name: ¿Qué restic hay instalado?
+  ansible.builtin.command: /usr/local/bin/restic version
+  register: base_restic
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Instalar restic {{ base_restic_version }}
+  when: ("restic " ~ base_restic_version ~ " ") not in base_restic.stdout
+  vars:
+    base_restic_file: restic_{{ base_restic_version }}_linux_amd64.bz2
+    base_restic_url: https://github.com/restic/restic/releases/download/v{{ base_restic_version }}
+  block:
+    - name: Descargar restic (verificado contra SHA256SUMS)
+      ansible.builtin.get_url:
+        url: "{{ base_restic_url }}/{{ base_restic_file }}"
+        checksum: "sha256:{{ base_restic_url }}/SHA256SUMS"
+        dest: /tmp/{{ base_restic_file }}
+        mode: "0644"
+
+    - name: Descomprimir en /usr/local/bin
+      ansible.builtin.shell: >
+        bunzip2 -c /tmp/{{ base_restic_file }} > /usr/local/bin/restic.new &&
+        chmod 755 /usr/local/bin/restic.new &&
+        mv /usr/local/bin/restic.new /usr/local/bin/restic &&
+        rm /tmp/{{ base_restic_file }}
+      changed_when: true
+
+- name: Sin snapd
+  ansible.builtin.apt:
+    name: snapd
+    state: absent
+    purge: true
+
+- name: Actualizaciones automáticas
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/apt/52homelab-unattended"
+    dest: /etc/apt/apt.conf.d/52homelab-unattended
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Parámetros del kernel
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/sysctl/99-homelab.conf"
+    dest: /etc/sysctl.d/99-homelab.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Aplicar sysctl
+
+- name: cloud-init desactivado tras el aprovisionamiento (ADR 0005)
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/cloud/cloud-init.disabled
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
+# --- Swap ---
+
+- name: ¿Existe /swapfile?
+  ansible.builtin.stat:
+    path: /swapfile
+  register: base_swapfile
+
+- name: Crear swap de {{ base_swap_size }}
+  when: not base_swapfile.stat.exists
+  block:
+    - name: Reservar /swapfile
+      ansible.builtin.command: fallocate -l {{ base_swap_size }} /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Permisos de /swapfile
+      ansible.builtin.file:
+        path: /swapfile
+        mode: "0600"
+
+    - name: Formatear y activar swap
+      ansible.builtin.shell: mkswap /swapfile && swapon /swapfile
+      changed_when: true
+
+- name: Swap en fstab
+  ansible.posix.mount:
+    src: /swapfile
+    path: none
+    fstype: swap
+    opts: sw
+    state: present
+
+# --- Servicios innecesarios ---
+
+- name: Unidades instaladas
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/{{ item }}
+  loop: "{{ base_masked_units + base_disabled_units }}"
+  register: base_units
+
+- name: Detener y enmascarar
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ base_units.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and item.item in base_masked_units
+
+- name: Detener y desactivar
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ base_units.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and item.item in base_disabled_units

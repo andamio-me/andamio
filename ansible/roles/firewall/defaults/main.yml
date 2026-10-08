@@ -1,0 +1,10 @@
+# Cada puerto abierto necesita un motivo (ADR 0004).
+# Ojo: los puertos que Docker publica con -p 0.0.0.0 se saltan UFW; por eso
+# todo lo interno se publica en 127.0.0.1 o pasa por Traefik.
+firewall_rules:
+  - { port: "{{ homelab_ssh_port }}", proto: tcp, rule: allow }     # SSH
+  - { port: "22", proto: tcp, rule: deny }                          # puerto SSH viejo, explícito
+  - { port: "9090", proto: tcp, rule: deny }                        # Cockpit: solo por túnel
+  - { port: "80", proto: tcp, rule: allow, comment: Traefik HTTP }
+  - { port: "443", proto: tcp, rule: allow, comment: Traefik HTTPS }
+  - { port: "51820", proto: udp, rule: allow, comment: WireGuard }
