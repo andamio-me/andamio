@@ -16,6 +16,8 @@ updates:
 
   - package-ecosystem: docker-compose
     directories: ["/stacks/*"]
+    # stacks/_template es un ejemplo (imagen "imagen"): no es una dependencia real.
+    exclude-paths: ["stacks/_template/**"]
     schedule:
       interval: weekly
       day: monday
