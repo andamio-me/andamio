@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""forge: lo que andamio necesita de la forja donde viven tus repos (hoy GitHub).
+
+Una operación por subcomando, con salida simple, para que la usen igual bin/andamio,
+bin/homelab y Ansible. Para soportar otra forja (GitLab, Gitea...) basta con otra clase
+con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
+
+  forge name                               su nombre para mostrar (p. ej. GitHub)
+  forge tools                              herramientas que necesita, con cómo instalarlas
+  forge auth-ok                            ¿la CLI de la forja tiene sesión iniciada?
+  forge whoami                             tu usuario
+  forge repo-exists DUEÑO/REPO             código de salida 0 si existe y tienes acceso
+  forge repo-private DUEÑO/REPO            código de salida 0 si es privado
+  forge repo-create DUEÑO/REPO PLANTILLA   repo privado desde una plantilla (espera a main)
+  forge clone-url DUEÑO/REPO               URL SSH para clonar
+  forge ssh-host                           host SSH de git (para ~/.ssh/config)
+  forge known-hosts                        sus llaves de host SSH (para known_hosts)
+  forge deploy-key-has DUEÑO/REPO TÍTULO [ARCHIVO.pub]   0 si ya la tiene (título o llave)
+  forge deploy-key-add DUEÑO/REPO TÍTULO ARCHIVO.pub   deploy key de SOLO LECTURA
+  forge secret-set DUEÑO/REPO NOMBRE       secreto de CI; el valor llega por stdin
+  forge vars-get DUEÑO/REPO                variables de CI como JSON {nombre: valor}
+  forge var-set DUEÑO/REPO NOMBRE VALOR    variable de CI (no secreta)
+  forge ci-allow-reuse DUEÑO/REPO          permite que tus otros repos usen su pipeline
+  forge ci-snippet DUEÑO/REPO VERSIÓN      el archivo de CI que una app agrega para desplegar
+  forge ci-watch                           sigue la última corrida del repo actual
+  forge registry                           registro de imágenes (p. ej. ghcr.io)
+  forge registry-name                      su nombre para mostrar (p. ej. GHCR)
+  forge registry-token-help                cómo crear un token de solo lectura de imágenes
+  forge registry-token-check               valida el token (por stdin); el problema, si hay
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG = ROOT / "ansible" / "group_vars" / "all.yml"
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=False, text=True, capture_output=True, **kw)
+
+
+def fail(msg: str, code: int = 1) -> None:
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+class GitHub:
+    """GitHub con la CLI oficial `gh`. Imágenes en GHCR; pipeline en GitHub Actions."""
+
+    name = "GitHub"
+    tools = {"gh": "https://cli.github.com  (y luego: gh auth login)"}
+
+    def gh(self, *args: str, **kw) -> subprocess.CompletedProcess:
+        return run(["gh", *args], **kw)
+
+    def auth_ok(self) -> bool:
+        return self.gh("auth", "status").returncode == 0
+
+    def whoami(self) -> str:
+        return self.gh("api", "user", "-q", ".login").stdout.strip()
+
+    def repo_exists(self, repo: str) -> bool:
+        return self.gh("repo", "view", repo, "--json", "name").returncode == 0
+
+    def repo_private(self, repo: str) -> bool:
+        r = self.gh("repo", "view", repo, "--json", "visibility", "-q", ".visibility")
+        return r.returncode == 0 and r.stdout.strip() != "PUBLIC"
+
+    def repo_create(self, repo: str, template: str) -> None:
+        r = self.gh("repo", "create", repo, "--private", "--template", template, "--clone=false")
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+        # GitHub copia la plantilla en segundo plano: esperar a que exista main.
+        for _ in range(15):
+            if self.gh("api", f"repos/{repo}/branches/main").returncode == 0:
+                return
+            time.sleep(2)
+        fail(f"{repo} se creó, pero main no apareció en 30 s")
+
+    def clone_url(self, repo: str) -> str:
+        return f"git@github.com:{repo}.git"
+
+    def ssh_host(self) -> str:
+        return "github.com"
+
+    def known_hosts(self) -> str:
+        r = self.gh("api", "meta", "-q", '.ssh_keys[] | "github.com " + .')
+        if "github.com ssh-" not in r.stdout:
+            fail("No pude leer las llaves de host de GitHub (gh api meta).")
+        return r.stdout.strip()
+
+    def deploy_key_has(self, repo: str, title: str, pubfile: str | None = None) -> bool:
+        """Por título, o por la llave misma si se pasa (aunque alguien la renombrara)."""
+        r = self.gh("repo", "deploy-key", "list", "--repo", repo, "--json", "title,key")
+        keys = json.loads(r.stdout or "[]") if r.returncode == 0 else []
+        body = Path(pubfile).read_text().split()[1] if pubfile else None
+        return any(k["title"] == title or (body and body in k["key"]) for k in keys)
+
+    def deploy_key_add(self, repo: str, title: str, pubfile: str) -> None:
+        # Sin --allow-write: la llave solo puede leer.
+        r = self.gh("repo", "deploy-key", "add", pubfile, "--repo", repo, "--title", title)
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+
+    def secret_set(self, repo: str, name: str, value: str) -> None:
+        r = self.gh("secret", "set", name, "--repo", repo, input=value)
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+
+    def vars_get(self, repo: str) -> dict[str, str]:
+        r = self.gh("variable", "list", "--repo", repo, "--json", "name,value")
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+        return {v["name"]: v["value"] for v in json.loads(r.stdout or "[]")}
+
+    def var_set(self, repo: str, name: str, value: str) -> None:
+        r = self.gh("variable", "set", name, "--repo", repo, "--body", value)
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+
+    def ci_allow_reuse(self, repo: str) -> bool:
+        """Un workflow reutilizable de un repo privado solo lo pueden usar tus otros repos
+        si se permite en Settings → Actions → Access. True si hubo que cambiarlo."""
+        if not self.repo_private(repo):
+            return False
+        api = f"repos/{repo}/actions/permissions/access"
+        if self.gh("api", api, "-q", ".access_level").stdout.strip() != "none":
+            return False
+        r = self.gh("api", "-X", "PUT", api, "-f", "access_level=user")
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+        return True
+
+    def ci_snippet(self, repo: str, version: str) -> str:
+        return f"""# .github/workflows/ci.yml
+name: CI/CD
+on:
+  push: {{ branches: [main] }}
+  pull_request: {{ branches: [main] }}
+jobs:
+  build:
+    uses: {repo}/.github/workflows/app-build.yml@{version}
+    permissions: {{ contents: read, packages: write }}
+    with:
+      image: ${{{{ github.event.repository.name }}}}
+      deploy: true
+      deploy_host: ${{{{ vars.DEPLOY_HOST }}}}
+      deploy_port: ${{{{ vars.DEPLOY_PORT }}}}
+      deploy_user: ${{{{ vars.DEPLOY_USER }}}}
+      deploy_known_hosts: ${{{{ vars.DEPLOY_KNOWN_HOSTS }}}}
+    secrets:
+      DEPLOY_SSH_KEY: ${{{{ secrets.DEPLOY_SSH_KEY }}}}"""
+
+    def ci_watch(self) -> int:
+        r = self.gh("run", "list", "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId")
+        if not r.stdout.strip():
+            fail("Este repo no tiene corridas de CI todavía.")
+        return subprocess.run(["gh", "run", "watch", r.stdout.strip(), "--exit-status"], check=False).returncode
+
+    def registry(self) -> str:
+        return "ghcr.io"
+
+    def registry_name(self) -> str:
+        return "GHCR"
+
+    def registry_token_help(self) -> str:
+        return """Las imágenes de tus apps son privadas: el servidor necesita un token de GitHub de solo
+lectura de paquetes. Créalo en  https://github.com/settings/tokens/new  (classic):
+  - Note: andamio-server   - Expiration: la que prefieras
+  - Scope: SOLO read:packages
+y pégalo aquí (no se muestra ni queda en el historial)."""
+
+    def registry_token_check(self, token: str) -> str | None:
+        if not re.fullmatch(r"gh[pousr]_[A-Za-z0-9]{20,}", token):
+            return "Eso no parece un token de GitHub (empiezan con ghp_)."
+        req = urllib.request.Request("https://api.github.com/user", headers={
+            "Authorization": f"Bearer {token}", "User-Agent": "andamio", "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                scopes = resp.headers.get("X-OAuth-Scopes", "")
+        except urllib.error.HTTPError as e:
+            return ("GitHub dice que ese token no es válido (¿revocado o mal copiado?)." if e.code == 401
+                    else f"No pude comprobarlo con GitHub (HTTP {e.code}).")
+        except OSError as e:
+            return f"No pude comprobarlo con GitHub ({e})."
+        if not {s.strip() for s in scopes.split(",")} & {"read:packages", "write:packages"}:
+            return "Al token le falta el permiso read:packages."
+        return None
+
+
+FORGES = {"github": GitHub}
+
+
+def current() -> GitHub:
+    name = os.environ.get("ANDAMIO_FORGE")
+    if not name and CONFIG.exists():
+        import yaml
+        name = (yaml.safe_load(CONFIG.read_text()) or {}).get("homelab_forge")
+    name = name or "github"
+    if name not in FORGES:
+        fail(f"homelab_forge: {name} no está soportada (hoy: {', '.join(FORGES)}). "
+             "GitLab está en la hoja de ruta.")
+    return FORGES[name]()
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0 if args else 2)
+    cmd, rest, f = args[0], args[1:], current()
+
+    def need(n: int) -> list[str]:
+        if len(rest) != n:
+            fail(f"uso: forge {cmd} " + " ".join(["ARG"] * n), 2)
+        return rest
+
+    exit_bool = {
+        "auth-ok": lambda: f.auth_ok(),
+        "repo-exists": lambda: f.repo_exists(*need(1)),
+        "repo-private": lambda: f.repo_private(*need(1)),
+        "deploy-key-has": lambda: f.deploy_key_has(*rest) if len(rest) in (2, 3) else need(2),
+    }
+    printing = {
+        "name": lambda: f.name,
+        "tools": lambda: "\n".join(f"{t}\t{hint}" for t, hint in f.tools.items()),
+        "whoami": lambda: f.whoami(),
+        "clone-url": lambda: f.clone_url(*need(1)),
+        "ssh-host": lambda: f.ssh_host(),
+        "known-hosts": lambda: f.known_hosts(),
+        "vars-get": lambda: json.dumps(f.vars_get(*need(1))),
+        "ci-snippet": lambda: f.ci_snippet(*need(2)),
+        "registry": lambda: f.registry(),
+        "registry-name": lambda: f.registry_name(),
+        "registry-token-help": lambda: f.registry_token_help(),
+    }
+    if cmd in exit_bool:
+        sys.exit(0 if exit_bool[cmd]() else 1)
+    if cmd in printing:
+        print(printing[cmd]())
+    elif cmd == "repo-create":
+        f.repo_create(*need(2))
+    elif cmd == "deploy-key-add":
+        f.deploy_key_add(*need(3))
+    elif cmd == "secret-set":
+        f.secret_set(*need(2), sys.stdin.read())
+    elif cmd == "var-set":
+        f.var_set(*need(3))
+    elif cmd == "ci-allow-reuse":
+        print("cambiado" if f.ci_allow_reuse(*need(1)) else "sin cambios")
+    elif cmd == "ci-watch":
+        sys.exit(f.ci_watch())
+    elif cmd == "registry-token-check":
+        problem = f.registry_token_check(sys.stdin.read().strip())
+        if problem:
+            fail(problem)
+    else:
+        fail(f"forge: subcomando desconocido '{cmd}' (forge --help)", 2)
+
+
+if __name__ == "__main__":
+    main()

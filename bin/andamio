@@ -4,7 +4,7 @@
   andamio init      preguntas guiadas -> configuración, llave de cifrado y secretos
                     (parte 1: solo en tu máquina; no toca ningún servidor)
   andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
-                    VPN, llave del repo, GHCR y los stacks (parte 2; se puede repetir)
+                    VPN, llave del repo, registro de imágenes y los stacks (parte 2; se puede repetir)
   andamio certificado [cert llave]
                     tu propio certificado HTTPS (homelab_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
@@ -45,7 +45,6 @@ TOOLS = {
     "git": "sudo apt install git  |  brew install git",
     "ssh": "sudo apt install openssh-client",
     "ssh-keygen": "sudo apt install openssh-client",
-    "gh": "https://cli.github.com  (y luego: gh auth login)",
     "sops": "https://github.com/getsops/sops/releases",
     "age-keygen": "sudo apt install age  |  brew install age",
     "ansible-playbook": "pipx install --include-deps ansible",
@@ -101,6 +100,18 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=False, text=True, capture_output=True, **kw)
 
 
+# La forja de tus repos (GitHub hoy): todo pasa por bin/forge, nunca directo a su CLI.
+def forge(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+    return run([str(ROOT / "bin" / "forge"), *args], input=stdin)
+
+
+def forge_out(*args: str) -> str:
+    r = forge(*args)
+    if r.returncode != 0:
+        die(r.stderr.strip() or f"forge {args[0]} falló")
+    return r.stdout.strip()
+
+
 # ---------- validaciones ----------
 
 def check_ip(v: str):
@@ -149,19 +160,10 @@ def http_get(url: str, token: str) -> tuple[int, dict, str]:
         return 0, {}, str(e)
 
 
-def ghcr_token_problem(token: str) -> str | None:
-    """None si el token sirve para bajar imágenes de GHCR."""
-    if not re.fullmatch(r"gh[pousr]_[A-Za-z0-9]{20,}", token):
-        return "Eso no parece un token de GitHub (empiezan con ghp_)."
-    code, headers, _ = http_get("https://api.github.com/user", token)
-    if code == 401:
-        return "GitHub dice que ese token no es válido (¿revocado o mal copiado?)."
-    if code != 200:
-        return f"No pude comprobarlo con GitHub (HTTP {code})."
-    scopes = {x.strip() for x in headers.get("X-OAuth-Scopes", headers.get("x-oauth-scopes", "")).split(",")}
-    if not scopes & {"read:packages", "write:packages"}:
-        return "Al token le falta el permiso read:packages."
-    return None
+def registry_token_problem(token: str) -> str | None:
+    """None si el token sirve para bajar imágenes del registro (lo valida la forja)."""
+    r = forge("registry-token-check", stdin=token)
+    return None if r.returncode == 0 else (r.stderr.strip() or "No pude validar el token.")
 
 
 def cloudflare_token_problem(token: str) -> str | None:
@@ -329,14 +331,20 @@ def check_tools() -> None:
     except ImportError:
         missing.append("python3-yaml")
         TOOLS["python3-yaml"] = "sudo apt install python3-yaml  |  pip install pyyaml"
+    if not missing:   # forge lee la configuración con yaml
+        forge_tools = dict(line.split("\t", 1) for line in forge_out("tools").splitlines())
+        TOOLS.update(forge_tools)
+        missing = [t for t in forge_tools if not shutil.which(t)]
     for t in missing:
         warn(f"Falta {t}: {TOOLS[t]}")
     if missing:
-        die("Instala lo que falta y vuelve a correr andamio init.")
-    ok("git, ssh, gh, sops, age y ansible disponibles")
-    if run(["gh", "auth", "status"]).returncode != 0:
-        die("gh no está autenticado: corre `gh auth login` y vuelve a intentar.")
-    ok("gh autenticado")
+        die("Instala lo que falta y vuelve a correr andamio.")
+    ok(f"git, ssh, sops, age, ansible y {', '.join(forge_tools)} disponibles")
+    name = forge_out("name")
+    if forge("auth-ok").returncode != 0:
+        die(f"Tu CLI de {name} no tiene sesión iniciada ({', '.join(forge_tools)}): "
+            f"{next(iter(forge_tools.values()))}")
+    ok(f"Sesión iniciada en {name}")
 
 
 def questions() -> dict:
@@ -366,13 +374,14 @@ puerto distinto del 22 (menos ruido de bots que prueban contraseñas).""")
     a["user"] = ask("Usuario de operación", "andamio", check_user)
     a["port"] = ask("Puerto SSH", str(secrets.choice(range(20000, 30000))), check_port)
 
-    title("5. GitHub")
-    note("""
-Tus apps viven en repos de GitHub y sus imágenes en GHCR. El CI construye y despliega.""")
-    login = run(["gh", "api", "user", "-q", ".login"]).stdout.strip()
-    a["owner"] = ask("Usuario u organización de GitHub", login or None)
+    name, host = forge_out("name"), forge_out("ssh-host")
+    title(f"5. {name}")
+    note(f"""
+Tus apps viven en repos de {name} y sus imágenes en {forge_out('registry-name')}. El CI construye y despliega.""")
+    login = forge("whoami").stdout.strip()
+    a["owner"] = ask(f"Usuario u organización de {name}", login or None)
     remote = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).stdout.strip()
-    m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", remote)
+    m = re.search(rf"{re.escape(host)}[:/]([^/]+/[^/.]+)", remote)
     a["repo"] = ask("Repo de esta configuración (dueño/nombre)", m.group(1) if m else None,
                     lambda v: None if re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", v) else "Formato dueño/nombre.")
 
@@ -456,6 +465,8 @@ homelab_hostname: {a['domain'].split('.')[0]}
 homelab_domain: {a['domain']}
 homelab_tls: {a['tls']}
 homelab_acme_email: "{a['email']}"
+homelab_forge: {forge_out('name').lower()}              # dónde viven tus repos (bin/forge)
+homelab_registry: {forge_out('registry')}          # registro de las imágenes de tus apps
 homelab_github_owner: {a['owner']}
 homelab_repo: git@github-homelab-infra:{a['repo']}.git
 homelab_monitoring: {a['monitoring']}
@@ -759,16 +770,17 @@ def check_user_initial(v: str):
 
 
 def step_repo_pushed() -> None:
-    title("4. Tu configuración en GitHub")
-    note("""
-El servidor se configura desde tu repo en GitHub: lo que no esté subido, no existe para él.""")
+    name = forge_out("name")
+    title(f"4. Tu configuración en {name}")
+    note(f"""
+El servidor se configura desde tu repo en {name}: lo que no esté subido, no existe para él.""")
     if run(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip():
         die("Hay cambios sin commit (la configuración, la llave del servidor...). Corre:\n"
             "    git add -A && git commit -m 'andamio: configuración' && git push\n"
             "y vuelve a correr `andamio servidor`: retoma donde quedó.")
     run(["git", "-C", str(ROOT), "fetch", "-q"])
     if run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout != run(["git", "-C", str(ROOT), "rev-parse", "@{u}"]).stdout:
-        die("Tus commits no están en GitHub: corre `git push` y vuelve a correr `andamio servidor`.")
+        die(f"Tus commits no están en {name}: corre `git push` y vuelve a correr `andamio servidor`.")
     ok("Todo subido")
 
 
@@ -788,74 +800,75 @@ def remote(alias: str, script: str, stdin: str | None = None) -> subprocess.Comp
 
 
 def step_repo_key(cfg: dict, alias: str) -> None:
+    name = forge_out("name")
     title("6. Llave del servidor para leer tu repo")
-    note("""
-El servidor baja tu configuración de GitHub con una llave propia, de SOLO LECTURA y solo
+    note(f"""
+El servidor baja tu configuración de {name} con una llave propia, de SOLO LECTURA y solo
 para ese repo. Se genera en el servidor: la privada nunca sale de ahí.""")
     m = re.search(r":([^/]+/[^/]+?)(\.git)?$", cfg["homelab_repo"])
     repo = m.group(1) if m else die("homelab_repo no tiene el formato git@github-homelab-infra:dueño/repo.git")
-    gh_keys = run(["gh", "api", "meta", "-q", '.ssh_keys[] | "github.com " + .']).stdout
-    if "github.com ssh-" not in gh_keys:
-        die("No pude leer las llaves de host de GitHub (gh api meta).")
+    host, known_hosts = forge_out("ssh-host"), forge_out("known-hosts")
     r = remote(alias, f"""set -e
 umask 077
 k=~/.ssh/id_ed25519_homelab_infra
 [ -f $k ] || ssh-keygen -q -t ed25519 -N '' -C "andamio-server" -f $k
 grep -q '^Host github-homelab-infra$' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
 Host github-homelab-infra
-    HostName github.com
+    HostName {host}
     User git
     IdentityFile ~/.ssh/id_ed25519_homelab_infra
     IdentitiesOnly yes
 EOF
-grep -q '^github.com ' ~/.ssh/known_hosts 2>/dev/null || cat >> ~/.ssh/known_hosts <<'EOF'
-{gh_keys.strip()}
+grep -q '^{host} ' ~/.ssh/known_hosts 2>/dev/null || cat >> ~/.ssh/known_hosts <<'EOF'
+{known_hosts}
 EOF
 cat $k.pub
 """)
     if r.returncode != 0 or "ssh-ed25519" not in r.stdout:
         die(f"No pude preparar la llave en el servidor: {r.stderr.strip()}")
-    pub = r.stdout.strip().splitlines()[-1]
-    listed = run(["gh", "repo", "deploy-key", "list", "--repo", repo]).stdout
-    if pub.split()[1][:20] in listed or "andamio-server" in listed:
-        ok("Ya registrada en GitHub")
-    else:
-        tmp = Path(tempfile.mkstemp(suffix=".pub")[1])
-        tmp.write_text(pub + "\n")
-        r = run(["gh", "repo", "deploy-key", "add", str(tmp), "--repo", repo, "--title", "andamio-server"])
+    tmp = Path(tempfile.mkstemp(suffix=".pub")[1])
+    try:
+        tmp.write_text(r.stdout.strip().splitlines()[-1] + "\n")
+        if forge("deploy-key-has", repo, "andamio-server", str(tmp)).returncode == 0:
+            ok(f"Ya registrada en {name}")
+        else:
+            add = forge("deploy-key-add", repo, "andamio-server", str(tmp))
+            if add.returncode != 0:
+                die(f"{name} rechazó la llave: {add.stderr.strip()}")
+            ok(f"Registrada en {repo} como deploy key de solo lectura")
+    finally:
         tmp.unlink()
-        if r.returncode != 0:
-            die(f"GitHub rechazó la llave: {r.stderr.strip()}")
-        ok(f"Registrada en {repo} como deploy key de solo lectura")
 
 
-def ask_ghcr_token(alias: str) -> str | None:
-    """Pide el token de GHCR al principio (antes de minutos de salida de Ansible, donde es
-    fácil pegarlo a destiempo y que quede impreso). None si el servidor ya tiene login."""
-    title("4b. Acceso a tus imágenes (GHCR)")
-    if remote(alias, "grep -q '\"ghcr.io\"' ~/.docker/config.json 2>/dev/null").returncode == 0:
-        ok("El servidor ya puede bajar imágenes de GHCR")
+def registry(cfg: dict) -> tuple[str, str]:
+    """(host del registro de imágenes, su nombre para mostrar)."""
+    return cfg.get("homelab_registry") or forge_out("registry"), forge_out("registry-name")
+
+
+def ask_registry_token(cfg: dict, alias: str) -> str | None:
+    """Pide el token del registro al principio (antes de minutos de salida de Ansible, donde
+    es fácil pegarlo a destiempo y que quede impreso). None si el servidor ya tiene login."""
+    host, name = registry(cfg)
+    title(f"4b. Acceso a tus imágenes ({name})")
+    if remote(alias, f"grep -q '\"{host}\"' ~/.docker/config.json 2>/dev/null").returncode == 0:
+        ok(f"El servidor ya puede bajar imágenes de {name}")
         return None
-    note("""
-Las imágenes de tus apps son privadas: el servidor necesita un token de GitHub de solo
-lectura de paquetes. Créalo en  https://github.com/settings/tokens/new  (classic):
-  - Note: andamio-server   - Expiration: la que prefieras
-  - Scope: SOLO read:packages
-y pégalo aquí (no se muestra ni queda en el historial).""")
-    token = ask_secret("Token (read:packages, no se ve al escribir)", ghcr_token_problem)
-    ok("Token válido y con read:packages: lo uso cuando Docker esté instalado (paso 7).")
+    note(forge_out("registry-token-help"))
+    token = ask_secret("Token de solo lectura de imágenes (no se ve al escribir)", registry_token_problem)
+    ok("Token válido: lo uso cuando Docker esté instalado (paso 7).")
     return token
 
 
-def step_ghcr(cfg: dict, alias: str, token: str | None) -> None:
-    title("7. Login en GHCR")
+def step_registry(cfg: dict, alias: str, token: str | None) -> None:
+    host, name = registry(cfg)
+    title(f"7. Login en {name}")
     if token is None:
         ok("Ya hecho")
         return
-    r = remote(alias, f"docker login ghcr.io -u {cfg['homelab_github_owner']} --password-stdin", stdin=token + "\n")
+    r = remote(alias, f"docker login {host} -u {cfg['homelab_github_owner']} --password-stdin", stdin=token + "\n")
     if r.returncode != 0:
         die(f"docker login falló: {r.stderr.strip()}")
-    ok("Login en GHCR hecho (el token queda solo en el servidor)")
+    ok(f"Login en {name} hecho (el token queda solo en el servidor)")
 
 
 def step_platform(cfg: dict, alias: str) -> None:
@@ -875,13 +888,13 @@ def cmd_servidor(args: argparse.Namespace) -> None:
     alias = step_ssh_alias(cfg)
     step_bootstrap(cfg, alias, pub)
     step_repo_pushed()
-    token = ask_ghcr_token(alias)
+    token = ask_registry_token(cfg, alias)
     title("4c. Contraseña de sudo")
     sudo_password_file(cfg, alias)
     try:
         step_harden(cfg, alias)
         step_repo_key(cfg, alias)
-        step_ghcr(cfg, alias, token)
+        step_registry(cfg, alias, token)
         step_platform(cfg, alias)
     finally:
         if _SUDO_FILE:

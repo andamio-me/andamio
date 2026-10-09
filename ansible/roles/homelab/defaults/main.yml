@@ -4,6 +4,10 @@ homelab_root: /srv/homelab
 # externas. "cloudflare" = un comodín por DNS-01 (necesita la zona en Cloudflare y
 # CF_DNS_API_TOKEN en stacks/proxy/secrets.sops.env; no publica los nombres privados).
 homelab_tls: http
+
+# Dónde viven tus repos (bin/forge) y el registro de las imágenes de tus apps.
+homelab_forge: github
+homelab_registry: ghcr.io
 homelab_infra: "{{ homelab_root }}/infra"
 
 # Secretos del host cifrados en el repo (ansible/tools/cifrar-secretos-host.yml).

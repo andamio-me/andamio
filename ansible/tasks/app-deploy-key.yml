@@ -1,7 +1,7 @@
 # Llave de deploy de una app: si falta apps/<app>/deploy_key.pub, genera un par
-# ed25519, sube la privada como secret DEPLOY_SSH_KEY del repo de la app (gh) y
+# ed25519, sube la privada como secret DEPLOY_SSH_KEY del repo de la app (bin/forge) y
 # guarda solo la pública. La privada nunca queda en disco. Incluido por apps.yml.
-# Además fija las variables de Actions DEPLOY_* (a dónde desplegar) en cada corrida.
+# Además fija las variables de CI DEPLOY_* (a dónde desplegar) en cada corrida.
 # Rotar: borrar deploy_key.pub, correr apps.yml y luego ./hl aplicar homelab.
 
 - name: "{{ app_name }}: definición"
@@ -19,7 +19,7 @@
     app_repo: "{{ app_def.repo | default(homelab_github_owner ~ '/' ~ app_def.name) }}"
   block:
     - name: "{{ app_name }}: ¿existe el repo {{ app_repo }}?"
-      ansible.builtin.command: gh repo view {{ app_repo }} --json name
+      ansible.builtin.command: "{{ repo }}/bin/forge repo-exists {{ app_repo }}"
       register: app_repo_check
       changed_when: false
       failed_when: false
@@ -27,7 +27,7 @@
     - name: "{{ app_name }}: sin repo todavía"
       when: app_repo_check.rc != 0
       ansible.builtin.debug:
-        msg: "No existe {{ app_repo }} (o gh no está autenticado): la llave se crea cuando exista."
+        msg: "No existe {{ app_repo }} (o no hay sesión en la forja): la llave se crea cuando exista."
 
     - name: "{{ app_name }}: generar y subir la llave"
       when: app_repo_check.rc == 0
@@ -44,7 +44,7 @@
           changed_when: true
 
         - name: "{{ app_name }}: privada -> secret DEPLOY_SSH_KEY de {{ app_repo }}"
-          ansible.builtin.shell: gh secret set DEPLOY_SSH_KEY --repo {{ app_repo }} < {{ app_key_tmp.path }}/key
+          ansible.builtin.shell: "{{ repo }}/bin/forge secret-set {{ app_repo }} DEPLOY_SSH_KEY < {{ app_key_tmp.path }}/key"
           changed_when: true
 
         - name: "{{ app_name }}: guardar solo la pública"
@@ -58,7 +58,7 @@
           ansible.builtin.shell: shred -u {{ app_key_tmp.path }}/key 2>/dev/null; rm -rf {{ app_key_tmp.path }}
           changed_when: false
 
-# A dónde desplegar: variables de Actions del repo de la app (no son secretas, pero no
+# A dónde desplegar: variables de CI del repo de la app (no son secretas, pero no
 # van en el código del workflow público). Solo se escriben si faltan o cambiaron.
 - name: "{{ app_name }}: variables de deploy del repo"
   vars:
@@ -70,7 +70,7 @@
       DEPLOY_KNOWN_HOSTS: "[{{ homelab_server_ip }}]:{{ homelab_ssh_port }} {{ homelab_ssh_host_key }}"
   block:
     - name: "{{ app_name }}: variables actuales de {{ app_repo }}"
-      ansible.builtin.command: gh variable list --repo {{ app_repo }} --json name,value
+      ansible.builtin.command: "{{ repo }}/bin/forge vars-get {{ app_repo }}"
       register: app_vars_now
       changed_when: false
       failed_when: false
@@ -78,9 +78,9 @@
     - name: "{{ app_name }}: fijar las que faltan o cambiaron"
       when:
         - app_vars_now.rc == 0
-        - (app_vars_now.stdout | from_json | items2dict(key_name='name', value_name='value')).get(item.key) != item.value
+        - (app_vars_now.stdout | from_json).get(item.key) != item.value | string   # la forja guarda texto
       ansible.builtin.command:
-        argv: [gh, variable, set, "{{ item.key }}", --repo, "{{ app_repo }}", --body, "{{ item.value }}"]
+        argv: ["{{ repo }}/bin/forge", var-set, "{{ app_repo }}", "{{ item.key }}", "{{ item.value }}"]
       loop: "{{ app_deploy_vars | dict2items }}"
       loop_control:
         label: "{{ item.key }}"

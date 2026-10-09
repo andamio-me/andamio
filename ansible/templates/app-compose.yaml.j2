@@ -1,5 +1,5 @@
-{# Imagen en GHCR = el repo de la app (app.repo, o dueño/nombre por defecto). #}
-{% set image = app.image | default('ghcr.io/' ~ (app.repo | default(homelab_github_owner ~ '/' ~ app.name) | lower)) -%}
+{# Imagen en el registro (homelab_registry) = el repo de la app (app.repo, o dueño/nombre). #}
+{% set image = app.image | default((homelab_registry | default('ghcr.io')) ~ '/' ~ (app.repo | default(homelab_github_owner ~ '/' ~ app.name) | lower)) -%}
 {% set apex = app.host == '@' -%}
 {# Dominio raíz (host "@"): sirve DOMAIN y www.DOMAIN; el router toma el nombre de la app. #}
 {% set router = app.name if apex else app.host -%}

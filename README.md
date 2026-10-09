@@ -162,6 +162,7 @@ All in `ansible/group_vars/all.yml`:
 | Setting | Values |
 |---|---|
 | `homelab_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider), `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) or `custom` (your own certificate, see below) |
+| `homelab_forge` | `github` (default). Everything andamio needs from it goes through `bin/forge`; adding GitLab means implementing that one file plus its pipeline |
 | `homelab_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma) |
 | `homelab_backups` | `false` (default) or `true` with a restic repository in `host/sops/restic-env.sops` |
 | `homelab_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |

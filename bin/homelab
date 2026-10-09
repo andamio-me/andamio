@@ -28,6 +28,8 @@ PROJECTS=$HOME/projects
 export PATH=$HOME/.local/bin:$PATH
 
 die() { echo "✗ $*" >&2; exit 1; }
+# Todo lo de GitHub (o la forja que sea) pasa por bin/forge.
+forge() { "$INFRA/bin/forge" "$@"; }
 step() { printf '\n==> %s\n' "$*"; }
 usage() { sed -n '2,10p' "$0"; exit 1; }
 # URL pública de un host: "@" es el dominio raíz.
@@ -67,8 +69,8 @@ app_create() {
     || die "Indica el repo de tu app con --repo dueño/nombre (o define homelab_app_template en la config)"
   git -C "$INFRA" diff --quiet && git -C "$INFRA" diff --cached --quiet \
     || die "Este repo tiene cambios sin commitear; súbelos o descártalos antes"
-  gh auth status > /dev/null 2>&1 || die "gh no está autenticado (gh auth login)"
-  [ -z "$repo" ] || gh repo view "$repo" --json name > /dev/null 2>&1 || die "No existe $repo (o gh no tiene acceso)"
+  forge auth-ok || die "Tu CLI de $(forge name) no tiene sesión iniciada ($(forge tools | cut -f2))"
+  [ -z "$repo" ] || forge repo-exists "$repo" || die "No existe $repo en $(forge name) (o no tienes acceso)"
 
   echo "App:      $name"
   echo "Repo:     ${repo:-$OWNER/$name (nuevo, desde $TEMPLATE)}"
@@ -78,10 +80,8 @@ app_create() {
 
   if [ -z "$repo" ]; then
     step "Repo $OWNER/$name desde la plantilla"
-    gh repo create "$OWNER/$name" --private --template "$TEMPLATE" --clone=false > /dev/null
-    # GitHub copia la plantilla en segundo plano: esperar a que exista main.
-    for _ in $(seq 1 15); do gh api "repos/$OWNER/$name/branches/main" > /dev/null 2>&1 && break; sleep 2; done
-    git clone -q "git@github.com:$OWNER/$name.git" "$PROJECTS/$name"
+    forge repo-create "$OWNER/$name" "$TEMPLATE"
+    git clone -q "$(forge clone-url "$OWNER/$name")" "$PROJECTS/$name"
   fi
 
   step "apps/$name/app.yml"
@@ -111,7 +111,7 @@ EOF
 
   step "Secretos, llave de deploy y compose (ansible/apps.yml)"
   (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'msg|fatal|ok=')
-  [ -f "$dir/deploy_key.pub" ] || die "No se creó la llave de deploy (¿el repo existe y gh tiene permiso?)"
+  [ -f "$dir/deploy_key.pub" ] || die "No se creó la llave de deploy (¿el repo existe y tienes permiso en $(forge name)?)"
 
   step "Commit y push de este repo"
   git -C "$INFRA" add "apps/$name"
@@ -121,13 +121,9 @@ EOF
   step "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)"
   "$INFRA/ansible/hl" aplicar homelab
 
-  # El ci.yml de la app usa app-build.yml de ESTE repo: si es privado, GitHub exige
-  # permitirlo explícitamente (Settings → Actions → Access) para tus otros repos.
-  if [ "$(gh repo view "$INSTANCE_REPO" --json visibility -q .visibility)" != PUBLIC ] \
-     && [ "$(gh api "repos/$INSTANCE_REPO/actions/permissions/access" -q .access_level)" = none ]; then
-    step "Permitir que tus repos usen el pipeline de $INSTANCE_REPO (Actions → Access)"
-    gh api -X PUT "repos/$INSTANCE_REPO/actions/permissions/access" -f access_level=user
-  fi
+  # El CI de la app usa el pipeline de ESTE repo: si es privado, la forja exige permitirlo.
+  [ "$(forge ci-allow-reuse "$INSTANCE_REPO")" = cambiado ] \
+    && step "Permití que tus repos usen el pipeline de $INSTANCE_REPO"
 
   if [ -n "$repo" ]; then
     # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
@@ -135,26 +131,10 @@ EOF
       || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
     cat <<EOF
 
-✓ $name registrada. Falta que $repo use el pipeline: agrega .github/workflows/ci.yml
+✓ $name registrada. Falta que $repo use el pipeline: agrega este archivo
   (su Dockerfile despliega la última etapa; si tiene una etapa "test", se corre antes):
 
-name: CI/CD
-on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
-jobs:
-  build:
-    uses: $INSTANCE_REPO/.github/workflows/app-build.yml@$sha
-    permissions: { contents: read, packages: write }
-    with:
-      image: \${{ github.event.repository.name }}
-      deploy: true
-      deploy_host: \${{ vars.DEPLOY_HOST }}
-      deploy_port: \${{ vars.DEPLOY_PORT }}
-      deploy_user: \${{ vars.DEPLOY_USER }}
-      deploy_known_hosts: \${{ vars.DEPLOY_KNOWN_HOSTS }}
-    secrets:
-      DEPLOY_SSH_KEY: \${{ secrets.DEPLOY_SSH_KEY }}
+$(forge ci-snippet "$INSTANCE_REPO" "$sha")
 
   Con ese archivo en main, cada push despliega. Luego: $(app_url "$host")$( [ "$access" = vpn ] && echo "  (con la VPN)")
 EOF
@@ -166,7 +146,7 @@ EOF
 ✓ $name lista. Primer deploy:
     cd $PROJECTS/$name
     git commit --allow-empty -m "primer deploy" && git push
-    gh run watch \$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')
+    $INFRA/bin/forge ci-watch
   Luego: $(app_url "$host")$( [ "$access" = vpn ] && echo "  (con la VPN)")
 EOF
 }
@@ -262,8 +242,8 @@ REMOTE
 
   cat <<EOF
 
-✓ $name destruida. Si ya no la quieres en GitHub:
-    gh repo archive $OWNER/$name     (o gh repo delete $OWNER/$name, irreversible)
+✓ $name destruida. Si ya no quieres su repo, archívalo (o bórralo, irreversible) en
+  $(forge name): $OWNER/$name
 EOF
 }
 

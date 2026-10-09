@@ -186,21 +186,22 @@
 
 # --- Docker: login, redes y stacks ---
 
-- name: Login en GHCR hecho
+- name: Login en el registro de imágenes hecho
   become: true
   become_user: "{{ homelab_user }}"
-  ansible.builtin.command: grep -q '"ghcr.io"' /home/{{ homelab_user }}/.docker/config.json
+  ansible.builtin.command: grep -q '"{{ homelab_registry }}"' /home/{{ homelab_user }}/.docker/config.json
   changed_when: false
   check_mode: false
-  register: homelab_ghcr
+  register: homelab_registry_login
   failed_when: false
 
-- name: GHCR disponible para bajar imágenes privadas
+- name: Registro disponible para bajar imágenes privadas
   ansible.builtin.assert:
-    that: homelab_ghcr.rc == 0
+    that: homelab_registry_login.rc == 0
     fail_msg: >-
-      Falta el login en GHCR. Como {{ homelab_user }}:
-      docker login ghcr.io -u {{ homelab_github_owner }} (PAT clásico solo con read:packages)
+      Falta el login en {{ homelab_registry }}. Corre bin/andamio servidor (lo pide), o como
+      {{ homelab_user }}: docker login {{ homelab_registry }} -u {{ homelab_github_owner }}
+      con un token de solo lectura de imágenes
     quiet: true
 
 - name: Redes compartidas
