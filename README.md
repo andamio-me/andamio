@@ -152,6 +152,21 @@ you watch it right there: tests, scan, build, deploy. From then on, every `git p
 
 Your app is at `https://myapp.example.com` (through the VPN, unless you passed `--public`).
 
+#### Where your apps live
+
+The domain you gave `andamio init` is your **server's domain**; every app is a subdomain
+of it, named after the app (or `--host`):
+
+| Server domain | `app create blog` | `--host api` | `--host @` |
+|---|---|---|---|
+| `example.com` | `blog.example.com` | `api.example.com` | `example.com` |
+| `lab.example.com` | `blog.lab.example.com` | `api.lab.example.com` | `lab.example.com` |
+
+That's why you create two DNS records once: `example.com` and `*.example.com`. The `*`
+makes every future app point to your server without touching DNS again. A server domain
+can itself be a subdomain (`lab.example.com`) if `example.com` is already used elsewhere.
+For a domain outside your server's (`api.mycompany.com`), use `--domain`.
+
 Useful flags: `--port` (default: the Dockerfile's `EXPOSE`), `--public` (reachable from the
 internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root domain),
 `--mem 512m`.

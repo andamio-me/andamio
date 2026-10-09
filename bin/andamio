@@ -1025,10 +1025,89 @@ def remote_sudo(cfg: dict, alias: str, cmd: str) -> int:
                           input=pw + "\n", text=True, check=False).returncode
 
 
+ANSIBLE_LOG = Path(tempfile.gettempdir()) / "andamio-ansible.log"
+
+
+def run_playbook(args: list[str], env: dict | None = None) -> int:
+    """ansible-playbook sin su salida cruda (en español y de cientos de líneas): el log
+    completo va a ANSIBLE_LOG y aquí se ve una línea de progreso, el resumen y, si falla,
+    la tarea que falló con su error. ANDAMIO_VERBOSE=1: la salida tal cual."""
+    cmd = ["ansible-playbook", *args]
+    if os.environ.get("ANDAMIO_VERBOSE"):
+        return interactive(cmd, cwd=ROOT / "ansible", env=env)
+    sys.stdout.flush()
+    tasks = changed = 0
+    task, failure, recap = "", [], ""
+    tty = sys.stdout.isatty()
+    with ANSIBLE_LOG.open("a") as log:
+        log.write(f"\n===== {' '.join(cmd)}\n")
+        p = subprocess.Popen(cmd, cwd=ROOT / "ansible", env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in p.stdout:
+            log.write(line)
+            if line.startswith(("TASK [", "RUNNING HANDLER [")):
+                tasks += 1
+                task = line.split("[", 1)[1].rsplit("]", 1)[0]
+                if tty:
+                    sys.stdout.write(f"\r  \033[2m… {tasks} {L('tareas', 'tasks')}\033[0m\033[K")
+                    sys.stdout.flush()
+            elif line.startswith("changed:"):
+                changed += 1
+            elif line.startswith(("fatal:", "failed:")) or ("UNREACHABLE!" in line):
+                failure = [task, line.rstrip()]
+            elif failure and len(failure) < 25 and line.strip() and not line.startswith(("TASK [", "PLAY ")):
+                failure.append(line.rstrip())
+            elif " : ok=" in line:
+                recap = line
+        rc = p.wait()
+    if tty:
+        sys.stdout.write("\r\033[K")
+    if rc == 0:
+        ok(L(f"{tasks} tareas, {changed} cambios", f"{tasks} tasks, {changed} changes"))
+    else:
+        import json
+        warn(L(f"Falló la tarea: {failure[0] if failure else task}", f"Failed task: {failure[0] if failure else task}"))
+        for x in failure[1:]:
+            if " : ok=" in x:
+                continue
+            # "fatal: [host]: FAILED! => {...}": de ese JSON, solo lo que se lee (msg, stderr).
+            detail = None
+            if "=> {" in x:
+                try:
+                    d = json.loads(x.split("=> ", 1)[1])
+                    detail = [str(d[k]).strip() for k in ("msg", "stderr", "module_stderr") if d.get(k)]
+                except ValueError:
+                    pass
+            for y in (detail or [x])[:3]:
+                print(f"    \033[2m{y[:400]}\033[0m")
+        note(L(f"Log completo: {ANSIBLE_LOG}", f"Full log: {ANSIBLE_LOG}"))
+    return rc
+
+
 def ansible(args: list[str], cfg: dict, alias: str) -> int:
     """ansible-playbook con la contraseña de sudo ya verificada (sin prompt genérico)."""
     env = dict(os.environ, ANSIBLE_BECOME_PASSWORD_FILE=str(sudo_password_file(cfg, alias)))
-    return interactive(["ansible-playbook", *args], cwd=ROOT / "ansible", env=env)
+    return run_playbook(args, env)
+
+
+def new_sudo_password(user: str) -> str:
+    """La contraseña nueva del usuario de operación: oculta, dos veces, mínimo 12 caracteres.
+    Devuelve su hash (SHA-512, el formato de /etc/shadow): la contraseña no sale de aquí."""
+    for _ in range(3):
+        pw = getpass.getpass(L(f"  Contraseña nueva para '{user}' (mínimo 12 caracteres, no se ve): ",
+                               f"  New password for '{user}' (at least 12 characters, hidden): "))
+        if len(pw) < 12:
+            warn(L("Muy corta: al menos 12 caracteres.", "Too short: at least 12 characters."))
+            continue
+        if getpass.getpass(L("  Otra vez, para confirmar: ", "  Once more, to confirm: ")) != pw:
+            warn(L("No coinciden.", "They don't match."))
+            continue
+        r = run(["openssl", "passwd", "-6", "-stdin"], input=pw + "\n")
+        if r.returncode != 0 or not r.stdout.startswith("$6$"):
+            die(L("openssl no pudo cifrar la contraseña.", "openssl couldn't hash the password."))
+        ok(L("Contraseña lista (guárdala en tu gestor)", "Password set (keep it in your password manager)"))
+        return r.stdout.strip()
+    die(L("No quedó definida la contraseña: vuelve a correr el comando.", "The password wasn't set: run the command again."))
 
 
 def step_local_key() -> str:
@@ -1241,17 +1320,25 @@ which doesn't exist yet)."""))
             become_file.chmod(0o600)
             extra += ["--become-password-file", str(become_file)]
     note(L(f"""
-Ahora bootstrap crea tu usuario '{user}' y mueve SSH al puerto {port}.
-Te va a pedir una contraseña NUEVA para '{user}': invéntala ahora (larga), escríbela
-dos veces y guárdala en tu gestor. Es solo para sudo (para entrar sigue siendo tu llave),
-y andamio te la pedirá en los pasos siguientes. La conexión se corta al final: es lo esperado.""", f"""
-Now bootstrap creates your user '{user}' and moves SSH to port {port}.
-It will ask for a NEW password for '{user}': make one up now (long), type it twice and
-keep it in your password manager. It's only for sudo (you still log in with your key),
-and andamio will ask for it in the next steps. The connection drops at the end: that's expected."""))
+Ahora creo tu usuario '{user}' y muevo SSH al puerto {port}. Inventa una contraseña NUEVA
+para '{user}' (larga) y guárdala en tu gestor: es solo para sudo (para entrar sigue
+siendo tu llave), y andamio te la pedirá en los pasos siguientes.""", f"""
+Now I create your user '{user}' and move SSH to port {port}. Make up a NEW password for
+'{user}' (long) and keep it in your password manager: it's only for sudo (you still log
+in with your key), and andamio will ask for it in the next steps."""))
+    # Va como hash, en un archivo privado que se borra: el playbook no la pregunta
+    # (vars_prompt se salta cuando la variable ya viene definida).
+    import json
+    vars_dir = Path(tempfile.mkdtemp(prefix="andamio-boot-"))
+    vars_file = vars_dir / "vars.json"
+    vars_file.write_text(json.dumps({"bootstrap_password": new_sudo_password(user)}))
+    vars_file.chmod(0o600)
+    title(L("   Creando tu usuario y moviendo SSH (la conexión se corta al final: es lo esperado)",
+            "   Creating your user and moving SSH (the connection drops at the end: that's expected)"))
     try:
-        interactive(["ansible-playbook", "bootstrap.yml", *extra], cwd=ROOT / "ansible")
+        run_playbook(["bootstrap.yml", *extra, "-e", f"@{vars_file}"])
     finally:
+        shutil.rmtree(vars_dir, ignore_errors=True)
         if become_file:   # la contraseña del usuario del proveedor: fuera apenas termina
             become_file.write_text("\0" * 64)
             shutil.rmtree(become_file.parent, ignore_errors=True)
@@ -1414,13 +1501,15 @@ def cmd_servidor(args: argparse.Namespace) -> None:
         wipe_sudo()
     title(L("Listo: tu VPS está seguro y preparado", "Done: your VPS is secure and ready"))
     note(L(f"""
-VPN: importa ~/andamio-vpn/mi-pc.conf en WireGuard (paneles privados solo por VPN).
+VPN: importa ~/andamio-vpn/mi-pc.conf en la app de WireGuard (paneles privados solo por VPN);
+  celular: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf y escanéalo con la app.
 Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
-Primera app:  bin/andamio app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta
+Primera app:  bin/andamio app create <nombre> --repo <dueño/repo>   (queda en https://<nombre>.{cfg.get('homelab_domain')})
 Chequeo de seguridad:  bin/andamio estado     Backups:  bin/andamio backups""", f"""
-VPN: import ~/andamio-vpn/mi-pc.conf into WireGuard (private panels only over the VPN).
+VPN: import ~/andamio-vpn/mi-pc.conf into the WireGuard app (private panels only over the VPN);
+  phone: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf and scan it with the app.
 Grafana (if your monitoring is completo): https://grafana.{cfg.get('homelab_domain')} over the VPN.
-First app:  bin/andamio app create <name> --repo <owner/repo> --port <port> --health /path
+First app:  bin/andamio app create <name> --repo <owner/repo>   (it lives at https://<name>.{cfg.get('homelab_domain')})
 Security check:  bin/andamio status     Backups:  bin/andamio backups"""))
 
 
@@ -2139,7 +2228,7 @@ def cmd_estado(args: argparse.Namespace) -> None:
         wipe_sudo()
     results, listening = [], []
     for line in r.stdout.splitlines():
-        parts = line.split("|")
+        parts = line.split("|", 3)
         if parts[0] == "LISTEN":
             listening.append(int(parts[2]))
         elif parts[0] in ("OK", "WARN", "FAIL"):
@@ -2172,6 +2261,12 @@ def cmd_estado(args: argparse.Namespace) -> None:
                    if port_open(ip, 22) else
                    ["OK", "Internet", L("El puerto 22 está cerrado (SSH solo en el tuyo)",
                                         "Port 22 is closed (SSH only on yours)"), ""])
+    # Let's Encrypt (modo http) valida por el 80, y la redirección a HTTPS vive ahí.
+    if not port_open(ip, 80):
+        net.append(["FAIL", "Internet", L("El puerto 80 no responde desde Internet: Let's Encrypt y la redirección a HTTPS lo necesitan",
+                                          "Port 80 doesn't answer from the internet: Let's Encrypt and the HTTPS redirect need it"),
+                    L("ábrelo en el firewall de tu proveedor (TCP 80); después: ssh " + alias + " docker restart traefik",
+                      "open it in your provider's firewall (TCP 80); then: ssh " + alias + " docker restart traefik")])
     host = f"whoami.{domain}"
     good, msg = tls_seen_from_internet(host)
     net.append(["OK", "Internet", L(f"HTTPS de {host}: {msg}", f"HTTPS of {host}: {msg}"), ""] if good else
@@ -2271,14 +2366,15 @@ def overview() -> None:
   servidor                     prepara el VPS: usuario propio, SSH, firewall, VPN, Traefik, monitoreo
   backups                      backups diarios cifrados fuera del servidor (B2 o S3), con prueba
 
-{b('Tus apps')}
-  app create <app> --repo <dueño/repo> --port <p> [--health /ruta] [--public] [--db] [--redis]
-  app secret set <app> <CLAVE> secreto de ejecución (el valor se pide oculto)
-  app domain|cors add <app> ...  dominio propio / frontend en otro lado (CORS)
-  app stop|start <app>         apagarla sin borrar nada / volver
-  app secret list|rm <app> ...
+{b('Tus apps')} {d('(cada una queda en https://<app>.tudominio)')}
+  app create <app> --repo <dueño/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /ruta]
+                               la registra (una vez); desde ahí cada git push a main la despliega
   app list                     todas, con su URL y estado
   app logs <app>               logs en vivo
+  app secret set|rm|list <app> [CLAVE]      secretos de ejecución (el valor se pide oculto)
+  app domain add|rm|list <app> [dominio]    un dominio propio además de <app>.tudominio
+  app cors add|rm|list <app> [origen]       frontend en otro lado (Vercel...)
+  app stop|start <app>         apagarla sin borrar nada / volver
   app rollback <app>           volver al deploy anterior
   app destroy <app>            borrarla (respalda su base antes)
 
@@ -2298,14 +2394,15 @@ def overview() -> None:
   server                       sets up the VPS: own user, SSH, firewall, VPN, Traefik, monitoring
   backups                      daily encrypted off-server backups (B2 or S3), tested
 
-{b('Your apps')}
-  app create <app> --repo <owner/repo> --port <p> [--health /path] [--public] [--db] [--redis]
-  app secret set <app> <KEY>   runtime secret (the value is asked hidden)
-  app domain|cors add <app> ...  own domain / frontend hosted elsewhere (CORS)
-  app stop|start <app>         turn it off without deleting anything / back on
-  app secret list|rm <app> ...
+{b('Your apps')} {d('(each one lives at https://<app>.yourdomain)')}
+  app create <app> --repo <owner/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /path]
+                               registers it (once); from then on every git push to main deploys it
   app list                     all of them, with URL and status
   app logs <app>               live logs
+  app secret set|rm|list <app> [KEY]        runtime secrets (the value is asked hidden)
+  app domain add|rm|list <app> [domain]     an own domain besides <app>.yourdomain
+  app cors add|rm|list <app> [origin]       frontend hosted elsewhere (Vercel...)
+  app stop|start <app>         turn it off without deleting anything / back on
   app rollback <app>           back to the previous deploy
   app destroy <app>            delete it (backs up its database first)
 
@@ -2332,6 +2429,13 @@ def main() -> None:
     if args[0] == "_scaffold":   # interno (andamio app create): _scaffold <dir> <puerto|""> <salida>
         cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
         return
+    if args[0] == "_apply":      # interno (andamio app ...): aplica la plataforma en el servidor
+        cfg, alias = load_config(), server_alias()
+        try:
+            rc = ansible(["site.yml", "--tags", "homelab"], cfg, alias)
+        finally:
+            wipe_sudo()
+        sys.exit(rc)
     known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
              "certificado", "certificate"}
     if args[0] not in known:

@@ -192,7 +192,7 @@ EOF
 
   step "$(L "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)" \
             "Server: .env, database, Redis and deploy key (asks for your sudo password)")"
-  "$INFRA/ansible/hl" apply homelab
+  "$INFRA/bin/andamio" _apply
 
   # El CI de la app usa el pipeline de ESTE repo: si es privado, la forja exige permitirlo.
   [ "$(forge ci-allow-reuse "$INSTANCE_REPO")" = cambiado ] \
@@ -281,7 +281,7 @@ app_state() {  # app_state <stop|start> <nombre>
   git -C "$INFRA" commit -qm "feat(apps): $want $name (andamio app $want)"
   git -C "$INFRA" push -q
   step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
-  "$INFRA/ansible/hl" apply homelab
+  "$INFRA/bin/andamio" _apply
   echo
   local host; host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$f")
   if [ "$want" = stop ]; then
@@ -370,7 +370,7 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
   git -C "$INFRA" commit -qm "feat(apps): $name $key $sub $value"
   git -C "$INFRA" push -q
   step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
-  "$INFRA/ansible/hl" apply homelab
+  "$INFRA/bin/andamio" _apply
   echo
   if [ "$key" = domains ] && [ "$sub" = add ]; then
     L "✓ https://$value → $name (su certificado de Let's Encrypt se pide en el primer acceso)" \
@@ -443,7 +443,7 @@ app_secret() {
 
   step "$(L "Servidor: .env de $name y reinicio de la app (pide tu contraseña de sudo)" \
             "Server: $name's .env and app restart (asks for your sudo password)")"
-  "$INFRA/ansible/hl" apply homelab
+  "$INFRA/bin/andamio" _apply
 }
 
 app_list() {
@@ -542,7 +542,7 @@ REMOTE
 
   step "$(L "Servidor: revocar llave, quitar del registro y de Redis (pide tu contraseña de sudo)" \
             "Server: revoke the key, remove it from the registry and from Redis (asks for your sudo password)")"
-  "$INFRA/ansible/hl" apply homelab
+  "$INFRA/bin/andamio" _apply
 
   echo
   L "✓ $name destruida. Si ya no quieres su repo, archívalo (o bórralo, irreversible) en

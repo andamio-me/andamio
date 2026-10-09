@@ -156,6 +156,21 @@ tests, escaneo, build, deploy. Desde ahí, cada `git push` a `main` despliega.
 
 Tu app queda en `https://miapp.ejemplo.com` (por la VPN, salvo que uses `--public`).
 
+#### Dónde quedan tus apps
+
+El dominio que le diste a `andamio init` es el **dominio de tu servidor**; cada app es un
+subdominio suyo, con el nombre de la app (o `--host`):
+
+| Dominio del servidor | `app create blog` | `--host api` | `--host @` |
+|---|---|---|---|
+| `ejemplo.com` | `blog.ejemplo.com` | `api.ejemplo.com` | `ejemplo.com` |
+| `lab.ejemplo.com` | `blog.lab.ejemplo.com` | `api.lab.ejemplo.com` | `lab.ejemplo.com` |
+
+Por eso creas dos registros DNS una sola vez: `ejemplo.com` y `*.ejemplo.com`. El `*` hace
+que cualquier app futura apunte a tu servidor sin volver a tocar el DNS. El dominio del
+servidor puede ser a su vez un subdominio (`lab.ejemplo.com`) si `ejemplo.com` ya se usa en
+otro lado. Para un dominio fuera del de tu servidor (`api.suempresa.com`), usa `--domain`.
+
 Opciones útiles: `--port` (por defecto, el `EXPOSE` del Dockerfile), `--public` (accesible
 desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (dominio raíz),
 `--mem 512m`.
