@@ -3,7 +3,7 @@
 # Crea el usuario de operación y mueve SSH a su puerto (group_vars/all.yml). La conexión se corta al final: es lo esperado.
 # Después todo va con site.yml (ver docs/runbooks/reconstruir-servidor.md).
 - name: Bootstrap de un VPS nuevo
-  hosts: homelab
+  hosts: andamio
   gather_facts: false
   vars_prompt:
     - name: bootstrap_password
@@ -17,8 +17,8 @@
     # guardan el dueño por número.
     - name: Usuario de operación
       ansible.builtin.user:
-        name: "{{ homelab_user }}"
-        uid: "{{ homelab_uid }}"
+        name: "{{ andamio_user }}"
+        uid: "{{ andamio_uid }}"
         groups: sudo
         append: true
         shell: /bin/bash
@@ -27,7 +27,7 @@
 
     - name: Llaves autorizadas
       ansible.posix.authorized_key:
-        user: "{{ homelab_user }}"
+        user: "{{ andamio_user }}"
         key: "{{ lookup('file', playbook_dir + '/../host/ssh/authorized_keys') }}"
 
     - name: Directorio del override de ssh.socket
@@ -36,7 +36,7 @@
         state: directory
         mode: "0755"
 
-    - name: SSH en el puerto {{ homelab_ssh_port }}
+    - name: SSH en el puerto {{ andamio_ssh_port }}
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../host/systemd/ssh.socket.d/override.conf.j2"
         dest: /etc/systemd/system/ssh.socket.d/override.conf

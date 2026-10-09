@@ -1,5 +1,5 @@
-# Workflow reutilizable: check, build, escaneo y deploy de una app del homelab.
-# Uso desde el repo de la app (ver homelab-dashboard/.github/workflows/ci.yml).
+# Workflow reutilizable: check, build, escaneo y deploy de una app de andamio.
+# Uso desde el repo de la app: .github/workflows/andamio.yml (lo escribe `andamio app create`).
 # Las apps lo fijan por SHA (tag app-build-vN). Runner fijo en ubuntu-24.04:
 # cambiar de Ubuntu es una decisión, no algo que pase solo con ubuntu-latest.
 name: app-build
@@ -8,7 +8,7 @@ on:
   workflow_call:
     inputs:
       image:
-        description: Nombre de la imagen en GHCR (p. ej. homelab-dashboard)
+        description: Nombre de la imagen en GHCR (p. ej. mi-app)
         required: true
         type: string
       target:

@@ -2,14 +2,14 @@
 #   1. Completa sus secretos cifrados (DOMAIN, DATABASE_URL...) si faltan.
 #   2. Genera apps/<app>/compose.yaml.
 #   ansible-playbook apps.yml
-# Después: commit + push y `ansible-playbook site.yml -K --tags homelab`.
+# Después: commit + push y `ansible-playbook site.yml -K --tags andamio`.
 - name: Preparar las apps
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     repo: "{{ playbook_dir }}/.."
-    apps_domain: "{{ homelab_domain }}"
+    apps_domain: "{{ andamio_domain }}"
   tasks:
     - name: Buscar apps
       ansible.builtin.find:

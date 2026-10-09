@@ -1,5 +1,5 @@
 # Alertas de Grafana por Telegram. Ansible lo copia a provisioning/alerting/contact-points.yml
-# SOLO si homelab_telegram está activado (con el token vacío, Grafana no arrancaría).
+# SOLO si andamio_telegram está activado (con el token vacío, Grafana no arrancaría).
 apiVersion: 1
 
 contactPoints:

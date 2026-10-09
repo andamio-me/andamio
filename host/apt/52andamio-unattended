@@ -1,4 +1,4 @@
-// Configuración propia del homelab (sobrescribe 50unattended-upgrades)
+// Configuración propia de andamio (sobrescribe 50unattended-upgrades)
 
 // Reiniciar si una actualización lo requiere (p. ej. kernel)
 Unattended-Upgrade::Automatic-Reboot "true";

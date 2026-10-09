@@ -10,7 +10,7 @@
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Correr con sudo"; exit 1; }
 
-INFRA=/srv/homelab/infra
+INFRA=/srv/andamio/infra
 T=/srv/restore-drill
 NET=drill-net
 SEAFILE_IMAGE=$(docker inspect seafile --format '{{.Config.Image}}')
@@ -51,11 +51,11 @@ PHASE_START=$SECONDS
 
 echo "==> 2. Verificar el repositorio en B2 y restaurar el último snapshot"
 set -a; . /etc/restic/env; set +a
-echo "  último snapshot: $(restic snapshots --tag homelab --compact | grep -E '^[0-9a-f]{8} ' | tail -n 1)"
+echo "  último snapshot: $(restic snapshots --tag andamio --compact | grep -E '^[0-9a-f]{8} ' | tail -n 1)"
 restic check --read-data-subset=5% -q
 phase check
-restic restore latest --tag homelab --target "$T" \
-  --include /var/backups/homelab --include /srv/homelab/data/seafile -q
+restic restore latest --tag andamio --target "$T" \
+  --include /var/backups/andamio --include /srv/andamio/data/seafile -q
 echo "  restaurado: $(du -sh "$T" | cut -f1)"
 phase restore
 
@@ -76,14 +76,14 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 # --clean del dump intenta borrar roles que no existen aquí: esos avisos no importan.
-docker exec -i drill-pg psql -q -U postgres -d postgres < "$T/var/backups/homelab/postgres.sql" > /dev/null 2>&1
-docker exec -i drill-maria mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" < "$T/var/backups/homelab/seafile-mysql.sql"
+docker exec -i drill-pg psql -q -U postgres -d postgres < "$T/var/backups/andamio/postgres.sql" > /dev/null 2>&1
+docker exec -i drill-maria mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" < "$T/var/backups/andamio/seafile-mysql.sql"
 docker exec drill-maria mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES" < /dev/null
 phase bases
 
 echo "==> 4. Seafile temporal con los archivos restaurados"
 docker run -d --name drill-seafile --network "$NET" \
-  -v "$T/srv/homelab/data/seafile:/shared" \
+  -v "$T/srv/andamio/data/seafile:/shared" \
   -e SEAFILE_SERVER_HOSTNAME="nube.$DOMAIN" -e SEAFILE_SERVER_PROTOCOL=https -e TIME_ZONE=Etc/UTC \
   -e JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY" \
   -e SEAFILE_MYSQL_DB_HOST=seafile-mysql -e SEAFILE_MYSQL_DB_PORT=3306 \

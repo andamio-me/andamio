@@ -52,16 +52,16 @@
 
 - name: Actualizaciones automáticas
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../host/apt/52homelab-unattended"
-    dest: /etc/apt/apt.conf.d/52homelab-unattended
+    src: "{{ playbook_dir }}/../host/apt/52andamio-unattended"
+    dest: /etc/apt/apt.conf.d/52andamio-unattended
     owner: root
     group: root
     mode: "0644"
 
 - name: Parámetros del kernel
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../host/sysctl/99-homelab.conf"
-    dest: /etc/sysctl.d/99-homelab.conf
+    src: "{{ playbook_dir }}/../host/sysctl/99-andamio.conf"
+    dest: /etc/sysctl.d/99-andamio.conf
     owner: root
     group: root
     mode: "0644"

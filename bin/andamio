@@ -14,7 +14,7 @@
   andamio update    trae las mejoras y parches de andamio (fusión de tres vías por
                     archivo) sin tocar tu configuración, tus apps ni tus secretos
   andamio certificado [cert llave]
-                    tu propio certificado HTTPS (homelab_tls: custom): sin argumentos
+                    tu propio certificado HTTPS (andamio_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
 
 Todo lo que genera queda en este repo (cifrado donde corresponde). Nada se sobreescribe:
@@ -305,7 +305,7 @@ def resolves_to(name: str) -> set[str]:
         return set()
 
 
-# ---------- certificado propio (homelab_tls: custom) ----------
+# ---------- certificado propio (andamio_tls: custom) ----------
 
 def local_path(v: str) -> Path:
     """Ruta escrita por la persona; acepta rutas de Windows si corre en WSL (C:\\Users\\...)."""
@@ -848,22 +848,22 @@ def write_config(a: dict, recipient: str) -> None:
         "telegram": ("se activa con su configuración (bot y chat)", "turned on with its configuration (bot and chat)"),
     }.items()}
     write_if_missing(CONFIG, f"""{c['head']}
-homelab_user: {a['user']}              # {c['user']}
-homelab_uid: 1001
-homelab_ssh_port: {a['port']}
-homelab_ssh_host_key: ""           # {c['hostkey']}
-homelab_server_ip: {a['ip']}
-homelab_hostname: {a['domain'].split('.')[0]}
-homelab_domain: {a['domain']}
-homelab_tls: {a['tls']}
-homelab_acme_email: "{a['email']}"
-homelab_forge: {forge_out('name').lower()}              # {c['forge']}
-homelab_registry: {forge_out('registry')}          # {c['registry']}
-homelab_github_owner: {a['owner']}
-homelab_repo: git@github-homelab-infra:{a['repo']}.git
-homelab_monitoring: {a['monitoring']}
-homelab_backups: false              # {c['backups']}
-homelab_telegram: false             # {c['telegram']}
+andamio_user: {a['user']}              # {c['user']}
+andamio_uid: 1001
+andamio_ssh_port: {a['port']}
+andamio_ssh_host_key: ""           # {c['hostkey']}
+andamio_server_ip: {a['ip']}
+andamio_hostname: {a['domain'].split('.')[0]}
+andamio_domain: {a['domain']}
+andamio_tls: {a['tls']}
+andamio_acme_email: "{a['email']}"
+andamio_forge: {forge_out('name').lower()}              # {c['forge']}
+andamio_registry: {forge_out('registry')}          # {c['registry']}
+andamio_github_owner: {a['owner']}
+andamio_repo: git@github-andamio:{a['repo']}.git
+andamio_monitoring: {a['monitoring']}
+andamio_backups: false              # {c['backups']}
+andamio_telegram: false             # {c['telegram']}
 """)
 
 
@@ -930,7 +930,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(L("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).",
             "\033[1mandamio init\033[0m: prepares your VPS's configuration (part 1, only on your machine)."))
     refuse_public_template()
-    if CONFIG.exists() and "homelab_server_ip:" in CONFIG.read_text() and not args.force:
+    if CONFIG.exists() and "andamio_server_ip:" in CONFIG.read_text() and not args.force:
         die(L(f"Ya hay una configuración en {CONFIG.relative_to(ROOT)}. No la sobreescribo (usa --force para "
               "completar lo que falte; lo existente se respeta igual).",
               f"There's already a configuration in {CONFIG.relative_to(ROOT)}. I won't overwrite it (use "
@@ -977,7 +977,7 @@ def load_config() -> dict:
     if not CONFIG.exists():
         die(L("Falta la configuración: corre primero `andamio init`.", "No configuration yet: run `andamio init` first."))
     cfg = yaml.safe_load(CONFIG.read_text()) or {}
-    for k in ("homelab_user", "homelab_ssh_port", "homelab_server_ip", "homelab_repo", "homelab_github_owner"):
+    for k in ("andamio_user", "andamio_ssh_port", "andamio_server_ip", "andamio_repo", "andamio_github_owner"):
         if not cfg.get(k):
             die(L(f"Falta {k} en {CONFIG.relative_to(ROOT)}.", f"{k} is missing in {CONFIG.relative_to(ROOT)}."))
     return cfg
@@ -1013,13 +1013,13 @@ def sudo_password_file(cfg: dict, alias: str) -> Path:
     global _SUDO_FILE
     if _SUDO_FILE:
         return _SUDO_FILE
-    user = cfg["homelab_user"]
+    user = cfg["andamio_user"]
     note(L(f"""
 andamio necesita la contraseña de sudo de tu usuario '{user}' en el servidor
-({cfg['homelab_server_ip']}): la que le pusiste al crearlo (si lo creó andamio servidor,
+({cfg['andamio_server_ip']}): la que le pusiste al crearlo (si lo creó andamio servidor,
 fue en su paso 3, donde se pidió dos veces). Se pide una sola vez para todo lo que sigue.""", f"""
 andamio needs the sudo password of your user '{user}' on the server
-({cfg['homelab_server_ip']}): the one you set when it was created (if andamio server created
+({cfg['andamio_server_ip']}): the one you set when it was created (if andamio server created
 it, that was in its step 3, where it was asked twice). It's asked only once for everything that follows."""))
     for intento in range(3):
         pw = getpass.getpass(L(f"  Contraseña de sudo de '{user}': ", f"  Sudo password for '{user}': "))
@@ -1169,10 +1169,10 @@ it protects the key if someone copies your disk). Enter twice = no passphrase.""
 
 def step_host_key(cfg: dict) -> None:
     title(L("2. ¿Es tu servidor?", "2. Is it your server?"))
-    ip, port = cfg["homelab_server_ip"], cfg["homelab_ssh_port"]
-    known = cfg.get("homelab_ssh_host_key") or ""
+    ip, port = cfg["andamio_server_ip"], cfg["andamio_ssh_port"]
+    known = cfg.get("andamio_ssh_host_key") or ""
     if known:
-        ok(L("Llave del servidor ya verificada (homelab_ssh_host_key)", "Server key already verified (homelab_ssh_host_key)"))
+        ok(L("Llave del servidor ya verificada (andamio_ssh_host_key)", "Server key already verified (andamio_ssh_host_key)"))
         return
     note(L("""
 La primera conexión es la delicada: si alguien se interpusiera en la red, te mostraría
@@ -1223,7 +1223,7 @@ go on: the risk is low, but real."""))
     SSH_DIR.mkdir(mode=0o700, exist_ok=True)
     with (SSH_DIR / "known_hosts").open("a") as f:
         f.write(f"{ip} {host_key}\n[{ip}]:{port} {host_key}\n")
-    set_config("homelab_ssh_host_key", host_key)
+    set_config("andamio_ssh_host_key", host_key)
     ok(L("Guardada en known_hosts y en la configuración (el CI la usa para desplegar)",
          "Saved in known_hosts and in the configuration (CI uses it to deploy)"))
 
@@ -1234,13 +1234,13 @@ def step_ssh_alias(cfg: dict) -> str:
     alias = DEFAULT_ALIAS
     if INVENTORY.exists():
         inv = yaml.safe_load(INVENTORY.read_text()) or {}
-        hosts = (((inv.get("all") or {}).get("children") or {}).get("homelab") or {}).get("hosts") or {}
+        hosts = (((inv.get("all") or {}).get("children") or {}).get("andamio") or {}).get("hosts") or {}
         alias = next(iter(hosts), alias)
     else:
         INVENTORY.write_text(L(f'# Host, usuario, puerto y llave salen de ~/.ssh/config (alias "{alias}").\n',
                                f'# Host, user, port and key come from ~/.ssh/config (alias "{alias}").\n') + f"""all:
   children:
-    homelab:
+    andamio:
       hosts:
         {alias}:
 """)
@@ -1251,9 +1251,9 @@ def step_ssh_alias(cfg: dict) -> str:
         with cfg_file.open("a") as f:
             f.write(f"""
 Host {alias}
-    HostName {cfg['homelab_server_ip']}
-    User {cfg['homelab_user']}
-    Port {cfg['homelab_ssh_port']}
+    HostName {cfg['andamio_server_ip']}
+    User {cfg['andamio_user']}
+    Port {cfg['andamio_ssh_port']}
     IdentityFile {LOCAL_KEY}
     IdentitiesOnly yes
     ServerAliveInterval 60
@@ -1265,12 +1265,12 @@ Host {alias}
 
 def step_bootstrap(cfg: dict, alias: str, pub: str) -> None:
     title(L("3. Usuario propio y SSH en tu puerto", "3. Your own user and SSH on your port"))
-    user, port = cfg["homelab_user"], cfg["homelab_ssh_port"]
+    user, port = cfg["andamio_user"], cfg["andamio_ssh_port"]
     if ssh_ok([alias]):
         ok(L(f"Ya entras como {user} por el puerto {port}: bootstrap hecho",
              f"You already log in as {user} on port {port}: bootstrap done"))
         return
-    ip = cfg["homelab_server_ip"]
+    ip = cfg["andamio_server_ip"]
     # El usuario con el que cada proveedor deja entrar a un VPS nuevo.
     provider = choose(L("¿Dónde está tu VPS?", "Where is your VPS?"), [
         ("azure", "Azure (azureuser)"), ("aws", "AWS (ubuntu)"), ("oracle", "Oracle Cloud (ubuntu)"),
@@ -1429,19 +1429,19 @@ El servidor baja tu configuración de {name} con una llave propia, de SOLO LECTU
 para ese repo. Se genera en el servidor: la privada nunca sale de ahí.""", f"""
 The server pulls your configuration from {name} with its own key, READ-ONLY and for that
 repo only. It's generated on the server: the private key never leaves it."""))
-    m = re.search(r":([^/]+/[^/]+?)(\.git)?$", cfg["homelab_repo"])
-    repo = m.group(1) if m else die(L("homelab_repo no tiene el formato git@github-homelab-infra:dueño/repo.git",
-                                      "homelab_repo isn't in the git@github-homelab-infra:owner/repo.git format"))
+    m = re.search(r":([^/]+/[^/]+?)(\.git)?$", cfg["andamio_repo"])
+    repo = m.group(1) if m else die(L("andamio_repo no tiene el formato git@github-andamio:dueño/repo.git",
+                                      "andamio_repo isn't in the git@github-andamio:owner/repo.git format"))
     host, known_hosts = forge_out("ssh-host"), forge_out("known-hosts")
     r = remote(alias, f"""set -e
 umask 077
-k=~/.ssh/id_ed25519_homelab_infra
+k=~/.ssh/id_ed25519_andamio
 [ -f $k ] || ssh-keygen -q -t ed25519 -N '' -C "andamio-server" -f $k
-grep -q '^Host github-homelab-infra$' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
-Host github-homelab-infra
+grep -q '^Host github-andamio$' ~/.ssh/config 2>/dev/null || cat >> ~/.ssh/config <<'EOF'
+Host github-andamio
     HostName {host}
     User git
-    IdentityFile ~/.ssh/id_ed25519_homelab_infra
+    IdentityFile ~/.ssh/id_ed25519_andamio
     IdentitiesOnly yes
 EOF
 grep -q '^{host} ' ~/.ssh/known_hosts 2>/dev/null || cat >> ~/.ssh/known_hosts <<'EOF'
@@ -1468,7 +1468,7 @@ cat $k.pub
 
 def registry(cfg: dict) -> tuple[str, str]:
     """(host del registro de imágenes, su nombre para mostrar)."""
-    return cfg.get("homelab_registry") or forge_out("registry"), forge_out("registry-name")
+    return cfg.get("andamio_registry") or forge_out("registry"), forge_out("registry-name")
 
 
 def ask_registry_token(cfg: dict, alias: str) -> str | None:
@@ -1492,7 +1492,7 @@ def step_registry(cfg: dict, alias: str, token: str | None) -> None:
     if token is None:
         ok(L("Ya hecho", "Already done"))
         return
-    r = remote(alias, f"docker login {host} -u {cfg['homelab_github_owner']} --password-stdin", stdin=token + "\n")
+    r = remote(alias, f"docker login {host} -u {cfg['andamio_github_owner']} --password-stdin", stdin=token + "\n")
     if r.returncode != 0:
         die(L(f"docker login falló: {r.stderr.strip()}", f"docker login failed: {r.stderr.strip()}"))
     ok(L(f"Login en {name} hecho (el token queda solo en el servidor)", f"Logged in to {name} (the token stays only on the server)"))
@@ -1500,7 +1500,7 @@ def step_registry(cfg: dict, alias: str, token: str | None) -> None:
 
 def step_platform(cfg: dict, alias: str) -> None:
     title(L("8. Plataforma: Traefik, datos, monitoreo", "8. Platform: Traefik, data, monitoring"))
-    if ansible(["site.yml", "--tags", "homelab"], cfg, alias) != 0:
+    if ansible(["site.yml", "--tags", "andamio"], cfg, alias) != 0:
         die(L("La plataforma falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.",
               "The platform failed (details above). Fix it and run `andamio server` again."))
     ok(L("Plataforma arriba", "Platform up"))
@@ -1532,13 +1532,13 @@ def cmd_servidor(args: argparse.Namespace) -> None:
     note(L(f"""
 VPN: importa ~/andamio-vpn/mi-pc.conf en la app de WireGuard (paneles privados solo por VPN);
   celular: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf y escanéalo con la app.
-Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
-Primera app:  bin/andamio app create <nombre> --repo <dueño/repo>   (queda en https://<nombre>.{cfg.get('homelab_domain')})
+Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('andamio_domain')} con la VPN.
+Primera app:  bin/andamio app create <nombre> --repo <dueño/repo>   (queda en https://<nombre>.{cfg.get('andamio_domain')})
 Chequeo de seguridad:  bin/andamio estado     Backups:  bin/andamio backups""", f"""
 VPN: import ~/andamio-vpn/mi-pc.conf into the WireGuard app (private panels only over the VPN);
   phone: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf and scan it with the app.
-Grafana (if your monitoring is completo): https://grafana.{cfg.get('homelab_domain')} over the VPN.
-First app:  bin/andamio app create <name> --repo <owner/repo>   (it lives at https://<name>.{cfg.get('homelab_domain')})
+Grafana (if your monitoring is completo): https://grafana.{cfg.get('andamio_domain')} over the VPN.
+First app:  bin/andamio app create <name> --repo <owner/repo>   (it lives at https://<name>.{cfg.get('andamio_domain')})
 Security check:  bin/andamio status     Backups:  bin/andamio backups"""))
 
 
@@ -1557,7 +1557,7 @@ def server_alias() -> str:
     if not INVENTORY.exists():
         die(L("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.",
               "ansible/inventory.yml is missing: run `bin/andamio server` first."))
-    hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["homelab"]["hosts"]
+    hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["andamio"]["hosts"]
     return next(iter(hosts))
 
 
@@ -1659,7 +1659,7 @@ Backblaze B2: 10 GB free, then about 6 USD per TB per month.
         if code != 200 or not d.get("buckets"):
             die(L(f"No existe el bucket '{bucket}' en tu cuenta de Backblaze. Créalo y vuelve a correr `andamio backups`.",
                   f"Bucket '{bucket}' doesn't exist in your Backblaze account. Create it and run `andamio backups` again."))
-        name = f"andamio-{cfg.get('homelab_hostname', 'server')}"
+        name = f"andamio-{cfg.get('andamio_hostname', 'server')}"
         code, key = b2_api(f"{api}/b2api/v3/b2_create_key", {
             "accountId": auth["accountId"], "keyName": name, "bucketId": d["buckets"][0]["bucketId"],
             "capabilities": B2_CAPS}, token)
@@ -1693,7 +1693,7 @@ Create a key in App Keys → Add a New Application Key with access to that bucke
                    "Better let andamio create one without that permission (run again and answer y)."))
         if not ask_yes(L("¿Usarla igual?", "Use it anyway?"), False):
             die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
-    return (f"b2:{bucket}:{cfg.get('homelab_hostname', 'andamio')}",
+    return (f"b2:{bucket}:{cfg.get('andamio_hostname', 'andamio')}",
             {"B2_ACCOUNT_ID": key_id, "B2_ACCOUNT_KEY": app_key})
 
 
@@ -1725,7 +1725,7 @@ The key is tested from your server in the next step."""))
     secret = ask_secret(L("Secret Access Key (no se ve al escribir)", "Secret Access Key (hidden while typing)"),
                         lambda v: None if len(v) >= 16
                         else L("Muy corta para ser una Secret Access Key.", "Too short to be a Secret Access Key."))
-    return (f"s3:https://{endpoint}/{bucket}/{cfg.get('homelab_hostname', 'andamio')}",
+    return (f"s3:https://{endpoint}/{bucket}/{cfg.get('andamio_hostname', 'andamio')}",
             {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": secret, "AWS_DEFAULT_REGION": region})
 
 
@@ -1759,11 +1759,11 @@ def cmd_backups(args: argparse.Namespace) -> None:
               f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
     note(L("""
 Qué se guarda, cada noche (03:30 UTC): las bases de datos (PostgreSQL y Redis), los datos
-de tus apps y la plataforma (/srv/homelab), y lo necesario para reconstruir el servidor
+de tus apps y la plataforma (/srv/andamio), y lo necesario para reconstruir el servidor
 igual (llaves SSH, VPN, secretos del host). restic lo cifra EN el servidor antes de
 enviarlo: el destino nunca ve tus datos. Se guardan 7 diarios, 4 semanales y 6 mensuales.""", """
 What's saved, every night (03:30 UTC): the databases (PostgreSQL and Redis), your apps'
-data and the platform (/srv/homelab), and what's needed to rebuild the same server
+data and the platform (/srv/andamio), and what's needed to rebuild the same server
 (SSH keys, VPN, host secrets). restic encrypts it ON the server before sending it: the
 destination never sees your data. 7 daily, 4 weekly and 6 monthly are kept."""))
 
@@ -1817,29 +1817,29 @@ without it, nobody (you included) can open the backups."""))
             "RESTIC_REPOSITORY": repo, "RESTIC_PASSWORD_FILE": "/etc/restic/password", **env}.items()))
         del password, env
 
-    if str(cfg.get("homelab_backups")).lower() != "true":
-        set_config("homelab_backups", "true")
-        ok("homelab_backups: true")
+    if str(cfg.get("andamio_backups")).lower() != "true":
+        set_config("andamio_backups", "true")
+        ok("andamio_backups: true")
     step_repo_pushed("backups")
 
     title(L("5. Activar en el servidor", "5. Turning it on in the server"))
     try:
-        if ansible(["site.yml", "--tags", "homelab"], cfg, alias) != 0:
+        if ansible(["site.yml", "--tags", "andamio"], cfg, alias) != 0:
             die(L("No se pudo activar (el detalle está arriba). Corrígelo y vuelve a correr `andamio backups`.",
                   "Couldn't turn it on (details above). Fix it and run `andamio backups` again."))
         ok(L("Backup diario programado", "Daily backup scheduled"))
 
         title(L("6. Primer backup (ahora)", "6. First backup (now)"))
         note(L("Puede tardar unos minutos la primera vez.", "It can take a few minutes the first time."))
-        if remote_sudo(cfg, alias, "systemctl start homelab-backup.service") != 0:
-            remote_sudo(cfg, alias, "journalctl -u homelab-backup.service -n 25 --no-pager")
+        if remote_sudo(cfg, alias, "systemctl start andamio-backup.service") != 0:
+            remote_sudo(cfg, alias, "journalctl -u andamio-backup.service -n 25 --no-pager")
             die(L("El backup falló (el detalle está arriba).", "The backup failed (details above)."))
         ok(L("Primer backup hecho", "First backup done"))
 
         title(L("7. Prueba de restauración", "7. Restore test"))
         note(L("Restaura el backup en una base temporal y la compara con producción (no toca nada).",
                "Restores the backup into a temporary database and compares it with production (touches nothing)."))
-        if remote_sudo(cfg, alias, f"{cfg.get('homelab_root', '/srv/homelab')}/infra/scripts/restore-check.sh") != 0:
+        if remote_sudo(cfg, alias, f"{cfg.get('andamio_root', '/srv/andamio')}/infra/scripts/restore-check.sh") != 0:
             die(L("La prueba de restauración encontró diferencias (arriba). Tus backups existen, pero revísalo.",
                   "The restore test found differences (above). Your backups exist, but look into it."))
     finally:
@@ -1847,16 +1847,16 @@ without it, nobody (you included) can open the backups."""))
 
     title(L("Listo: tus datos tienen copia fuera del servidor", "Done: your data has a copy off the server"))
     note(L(f"""
-Cada noche a las 03:30 UTC. Con Telegram activado (homelab_telegram) te avisa del
-resultado; si no, revísalo de vez en cuando:  ssh {alias} systemctl status homelab-backup
+Cada noche a las 03:30 UTC. Con Telegram activado (andamio_telegram) te avisa del
+resultado; si no, revísalo de vez en cuando:  ssh {alias} systemctl status andamio-backup
 Para reconstruir todo en otro servidor: docs/runbooks/reconstruir-servidor.md""", f"""
-Every night at 03:30 UTC. With Telegram on (homelab_telegram) you get the result; if not,
-check it now and then:  ssh {alias} systemctl status homelab-backup
+Every night at 03:30 UTC. With Telegram on (andamio_telegram) you get the result; if not,
+check it now and then:  ssh {alias} systemctl status andamio-backup
 To rebuild everything on another server: docs/runbooks/reconstruir-servidor.md"""))
 
 
 # ================= app: Dockerfile para el repo de una app =================
-# Lo llama bin/homelab (andamio app create) con el repo de la app ya clonado.
+# Lo llama bin/andamio-app (andamio app create) con el repo de la app ya clonado.
 
 DOCKERFILES = ROOT / "templates" / "dockerfiles"
 KINDS = {"node": ("Node", "3000"), "python": ("Python", "8000"), "go": ("Go", "8080"),
@@ -1957,7 +1957,7 @@ def go_values(d: Path) -> dict[str, str]:
 
 def cmd_scaffold(args: argparse.Namespace) -> None:
     """Interno: Dockerfile para el repo clonado de una app. Escribe el resultado en args.out
-    (status=existing|generated|declined|unknown, port=...) para que bin/homelab siga."""
+    (status=existing|generated|declined|unknown, port=...) para que bin/andamio-app siga."""
     d, out = Path(args.dir), Path(args.out)
     if (d / "Dockerfile").exists():
         ok(L("Tu repo ya tiene Dockerfile: lo uso tal cual.", "Your repo already has a Dockerfile: using it as is."))
@@ -2089,7 +2089,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     cfg = (yaml.safe_load(CONFIG.read_text()) or {}) if CONFIG.exists() else {}
     saved = dict(x.split(" ", 1) for x in UPSTREAM_FILE.read_text().splitlines() if " " in x) \
         if UPSTREAM_FILE.exists() else {}
-    url = args.desde or cfg.get("homelab_upstream") or saved.get("url") or UPSTREAM_DEFAULT
+    url = args.desde or cfg.get("andamio_upstream") or saved.get("url") or UPSTREAM_DEFAULT
     if url.startswith("@"):
         die(L("Este repo es la fuente de andamio (no viene de un template): no hay de dónde actualizar.",
               "This repo is andamio's source (it doesn't come from the template): nothing to update from."))
@@ -2243,8 +2243,8 @@ def cmd_estado(args: argparse.Namespace) -> None:
     if not ssh_ok([alias]):
         die(L(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.",
               f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
-    ip, ssh_port, domain = cfg["homelab_server_ip"], int(cfg["homelab_ssh_port"]), cfg["homelab_domain"]
-    backups = str(cfg.get("homelab_backups", False)).lower() == "true"
+    ip, ssh_port, domain = cfg["andamio_server_ip"], int(cfg["andamio_ssh_port"]), cfg["andamio_domain"]
+    backups = str(cfg.get("andamio_backups", False)).lower() == "true"
 
     title(L("Desde el servidor", "From the server"))
     script = f"ANDAMIO_LANG={LANG} SSH_PORT={ssh_port} BACKUPS={'true' if backups else 'false'}\n" + \
@@ -2328,7 +2328,7 @@ def cmd_certificado(args: argparse.Namespace) -> None:
     cfg = load_config()
     cmd = L("certificado", "certificate")
     if not args.cert:
-        title(L("Tu certificado (homelab_tls: custom)", "Your certificate (homelab_tls: custom)"))
+        title(L("Tu certificado (andamio_tls: custom)", "Your certificate (andamio_tls: custom)"))
         if not TLS_CERT.exists():
             die(L(f"No hay certificado propio en {TLS_CERT.relative_to(ROOT)}. Agrega uno con: "
                   f"bin/andamio {cmd} <certificado> <llave>",
@@ -2336,11 +2336,11 @@ def cmd_certificado(args: argparse.Namespace) -> None:
                   f"bin/andamio {cmd} <certificate> <key>"))
         info = cert_info(TLS_CERT)
         show_cert(info)
-        for p in cert_warnings(info, cfg.get("homelab_domain", "")):
+        for p in cert_warnings(info, cfg.get("andamio_domain", "")):
             warn(p)
-        if cfg.get("homelab_tls") != "custom":
-            warn(L(f"Tu configuración usa homelab_tls: {cfg.get('homelab_tls')}: este certificado no se está usando.",
-                   f"Your configuration uses homelab_tls: {cfg.get('homelab_tls')}: this certificate isn't in use."))
+        if cfg.get("andamio_tls") != "custom":
+            warn(L(f"Tu configuración usa andamio_tls: {cfg.get('andamio_tls')}: este certificado no se está usando.",
+                   f"Your configuration uses andamio_tls: {cfg.get('andamio_tls')}: this certificate isn't in use."))
         return
     if not args.key:
         die(L(f"Falta la llave: bin/andamio {cmd} <certificado> <llave>", f"The key is missing: bin/andamio {cmd} <certificate> <key>"))
@@ -2355,31 +2355,31 @@ def cmd_certificado(args: argparse.Namespace) -> None:
     cert, key = local_path(args.cert), local_path(args.key)
     info = cert_info(cert)
     show_cert(info)
-    problems = cert_warnings(info, cfg.get("homelab_domain", ""))
+    problems = cert_warnings(info, cfg.get("andamio_domain", ""))
     for p in problems:
         warn(p)
     if problems and not ask_yes(L("¿Usarlo igual?", "Use it anyway?"), False):
         die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
 
     title(L("2. Guardarlo en tu configuración", "2. Saving it in your configuration"))
-    if cfg.get("homelab_tls") != "custom":
-        warn(L(f"Hoy usas homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt).",
-               f"You currently use homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt)."))
-        if not ask_yes(L("¿Cambiar a tu certificado (homelab_tls: custom)?", "Switch to your certificate (homelab_tls: custom)?"), False):
+    if cfg.get("andamio_tls") != "custom":
+        warn(L(f"Hoy usas andamio_tls: {cfg.get('andamio_tls')} (Let's Encrypt).",
+               f"You currently use andamio_tls: {cfg.get('andamio_tls')} (Let's Encrypt)."))
+        if not ask_yes(L("¿Cambiar a tu certificado (andamio_tls: custom)?", "Switch to your certificate (andamio_tls: custom)?"), False):
             die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
-        set_config("homelab_tls", "custom")
-        ok("homelab_tls: custom")
+        set_config("andamio_tls", "custom")
+        ok("andamio_tls: custom")
     install_cert(cert, key)
 
     title(L("Listo. Para usarlo en el servidor", "Done. To use it on the server"))
     note(L(f"""
 git add {TLS_CERT.relative_to(ROOT)} {TLS_KEY.relative_to(ROOT)} {CONFIG.relative_to(ROOT)}
 git commit -m "andamio: certificado nuevo (vence {info['expires']})" && git push
-ansible/hl aplicar homelab
+ansible/hl aplicar andamio
 Traefik se reinicia solo para cargarlo (unos segundos sin servicio).""", f"""
 git add {TLS_CERT.relative_to(ROOT)} {TLS_KEY.relative_to(ROOT)} {CONFIG.relative_to(ROOT)}
 git commit -m "andamio: new certificate (expires {info['expires']})" && git push
-ansible/hl apply homelab
+ansible/hl apply andamio
 Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 
@@ -2457,16 +2457,16 @@ def main() -> None:
             overview()
             return
         args = [args[1], "--help"]   # andamio help <comando>
-    # `andamio app ...`: el mini-PaaS de apps vive en bin/homelab (bash); se le pasa tal cual.
+    # `andamio app ...`: el mini-PaaS de apps vive en bin/andamio-app (bash); se le pasa tal cual.
     if args[0] == "app":
-        os.execv(str(ROOT / "bin" / "homelab"), [str(ROOT / "bin" / "homelab"), *args])
+        os.execv(str(ROOT / "bin" / "andamio-app"), [str(ROOT / "bin" / "andamio-app"), *args])
     if args[0] == "_scaffold":   # interno (andamio app create): _scaffold <dir> <puerto|""> <salida>
         cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
         return
     if args[0] == "_apply":      # interno (andamio app ...): aplica la plataforma en el servidor
         cfg, alias = load_config(), server_alias()
         try:
-            rc = ansible(["site.yml", "--tags", "homelab"], cfg, alias)
+            rc = ansible(["site.yml", "--tags", "andamio"], cfg, alias)
         finally:
             wipe_sudo()
         sys.exit(rc)

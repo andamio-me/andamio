@@ -9,7 +9,7 @@
 - name: Permitir SSH antes de todo
   community.general.ufw:
     rule: allow
-    port: "{{ homelab_ssh_port }}"
+    port: "{{ andamio_ssh_port }}"
     proto: tcp
 
 - name: Reglas

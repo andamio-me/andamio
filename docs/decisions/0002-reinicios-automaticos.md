@@ -10,7 +10,7 @@ solo se aplican al reiniciar. Sin reinicio, el kernel en memoria sigue vulnerabl
 ## Decisión
 Reinicio automático a las 08:00 UTC (03:00 Colombia) cuando exista
 `/var/run/reboot-required`. Se limpian kernels y dependencias sin uso.
-Configuración: `host/apt/52homelab-unattended`.
+Configuración: `host/apt/52andamio-unattended`.
 
 ## Alternativas
 - Reiniciar a mano: depende de acordarse; el kernel queda sin parchear.

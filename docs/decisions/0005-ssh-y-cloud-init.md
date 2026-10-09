@@ -18,7 +18,7 @@ Revisión: 114 intentos fallidos de bots entre 05:28 y 05:54 UTC del 2026-10-05
 del propio administrador durante la configuración inicial.
 
 ## Decisión
-- `host/ssh/00-homelab-hardening.conf` en `sshd_config.d/`: solo llave pública,
+- `host/ssh/00-andamio-hardening.conf` en `sshd_config.d/`: solo llave pública,
   sin root, solo el usuario `andamio`. El prefijo `00-` garantiza que gane.
 - Borrar `sshd_config.d/50-cloud-init.conf`.
 - Desactivar cloud-init con `/etc/cloud/cloud-init.disabled`: ya cumplió el

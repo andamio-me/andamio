@@ -4,7 +4,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/srv/homelab/infra/scripts/container-health.sh
+ExecStart=/srv/andamio/infra/scripts/container-health.sh
 StateDirectory=node_exporter/textfile
 ProtectSystem=strict
 ProtectHome=yes

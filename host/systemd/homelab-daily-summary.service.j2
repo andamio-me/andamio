@@ -1,8 +1,0 @@
-[Unit]
-Description=Resumen diario del VPS por Telegram
-
-[Service]
-Type=oneshot
-User={{ homelab_user }}
-EnvironmentFile=/etc/homelab/telegram.env
-ExecStart=/bin/sh -c '/usr/local/bin/system | /srv/homelab/infra/scripts/telegram-send.sh'

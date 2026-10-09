@@ -37,7 +37,7 @@ services:
       - ./traefik.yml:/etc/traefik/traefik.yml:ro
       - ./dynamic:/etc/traefik/dynamic:ro
       - traefik_acme:/acme
-      - /etc/homelab/tls:/certs:ro            # certificado propio (homelab_tls: custom); vacío si no
+      - /etc/andamio/tls:/certs:ro            # certificado propio (andamio_tls: custom); vacío si no
     networks:
       - proxy
       - socket

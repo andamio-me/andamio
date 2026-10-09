@@ -11,7 +11,7 @@
 - **Loki + Alloy**: logs de todos los contenedores y del journal de systemd. 30 días.
 - **Grafana** (público con login): dashboards (1860, 14282, 17346) y alertas
   aprovisionadas desde el repo, enviadas a Telegram.
-- **Bot de Telegram** (`homelab-telegram-bot.service`): `/system`, `/containers`,
+- **Bot de Telegram** (`andamio-telegram-bot.service`): `/system`, `/containers`,
   `/logs`, `/certs`, `/backup_now`. Long polling (sin puertos), solo el chat del dueño,
   lista blanca de comandos. Resumen diario a las 13:00 UTC.
 

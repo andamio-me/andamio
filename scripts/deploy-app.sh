@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy sin caída de una app del homelab.
+# Deploy sin caída de una app de andamio.
 # Uso: deploy-app.sh <app> [sha] [versión]
 #   Desde CI (forced command), sha y versión llegan en SSH_ORIGINAL_COMMAND.
 set -euo pipefail
@@ -13,10 +13,12 @@ read -r SHA VERSION _ <<< "${SSH_ORIGINAL_COMMAND:-${2:-} ${3:-}}"
 VERSION=${VERSION:-${SHA:0:7}}
 [[ $VERSION =~ ^[A-Za-z0-9._-]{1,40}$ ]] || { echo "Versión inválida"; exit 1; }
 
-INFRA=/srv/homelab/infra
+INFRA=/srv/andamio/infra
 DIR=$INFRA/apps/$APP
 # Idioma de los mensajes (los ve quien despliega, en la pestaña Actions): el del servidor.
-LNG=$(sed -n 's/^ANDAMIO_LANG=//p' /etc/homelab/andamio.env 2> /dev/null)
+LNG=$(sed -n 's/^ANDAMIO_LANG=//p' /etc/andamio/andamio.env 2> /dev/null)
+# App cuya base junta los deploys de todas (andamio_dashboard_app; vacío = ninguna).
+DASH=$(sed -n 's/^ANDAMIO_DASHBOARD_APP=//p' /etc/andamio/andamio.env 2> /dev/null)
 L() { if [ "${LNG:-en}" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 [ -f "$DIR/compose.yaml" ] || { echo "App desconocida: $APP"; exit 1; }
 # andamio app stop: mientras esté detenida, un push no la vuelve a levantar.
@@ -25,8 +27,8 @@ if grep -qx 'stopped: true' "$DIR/app.yml" 2> /dev/null; then
 fi
 
 notify() {
-  [ -r /etc/homelab/telegram.env ] || { echo "⚠ Sin aviso: no puedo leer /etc/homelab/telegram.env" >&2; return 0; }
-  ( set -a; . /etc/homelab/telegram.env; set +a; echo "$1" | "$INFRA/scripts/telegram-send.sh" ) || true
+  [ -r /etc/andamio/telegram.env ] || { echo "⚠ Sin aviso: no puedo leer /etc/andamio/telegram.env" >&2; return 0; }
+  ( set -a; . /etc/andamio/telegram.env; set +a; echo "$1" | "$INFRA/scripts/telegram-send.sh" ) || true
 }
 record() {  # registra el deploy en la tabla deployments de la app y en el registro central
   # Apps sin base (sin DATABASE_URL) no registran: grep sin resultado no debe cortar el script (set -e).
@@ -37,8 +39,8 @@ record() {  # registra el deploy en la tabla deployments de la app y en el regis
     -c "INSERT INTO deployments (version, commit_sha, status) VALUES ('$VERSION', '$SHA', '$1')" || true
   # Registro central: la base del dashboard junta los deploys de todas las apps.
   # El dashboard ya quedó registrado arriba (su tabla ES el registro central).
-  [ "$APP" = homelab-dashboard ] && return 0
-  url=$(grep '^DATABASE_URL=' "$INFRA/apps/homelab-dashboard/.env" 2>/dev/null | cut -d= -f2- || true)
+  [ -n "$DASH" ] && [ "$APP" != "$DASH" ] || return 0
+  url=$(grep '^DATABASE_URL=' "$INFRA/apps/$DASH/.env" 2>/dev/null | cut -d= -f2- || true)
   [ -n "$url" ] || return 0
   docker run --rm --network data postgres:18.6-alpine psql -q "$url" \
     -c "INSERT INTO deployments (app, version, commit_sha, status) VALUES ('$APP', '$VERSION', '$SHA', '$1')" || true
@@ -130,7 +132,7 @@ explain() {  # explain <contenedor>
 # CI): dos "git pull" simultáneos en el mismo repo fallan ("Cannot fast-forward to
 # multiple branches", 2026-10-08). El candado los hace de a uno; el resto del deploy
 # sigue en paralelo.
-flock "$INFRA/.git/homelab-pull.lock" git -C "$INFRA" pull --ff-only --quiet origin main
+flock "$INFRA/.git/andamio-pull.lock" git -C "$INFRA" pull --ff-only --quiet origin main
 cd "$DIR"
 PREV=$(grep '^TAG=' .env | cut -d= -f2)
 echo "==> $APP: ${PREV:0:7} -> ${SHA:0:7} ($VERSION)"

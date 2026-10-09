@@ -1,4 +1,4 @@
-# Monitoreo en dos niveles (homelab_monitoring en Ansible):
+# Monitoreo en dos niveles (andamio_monitoring en Ansible):
 #  - mínimo (~115 MiB): prometheus, node-exporter y cadvisor; métricas para el dashboard.
 #  - completo (~670 MiB con Uptime Kuma): + loki, alloy y grafana (perfil "completo",
 #    activado con COMPOSE_PROFILES en el .env). En mínimo, Prometheus ve a loki y alloy
@@ -31,7 +31,7 @@ services:
       retries: 3
 
   node-exporter:
-    hostname: ${HOMELAB_HOSTNAME:?falta en .env}   # sin esto, el dashboard muestra el ID del contenedor
+    hostname: ${ANDAMIO_HOSTNAME:?falta en .env}   # sin esto, el dashboard muestra el ID del contenedor
     image: prom/node-exporter:v1.12.1
     container_name: node-exporter
     restart: unless-stopped
@@ -71,7 +71,7 @@ services:
     pids_limit: 100
 
   loki:
-    profiles: [completo]     # nivel completo de monitoreo (homelab_monitoring)
+    profiles: [completo]     # nivel completo de monitoreo (andamio_monitoring)
     image: grafana/loki:3.7.8
     container_name: loki
     restart: unless-stopped
@@ -87,7 +87,7 @@ services:
     pids_limit: 200
 
   alloy:
-    profiles: [completo]     # nivel completo de monitoreo (homelab_monitoring)
+    profiles: [completo]     # nivel completo de monitoreo (andamio_monitoring)
     image: grafana/alloy:v1.20.1
     container_name: alloy
     restart: unless-stopped
@@ -109,7 +109,7 @@ services:
     pids_limit: 100
 
   grafana:
-    profiles: [completo]     # nivel completo de monitoreo (homelab_monitoring)
+    profiles: [completo]     # nivel completo de monitoreo (andamio_monitoring)
     image: grafana/grafana:13.2.3
     container_name: grafana
     restart: unless-stopped

@@ -31,15 +31,15 @@ set -a; . /etc/restic/env; set +a
 
 L "==> Último backup" "==> Latest backup"
 # --latest 1 da uno por grupo de rutas: si cambió lo que se respalda, habría varios.
-restic snapshots --tag homelab --compact | grep -E '^[0-9a-f]{8} ' | tail -n 1 | grep . \
+restic snapshots --tag andamio --compact | grep -E '^[0-9a-f]{8} ' | tail -n 1 | grep . \
   || { L "  ✗ No hay ningún backup todavía" "  ✗ There are no backups yet"; exit 1; }
 
 L "==> Integridad del repositorio (con una muestra del 5% de los datos)" "==> Repository integrity (with a 5% sample of the data)"
 restic check --read-data-subset=5% -q && L "  ✓ repositorio íntegro" "  ✓ repository intact"
 
 L "==> Restaurar el último backup en $T" "==> Restoring the latest backup into $T"
-restic restore latest --tag homelab --target "$T" --include /var/backups/homelab -q
-D=$T/var/backups/homelab
+restic restore latest --tag andamio --target "$T" --include /var/backups/andamio -q
+D=$T/var/backups/andamio
 check "$(L "dump de PostgreSQL restaurado" "PostgreSQL dump restored")" yes "$([ -s "$D/postgres.sql" ] && echo yes || echo no)"
 check "$(L "snapshot de Redis restaurado" "Redis snapshot restored")" yes "$([ -s "$D/redis.rdb" ] && echo yes || echo no)"
 

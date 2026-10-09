@@ -11,7 +11,7 @@ congelada en la versión con la que nació, también para los parches de segurid
 
 ## Decisión
 **`bin/andamio update`: fusión de tres vías archivo por archivo** contra el repo público
-(URL que el extractor escribe en `bin/andamio`; se puede cambiar con `homelab_upstream` o
+(URL que el extractor escribe en `bin/andamio`; se puede cambiar con `andamio_upstream` o
 `--from`).
 
 - **Lo tuyo no se toca nunca:** `ansible/group_vars`, `ansible/inventory.yml`, `apps/`,

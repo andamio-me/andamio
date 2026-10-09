@@ -5,7 +5,7 @@
 
 ## Contexto
 Hay quien tiene sus repos en GitLab (u otra forja). andamio llamaba a `gh` en unos 20
-lugares repartidos en `bin/andamio`, `bin/homelab` y una tarea de Ansible, y tenía `ghcr.io`
+lugares repartidos en `bin/andamio`, `bin/andamio-app` y una tarea de Ansible, y tenía `ghcr.io`
 fijo en la ruta de las imágenes y en el login del servidor. Soportar otra forja así
 significaba tocar todo, con riesgo de romper a quien ya usa GitHub.
 
@@ -16,7 +16,7 @@ secreto y variables de CI, llaves de host SSH, permitir reusar el pipeline, el a
 CI de una app, registro de imágenes y validar su token). Un subcomando por operación, con
 salida simple, para que lo usen igual Python, bash y Ansible.
 
-- `homelab_forge` (por defecto `github`) elige la implementación; `homelab_registry` (por
+- `andamio_forge` (por defecto `github`) elige la implementación; `andamio_registry` (por
   defecto `ghcr.io`) el registro de imágenes. Las configuraciones existentes no cambian.
 - Hoy hay una sola implementación: GitHub con `gh`. Una forja nueva = una clase con los
   mismos métodos + su pipeline (para GitLab, un `.gitlab-ci.yml` equivalente a

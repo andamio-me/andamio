@@ -1,9 +1,9 @@
-# Reconstruye el servidor del homelab.
+# Reconstruye el servidor de andamio.
 #   Revisar sin tocar nada:  ansible-playbook site.yml -K --check --diff
 #   Aplicar:                 ansible-playbook site.yml -K
 #   Un solo rol:             ... --tags firewall
-- name: Servidor del homelab
-  hosts: homelab
+- name: Servidor de andamio
+  hosts: andamio
   become: true
   roles:
     - { role: base, tags: base }
@@ -11,4 +11,4 @@
     - { role: firewall, tags: firewall }
     - { role: docker, tags: docker }
     - { role: wireguard, tags: wireguard }
-    - { role: homelab, tags: homelab }
+    - { role: andamio, tags: andamio }

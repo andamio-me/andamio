@@ -1,0 +1,85 @@
+# Una sola vez, en servidores instalados antes del cambio de nombre (homelab -> andamio):
+# pasa rutas, servicios y archivos del sistema a los nombres nuevos y aplica todo.
+#   cd ansible && ansible-playbook migrar-nombre.yml -K
+# Idempotente. Se borra de andamio cuando los servidores existentes estén migrados.
+
+- name: Nombres viejos (homelab) a andamio
+  hosts: andamio
+  become: true
+  tasks:
+    - name: Servicios, archivos del sistema y carpetas con el nombre nuevo
+      ansible.builtin.shell: |
+        set -eu
+        mvf() { if [ -e "$1" ] && [ ! -e "$2" ]; then mv "$1" "$2"; echo "movido $1"; fi; }
+        # Servicios: los viejos se apagan; el rol andamio instala y enciende los nuevos.
+        for u in /etc/systemd/system/homelab-*.timer /etc/systemd/system/homelab-*.service; do
+          [ -e "$u" ] || continue
+          systemctl disable --now "$(basename "$u")" > /dev/null 2>&1 || true
+          rm -f "$u"; echo "quitado $u"
+        done
+        systemctl daemon-reload
+        # Mismo contenido con otro nombre: sshd, sysctl y apt siguen igual en todo momento.
+        mvf /etc/ssh/sshd_config.d/00-homelab-hardening.conf /etc/ssh/sshd_config.d/00-andamio-hardening.conf
+        mvf /etc/sysctl.d/99-homelab.conf /etc/sysctl.d/99-andamio.conf
+        mvf /etc/apt/apt.conf.d/52homelab-unattended /etc/apt/apt.conf.d/52andamio-unattended
+        mvf /etc/polkit-1/rules.d/50-homelab-backup.rules /etc/polkit-1/rules.d/50-andamio-backup.rules
+        # Carpetas: mv conserva los inodos (los contenedores corriendo no lo notan); el enlace
+        # viejo cubre lo que aún apunte ahí hasta que el rol lo regenere (se quita al final).
+        for d in /srv /etc /var/backups; do
+          if [ -d "$d/homelab" ] && [ ! -L "$d/homelab" ] && [ ! -e "$d/andamio" ]; then
+            mv "$d/homelab" "$d/andamio"; ln -s andamio "$d/homelab"; echo "movido $d/homelab"
+          fi
+        done
+      register: migrar_sistema
+      changed_when: "'movido' in migrar_sistema.stdout or 'quitado' in migrar_sistema.stdout"
+
+    - name: Llave del servidor para leer el repo, con el nombre nuevo
+      become: true
+      become_user: "{{ andamio_user }}"
+      ansible.builtin.shell: |
+        set -eu
+        h=$HOME/.ssh
+        for x in "" .pub; do
+          if [ -e "$h/id_ed25519_homelab_infra$x" ] && [ ! -e "$h/id_ed25519_andamio$x" ]; then
+            mv "$h/id_ed25519_homelab_infra$x" "$h/id_ed25519_andamio$x"; echo movida
+          fi
+        done
+        if grep -q homelab "$h/config" 2> /dev/null; then
+          sed -i 's/^Host github-homelab-infra$/Host github-andamio/; s/id_ed25519_homelab_infra/id_ed25519_andamio/' "$h/config"
+          echo movida
+        fi
+        g=/srv/andamio/infra/.git/config
+        if grep -q github-homelab-infra "$g" 2> /dev/null; then
+          sed -i 's/git@github-homelab-infra:/git@github-andamio:/' "$g"; echo movida
+        fi
+      register: migrar_llave
+      changed_when: "'movida' in migrar_llave.stdout"
+
+- name: Todo aplicado con los nombres nuevos
+  ansible.builtin.import_playbook: site.yml
+
+- name: Enlaces de los nombres viejos
+  hosts: andamio
+  become: true
+  tasks:
+    # Un contenedor que montó una ruta vieja y no se recreó la necesita al reiniciarse.
+    - name: Enlaces quitados (si ningún contenedor usa las rutas viejas)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {% raw %}
+        old=$(docker ps -aq | xargs -r docker inspect -f '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
+          | grep -E '/(srv|etc)/homelab' || true)
+        {% endraw %}
+        if [ -n "$old" ]; then echo "QUEDAN: $old"; exit 0; fi
+        for d in /srv /etc /var/backups; do
+          if [ -L "$d/homelab" ]; then rm "$d/homelab"; echo "quitado $d/homelab"; fi
+        done
+      args:
+        executable: /bin/bash
+      register: migrar_enlaces
+      changed_when: "'quitado' in migrar_enlaces.stdout"
+
+    - name: Contenedores que aún usan rutas viejas
+      when: "'QUEDAN' in migrar_enlaces.stdout"
+      ansible.builtin.debug:
+        msg: "{{ migrar_enlaces.stdout }}"

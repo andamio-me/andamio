@@ -5,7 +5,7 @@
 #   ./hl revisar [rol]   simula, no toca nada   (--check --diff)      (en inglés: check)
 #   ./hl aplicar [rol]   aplica los cambios                           (en inglés: apply)
 #
-# [rol]: base, ssh, firewall, docker, wireguard, homelab, secretos (por defecto: todos)
+# [rol]: base, ssh, firewall, docker, wireguard, andamio, secretos (por defecto: todos)
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH=$HOME/.local/bin:$PATH
@@ -20,16 +20,16 @@ case $modo in
   aplicar|apply) extra=() ;;
   *) L "  ./hl revisar [rol]   simula, no toca nada
   ./hl aplicar [rol]   aplica los cambios
-  [rol]: base, ssh, firewall, docker, wireguard, homelab, secretos (por defecto: todos)
+  [rol]: base, ssh, firewall, docker, wireguard, andamio, secretos (por defecto: todos)
 " "  ./hl check [role]   dry run, changes nothing
   ./hl apply [role]   applies the changes
-  [role]: base, ssh, firewall, docker, wireguard, homelab, secretos (default: all)
+  [role]: base, ssh, firewall, docker, wireguard, andamio, secretos (default: all)
 "; exit 1 ;;
 esac
 tags=(); [ -n "$rol" ] && tags=(--tags "$rol")
 
-user=$(python3 -c 'import yaml; print(yaml.safe_load(open("group_vars/all.yml"))["homelab_user"])')
-server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory.yml"))["all"]["children"]["homelab"]["hosts"])))')
+user=$(python3 -c 'import yaml; print(yaml.safe_load(open("group_vars/all.yml"))["andamio_user"])')
+server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory.yml"))["all"]["children"]["andamio"]["hosts"])))')
 # La contraseña se verifica contra el servidor antes de lanzar Ansible (3 intentos).
 # Si ya viene verificada (bin/andamio), no se vuelve a pedir.
 if [ -z "${ANSIBLE_BECOME_PASSWORD_FILE:-}" ]; then

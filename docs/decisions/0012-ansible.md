@@ -5,7 +5,7 @@
 
 ## Decisión
 - **Ansible desde WSL** (pipx, sin agente en el servidor). Un playbook `site.yml`
-  con seis roles: `base`, `ssh`, `firewall`, `docker`, `wireguard`, `homelab`.
+  con seis roles: `base`, `ssh`, `firewall`, `docker`, `wireguard`, `andamio`.
   `bootstrap.yml` solo para el primer acceso a un VPS nuevo.
 - **`host/` sigue siendo la fuente de verdad.** Los roles copian esos archivos;
   no hay plantillas con una segunda copia de la configuración.
@@ -20,7 +20,7 @@
   reconstruir habría dejado SSH en el 22, bloqueado por UFW.
 - Las llaves autorizadas no estaban en el repo (y había una línea de plantilla
   `LLAVE_PUBLICA`, inválida).
-- El backup no cubría `/etc/ssh`, `/etc/wireguard`, `/etc/homelab`, la deploy key
+- El backup no cubría `/etc/ssh`, `/etc/wireguard`, `/etc/andamio`, la deploy key
   ni el login de GHCR.
 
 ## Consecuencias

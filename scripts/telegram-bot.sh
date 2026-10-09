@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bot de Telegram del homelab (long polling). Solo responde al chat autorizado.
+# Bot de Telegram de andamio (long polling). Solo responde al chat autorizado.
 # Variables (vía systemd EnvironmentFile): TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 set -uo pipefail
 
@@ -40,7 +40,7 @@ cmd_certs() {
 }
 
 cmd_backup_now() {
-  systemctl start --no-block homelab-backup.service 2>&1 \
+  systemctl start --no-block andamio-backup.service 2>&1 \
     && echo "Backup iniciado. Te aviso cuando termine."
 }
 

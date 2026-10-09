@@ -1,6 +1,6 @@
-# Dependabot de homelab-infra: actions del CI y las imágenes fijadas de los stacks.
+# Dependabot de andamio: actions del CI y las imágenes fijadas de los stacks.
 # Un PR semanal; cooldown de 7 días (no propone versiones recién publicadas).
-# Mezclar un PR de imágenes NO despliega: se aplica con ./hl aplicar homelab.
+# Mezclar un PR de imágenes NO despliega: se aplica con ./hl aplicar andamio.
 version: 2
 updates:
   - package-ecosystem: github-actions

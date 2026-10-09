@@ -39,9 +39,9 @@ docker stats --no-stream --format '  {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' | s
 echo
 
 # Sistema
-res=$(systemctl show homelab-backup.service -p Result --value)
-last=$(systemctl show homelab-backup.service -p ExecMainExitTimestamp --value)
-next=$(systemctl show homelab-backup.timer -p NextElapseUSecRealtime --value)
+res=$(systemctl show andamio-backup.service -p Result --value)
+last=$(systemctl show andamio-backup.service -p ExecMainExitTimestamp --value)
+next=$(systemctl show andamio-backup.timer -p NextElapseUSecRealtime --value)
 echo "Backup: último ${last:-nunca} (${res}) | próximo ${next:-?}"
 failed=$(systemctl --failed --no-legend | wc -l)
 updates=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst')

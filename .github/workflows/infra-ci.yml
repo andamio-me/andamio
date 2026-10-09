@@ -1,4 +1,4 @@
-# CI de homelab-infra: scripts, Ansible y secretos. Corre en cada push y PR a main.
+# CI de andamio: scripts, Ansible y secretos. Corre en cada push y PR a main.
 # Las herramientas van fijadas por versión (y gitleaks verificado por checksum).
 name: infra-ci
 
@@ -21,7 +21,7 @@ jobs:
         run: |
           pipx install shellcheck-py==0.11.0.1
           shellcheck --version
-          shellcheck -S warning scripts/*.sh bin/homelab ansible/hl
+          shellcheck -S warning scripts/*.sh bin/andamio-app ansible/hl
 
   ansible-lint:
     name: Ansible (ansible-lint)

@@ -20,7 +20,7 @@
   certificados HTTP-01 del resolver `le`).
 
 ## Consecuencias
-- `DOMAIN=ejemplo.com` en todos los stacks y apps (secretos sops), en `bin/homelab` y
+- `DOMAIN=ejemplo.com` en todos los stacks y apps (secretos sops), en `bin/andamio-app` y
   en `ansible/apps.yml`. El aviso de backups (KUMA_PUSH_URL) apunta a `status.ejemplo.com`.
 - Pendiente: pasar la redirección a 301 cuando todo esté probado, actualizar los
   monitores de Uptime Kuma y activar DNSSEC en Cloudflare.

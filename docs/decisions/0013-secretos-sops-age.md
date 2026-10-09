@@ -11,12 +11,12 @@
   - `<stack>/secrets.sops.env`: el `.env` de cada stack y app (formato dotenv:
     los nombres de las variables quedan visibles, los valores no).
   - `host/sops/*.sops`: `/etc/restic/env`, `/etc/restic/password` y
-    `/etc/homelab/telegram.env` (binario: se reproducen byte a byte).
+    `/etc/andamio/telegram.env` (binario: se reproducen byte a byte).
 - **`TAG` no se cifra**: lo cambia `deploy-app.sh` en cada deploy; Ansible
   conserva el valor que haya en el servidor.
 - **Ansible nunca imprime secretos**: tareas con `no_log` y `diff: false`.
 - **Editar un secreto:** `sops stacks/data/secrets.sops.env`, commit y
-  `ansible-playbook site.yml -K --tags homelab`. Si cambia en el servidor:
+  `ansible-playbook site.yml -K --tags andamio`. Si cambia en el servidor:
   `ansible-playbook tools/cifrar-secretos-host.yml -K`.
 
 ## Consecuencias

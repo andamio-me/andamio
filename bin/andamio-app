@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Mini-PaaS de andamio: `bin/andamio app ...` llama a este script (bin/homelab sigue
-# funcionando igual). Se usa desde tu máquina.
+# Mini-PaaS de andamio: `bin/andamio app ...` llama a este script. Se usa desde tu máquina.
 #
 #   andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
 #   andamio app secret set|rm <nombre> <CLAVE>      andamio app secret list <nombre>
 #   andamio app list | logs <nombre> | rollback <nombre> | destroy <nombre>
 #
-# create: repo desde homelab-app-template, apps/<nombre>/app.yml, secretos y llave de
-# deploy (apps.yml), commit + push de homelab-infra y configuración del servidor.
+# create: repo propio (--repo) o desde andamio_app_template, apps/<nombre>/app.yml, secretos y llave de
+# deploy (apps.yml), commit + push de andamio y configuración del servidor.
 # Idioma: ANDAMIO_LANG (o LANG) que empiece con "es" = español; si no, inglés.
 set -euo pipefail
 
@@ -18,14 +17,14 @@ L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 # La configuración de este servidor vive en un solo lugar: ansible/group_vars/all.yml.
 cfg() { python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' \
   "$INFRA/ansible/group_vars/all.yml" "$1"; }
-OWNER=$(cfg homelab_github_owner)
-DOMAIN=$(cfg homelab_domain)
-# Este repo en GitHub (dueño/nombre), de homelab_repo: ahí vive el workflow app-build.yml.
-INSTANCE_REPO=$(cfg homelab_repo | sed -E 's#^[^:]+:##; s#\.git$##')
-# Plantilla para apps nuevas sin --repo (opcional: homelab_app_template en la config).
+OWNER=$(cfg andamio_github_owner)
+DOMAIN=$(cfg andamio_domain)
+# Este repo en GitHub (dueño/nombre), de andamio_repo: ahí vive el workflow app-build.yml.
+INSTANCE_REPO=$(cfg andamio_repo | sed -E 's#^[^:]+:##; s#\.git$##')
+# Plantilla para apps nuevas sin --repo (opcional: andamio_app_template en la config).
 # El servidor: alias SSH = primer host de ansible/inventory.yml (~/.ssh/config lo resuelve).
-SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["homelab"]["hosts"])))'   "$INFRA/ansible/inventory.yml")
-TEMPLATE=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("homelab_app_template") or "")' \
+SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["andamio"]["hosts"])))'   "$INFRA/ansible/inventory.yml")
+TEMPLATE=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("andamio_app_template") or "")' \
   "$INFRA/ansible/group_vars/all.yml")
 PROJECTS=$HOME/projects
 export PATH=$HOME/.local/bin:$PATH
@@ -114,8 +113,8 @@ app_create() {
     && die "$(L "El host '$host' ya lo usa otra app" "Host '$host' is already used by another app")"
   [ -z "$repo" ] && [ -e "$PROJECTS/$name" ] && die "$(L "Ya existe" "Already exists"): $PROJECTS/$name"
   [ -n "$repo" ] || [ -n "$TEMPLATE" ] \
-    || die "$(L "Indica el repo de tu app con --repo dueño/nombre (o define homelab_app_template en la config)" \
-               "Give your app's repo with --repo owner/name (or set homelab_app_template in the config)")"
+    || die "$(L "Indica el repo de tu app con --repo dueño/nombre (o define andamio_app_template en la config)" \
+               "Give your app's repo with --repo owner/name (or set andamio_app_template in the config)")"
   no_uncommitted
   forge auth-ok || die "$(L "Tu CLI de $(forge name) no tiene sesión iniciada" "Your $(forge name) CLI isn't logged in") ($(forge tools | cut -f2))"
   [ -z "$repo" ] || forge repo-exists "$repo" \
@@ -316,7 +315,7 @@ valid_origin() {
 }
 # Avisa si el DNS del dominio no apunta a este servidor (Let's Encrypt fallaría).
 dns_check() {
-  local ip; ip=$(cfg homelab_server_ip)
+  local ip; ip=$(cfg andamio_server_ip)
   if python3 -c 'import socket,sys; sys.exit(sys.argv[2] not in {a[4][0] for a in socket.getaddrinfo(sys.argv[1], None, socket.AF_INET)})' "$1" "$ip" 2> /dev/null; then
     echo "✓ $1 → $ip"
   else
@@ -471,33 +470,34 @@ app_rollback() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
   # Penúltimo deploy exitoso, leído de la tabla deployments de la app.
   local prev
-  prev=$(ssh -n "$SERVER" "cd /srv/homelab/infra/apps/$name && url=\$(grep '^DATABASE_URL=' .env | cut -d= -f2-) && \
+  prev=$(ssh -n "$SERVER" "cd /srv/andamio/infra/apps/$name && url=\$(grep '^DATABASE_URL=' .env | cut -d= -f2-) && \
     docker run --rm --network data postgres:18.6-alpine psql -tA \"\$url\" -c \
     \"SELECT commit_sha || ' ' || version FROM deployments WHERE status = 'success' ORDER BY id DESC OFFSET 1 LIMIT 1\"")
   [ -n "$prev" ] || die "$(L "No hay un deploy exitoso anterior para volver" "There's no previous successful deploy to go back to")"
   read -r sha version <<< "$prev"
   confirm "$(L "¿Volver $name a $version (${sha:0:7})?" "Roll $name back to $version (${sha:0:7})?")"
-  ssh -n "$SERVER" "/srv/homelab/infra/scripts/deploy-app.sh $name $sha $version"
+  ssh -n "$SERVER" "/srv/andamio/infra/scripts/deploy-app.sh $name $sha $version"
 }
 
 app_destroy() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
   local dir=$INFRA/apps/$name
   [ -f "$dir/app.yml" ] || die "$(L "No existe la app" "No such app"): $name"
-  [ "$name" = homelab-dashboard ] \
-    && die "$(L "homelab-dashboard es parte de la plataforma: no se destruye con este comando" \
-               "homelab-dashboard is part of the platform: this command doesn't destroy it")"
+  [ "$name" = "$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("andamio_dashboard_app") or "")' \
+      "$INFRA/ansible/group_vars/all.yml")" ] \
+    && die "$(L "$name es tu dashboard (andamio_dashboard_app): no se destruye con este comando" \
+               "$name is your dashboard (andamio_dashboard_app): this command doesn't destroy it")"
   no_uncommitted
 
   L "Esto DESTRUYE la app $name:
   - sus contenedores (web y worker) en el servidor
-  - su base y su usuario de PostgreSQL (antes: respaldo en /srv/homelab/archive/, que entra en restic)
+  - su base y su usuario de PostgreSQL (antes: respaldo en /srv/andamio/archive/, que entra en restic)
   - sus claves y su usuario de Redis
   - apps/$name en este repo (revoca su llave de deploy y la quita del registro)
 No toca: el repo de la app, sus imágenes en el registro ni $PROJECTS/$name.
 " "This DESTROYS the app $name:
   - its containers (web and worker) on the server
-  - its PostgreSQL database and user (first backed up to /srv/homelab/archive/, which restic includes)
+  - its PostgreSQL database and user (first backed up to /srv/andamio/archive/, which restic includes)
   - its Redis keys and user
   - apps/$name in this repo (revokes its deploy key and removes it from the registry)
 Left alone: the app's repo, its images in the registry and $PROJECTS/$name.
@@ -508,15 +508,15 @@ Left alone: the app's repo, its images in the registry and $PROJECTS/$name.
   step "$(L "Servidor: respaldo, contenedores, base y Redis" "Server: backup, containers, database and Redis")"
   ssh "$SERVER" bash -s -- "$name" "$LNG" <<'REMOTE'
 set -euo pipefail
-name=$1; LNG=$2; cd "/srv/homelab/infra/apps/$name"
+name=$1; LNG=$2; cd "/srv/andamio/infra/apps/$name"
 L() { if [ "$LNG" = es ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi; }
 dbname=""; role=""
 url=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || true)
 if [ -n "$url" ]; then
   dbname=${url##*/}; role=$(sed -E 's#^postgres(ql)?://([^:]+):.*#\2#' <<< "$url")
   [[ $dbname =~ ^[a-z0-9_]+$ && $role =~ ^[a-z0-9_]+$ ]] || { L "DATABASE_URL inesperada; no sigo" "Unexpected DATABASE_URL; stopping"; exit 1; }
-  install -d -m 700 /srv/homelab/archive
-  out=/srv/homelab/archive/$name-$(date +%Y%m%d-%H%M%S).sql.gz
+  install -d -m 700 /srv/andamio/archive
+  out=/srv/andamio/archive/$name-$(date +%Y%m%d-%H%M%S).sql.gz
   docker run --rm --network data postgres:18.6-alpine pg_dump "$url" | gzip > "$out"
   [ "$(gunzip -c "$out" | wc -c)" -gt 0 ] || { L "El respaldo quedó vacío; no sigo" "The backup came out empty; stopping"; exit 1; }
   L "Respaldo: $out ($(du -h "$out" | cut -f1))" "Backup: $out ($(du -h "$out" | cut -f1))"
@@ -533,7 +533,7 @@ SQL
 fi
 if grep -q '^REDIS_URL=' .env 2>/dev/null; then
   n=$(docker exec redis sh -c "redis-cli --no-auth-warning --scan --pattern '$name:*' | xargs -r redis-cli --no-auth-warning DEL | awk '{s += \$1} END {print s + 0}'")
-  L "Redis: $n claves borradas (el usuario se quita al aplicar homelab)" "Redis: $n keys deleted (the user is removed when homelab is applied)"
+  L "Redis: $n claves borradas (el usuario se quita al aplicar andamio)" "Redis: $n keys deleted (the user is removed when andamio is applied)"
 fi
 rm -f .env
 REMOTE

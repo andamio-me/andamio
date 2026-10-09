@@ -1,4 +1,4 @@
-{# Plantilla: Ansible genera dynamic/middlewares.yml (rol homelab) con group_vars/all.yml. #}
+{# Plantilla: Ansible genera dynamic/middlewares.yml (rol andamio) con group_vars/all.yml. #}
 http:
   middlewares:
     vpn-only:
@@ -6,7 +6,7 @@ http:
         sourceRange:
           - 10.8.0.0/24        # clientes WireGuard
           - 172.16.0.0/12      # contenedores (p. ej. Uptime Kuma revisando Grafana)
-          - {{ homelab_server_ip }}/32    # el propio VPS (push del backup a Kuma)
+          - {{ andamio_server_ip }}/32    # el propio VPS (push del backup a Kuma)
 
     security-headers:
       headers:

@@ -2,7 +2,7 @@
 """forge: lo que andamio necesita de la forja donde viven tus repos (hoy GitHub).
 
 Una operación por subcomando, con salida simple, para que la usen igual bin/andamio,
-bin/homelab y Ansible. Para soportar otra forja (GitLab, Gitea...) basta con otra clase
+bin/andamio-app y Ansible. Para soportar otra forja (GitLab, Gitea...) basta con otra clase
 con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
 
   forge name                               su nombre para mostrar (p. ej. GitHub)
@@ -228,11 +228,11 @@ def current() -> GitHub:
     name = os.environ.get("ANDAMIO_FORGE")
     if not name and CONFIG.exists():
         import yaml
-        name = (yaml.safe_load(CONFIG.read_text()) or {}).get("homelab_forge")
+        name = (yaml.safe_load(CONFIG.read_text()) or {}).get("andamio_forge")
     name = name or "github"
     if name not in FORGES:
-        fail(L(f"homelab_forge: {name} no está soportada (hoy: {', '.join(FORGES)}). GitLab está en la hoja de ruta.",
-               f"homelab_forge: {name} isn't supported (today: {', '.join(FORGES)}). GitLab is on the roadmap."))
+        fail(L(f"andamio_forge: {name} no está soportada (hoy: {', '.join(FORGES)}). GitLab está en la hoja de ruta.",
+               f"andamio_forge: {name} isn't supported (today: {', '.join(FORGES)}). GitLab is on the roadmap."))
     return FORGES[name]()
 
 

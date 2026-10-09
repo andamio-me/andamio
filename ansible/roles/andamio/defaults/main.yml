@@ -1,43 +1,47 @@
-homelab_root: /srv/homelab
+andamio_root: /srv/andamio
 
 # HTTPS: "http" = un certificado de Let's Encrypt por app (HTTP-01), sin cuentas
 # externas. "cloudflare" = un comodín por DNS-01 (necesita la zona en Cloudflare y
 # CF_DNS_API_TOKEN en stacks/proxy/secrets.sops.env; no publica los nombres privados).
-homelab_tls: http
+andamio_tls: http
 
 # Dónde viven tus repos (bin/forge) y el registro de las imágenes de tus apps.
-homelab_forge: github
-homelab_registry: ghcr.io
-homelab_infra: "{{ homelab_root }}/infra"
+andamio_forge: github
+andamio_registry: ghcr.io
+andamio_infra: "{{ andamio_root }}/infra"
 
 # Secretos del host cifrados en el repo (ansible/tools/cifrar-secretos-host.yml).
 # Módulos que necesitan una cuenta en otro servicio: apagados hasta configurarlos.
 # Backups: restic a cualquier destino (B2, S3, SFTP, disco), según RESTIC_REPOSITORY en
 #   host/sops/restic-env.sops, con su contraseña en host/sops/restic-password.sops.
 # Telegram: alertas, resumen diario y bot (host/sops/telegram-env.sops).
-homelab_backups: false
-homelab_telegram: false
+andamio_backups: false
+andamio_telegram: false
 
-homelab_sops_restic:
+andamio_sops_restic:
   - { src: host/sops/restic-env.sops, dest: /etc/restic/env, group: root, mode: "0600" }
   - { src: host/sops/restic-password.sops, dest: /etc/restic/password, group: root, mode: "0600" }
-homelab_sops_telegram:
-  - { src: host/sops/telegram-env.sops, dest: /etc/homelab/telegram.env, group: "{{ homelab_user }}", mode: "0640" }
-homelab_sops_files: >-
-  {{ (homelab_sops_restic if homelab_backups | bool else [])
-     + (homelab_sops_telegram if homelab_telegram | bool else []) }}
+andamio_sops_telegram:
+  - { src: host/sops/telegram-env.sops, dest: /etc/andamio/telegram.env, group: "{{ andamio_user }}", mode: "0640" }
+andamio_sops_files: >-
+  {{ (andamio_sops_restic if andamio_backups | bool else [])
+     + (andamio_sops_telegram if andamio_telegram | bool else []) }}
 
 # Secretos que no están en el repo: vuelven con restic restore.
-homelab_host_secrets:
-  - /home/{{ homelab_user }}/.ssh/id_ed25519_homelab_infra   # deploy key de solo lectura del repo
+andamio_host_secrets:
+  - /home/{{ andamio_user }}/.ssh/id_ed25519_andamio   # deploy key de solo lectura del repo
+
+# App cuya base de datos junta el registro de deploys de todas (tabla deployments) y que
+# `andamio app destroy` no borra. Vacío: ninguna.
+andamio_dashboard_app: ""
 
 # Monitoreo: "minimo" (métricas, ~115 MiB), "completo" (+ logs, Grafana con alertas y
 # Uptime Kuma, ~670 MiB) o "auto": completo si el servidor tiene 3 GB o más.
-homelab_monitoring: auto
+andamio_monitoring: auto
 
 # Stacks de infraestructura, en orden de arranque: proxy primero (crea
 # proxy_socket), datos antes que las apps.
-homelab_stacks:
+andamio_stacks:
   - stacks/proxy
   - stacks/data
   - stacks/monitoring
@@ -46,21 +50,21 @@ homelab_stacks:
 
 # Stacks que necesitan su base en el Postgres compartido: se levantan después de
 # crearla (ver tasks/main.yml). La contraseña sale de POSTGRES_PASSWORD de su secrets.sops.env.
-homelab_db_stacks: []   # p. ej. { stack: stacks/x, db: x }
+andamio_db_stacks: []   # p. ej. { stack: stacks/x, db: x }
 
 # Cuota de Seafile (GB): tope de lo que guardo en el disco del VPS (ADR 0019).
-homelab_seafile_quota_gb: 30
+andamio_seafile_quota_gb: 30
 
 # Apps: cada carpeta apps/<app>/ con un app.yml (se buscan en tasks/main.yml y
 # se levantan después de los stacks).
 
 # Units: la salud de contenedores siempre; backup y Telegram si están activados.
-homelab_units: >-
-  {{ ['homelab-container-health.service', 'homelab-container-health.timer']
-     + (['homelab-backup.service', 'homelab-backup.timer'] if homelab_backups | bool else [])
-     + (['homelab-daily-summary.service', 'homelab-daily-summary.timer',
-         'homelab-telegram-bot.service'] if homelab_telegram | bool else []) }}
-homelab_enabled_units: >-
-  {{ ['homelab-container-health.timer']
-     + (['homelab-backup.timer'] if homelab_backups | bool else [])
-     + (['homelab-daily-summary.timer', 'homelab-telegram-bot.service'] if homelab_telegram | bool else []) }}
+andamio_units: >-
+  {{ ['andamio-container-health.service', 'andamio-container-health.timer']
+     + (['andamio-backup.service', 'andamio-backup.timer'] if andamio_backups | bool else [])
+     + (['andamio-daily-summary.service', 'andamio-daily-summary.timer',
+         'andamio-telegram-bot.service'] if andamio_telegram | bool else []) }}
+andamio_enabled_units: >-
+  {{ ['andamio-container-health.timer']
+     + (['andamio-backup.timer'] if andamio_backups | bool else [])
+     + (['andamio-daily-summary.timer', 'andamio-telegram-bot.service'] if andamio_telegram | bool else []) }}

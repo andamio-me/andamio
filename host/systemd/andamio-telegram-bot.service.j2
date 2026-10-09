@@ -1,12 +1,12 @@
 [Unit]
-Description=Bot de Telegram del homelab (/system)
+Description=Bot de Telegram de andamio (/system)
 Wants=network-online.target
 After=network-online.target docker.service
 
 [Service]
-User={{ homelab_user }}
-EnvironmentFile=/etc/homelab/telegram.env
-ExecStart=/srv/homelab/infra/scripts/telegram-bot.sh
+User={{ andamio_user }}
+EnvironmentFile=/etc/andamio/telegram.env
+ExecStart=/srv/andamio/infra/scripts/telegram-bot.sh
 Restart=always
 RestartSec=10
 NoNewPrivileges=yes

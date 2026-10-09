@@ -1,7 +1,7 @@
 # Runbook: agregar una app
 
 Todo desde el WSL. Requisitos: `gh` autenticado, llave age en
-`~/.config/sops/age/keys.txt` y `homelab-infra` sin cambios pendientes.
+`~/.config/sops/age/keys.txt` y `andamio` sin cambios pendientes.
 
 ## 1. Crear
 ~~~bash
@@ -11,9 +11,9 @@ andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--
 - `--db`: usuario y base propios en PostgreSQL (`DATABASE_URL`) y migraciones Prisma.
 - `--redis`: usuario de Redis propio; solo claves y canales `<nombre>:*` (`REDIS_URL`).
 
-Hace: repo privado desde `homelab-app-template`, `apps/<nombre>/app.yml`, secretos
+Hace: repo privado desde `tu-plantilla`, `apps/<nombre>/app.yml`, secretos
 cifrados, llave de deploy (privada como secret `DEPLOY_SSH_KEY` en GitHub), compose,
-commit + push de `homelab-infra` y `./hl aplicar homelab` (pide la contraseña de sudo).
+commit + push de `andamio` y `./hl aplicar andamio` (pide la contraseña de sudo).
 
 El CI de "Initial commit" del repo nuevo falla (aún no había llave): es esperado.
 
@@ -48,11 +48,11 @@ worker:
 
 ## Cambiar algo de una app
 - Recursos, acceso, host: editar `apps/<nombre>/app.yml`, `cd ansible && ansible-playbook apps.yml`,
-  commit + push y `./hl aplicar homelab`.
+  commit + push y `./hl aplicar andamio`.
 - Un secreto o variable: `andamio app secret set <nombre> <CLAVE>` (cifra, commit, push y aplica).
 - Rotar la llave de deploy: borrar `apps/<nombre>/deploy_key.pub` y seguir como arriba.
 
 ## Quitar una app (manual por ahora)
-Borrar `apps/<nombre>/`, commit + push y `./hl aplicar homelab` (revoca su llave y la
+Borrar `apps/<nombre>/`, commit + push y `./hl aplicar andamio` (revoca su llave y la
 quita del registro). En el servidor: `docker compose down` en su carpeta. La base y el
 usuario de Redis se borran a mano, después de un backup.

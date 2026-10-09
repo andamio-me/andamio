@@ -268,11 +268,11 @@ Todo en `ansible/group_vars/all.yml`:
 
 | Opción | Valores |
 |---|---|
-| `homelab_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
-| `homelab_forge` | `github` (por defecto). Todo lo que andamio necesita de ella pasa por `bin/forge`; agregar GitLab es implementar ese archivo y su pipeline |
-| `homelab_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma) |
-| `homelab_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
-| `homelab_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
+| `andamio_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
+| `andamio_forge` | `github` (por defecto). Todo lo que andamio necesita de ella pasa por `bin/forge`; agregar GitLab es implementar ese archivo y su pipeline |
+| `andamio_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma) |
+| `andamio_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
+| `andamio_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
 
 ### Actualizaciones
 

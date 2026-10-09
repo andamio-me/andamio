@@ -1,9 +1,9 @@
 // Permite al usuario de operación (el bot) iniciar SOLO el servicio de backup.
 polkit.addRule(function (action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
-      action.lookup("unit") == "homelab-backup.service" &&
+      action.lookup("unit") == "andamio-backup.service" &&
       action.lookup("verb") == "start" &&
-      subject.user == "{{ homelab_user }}") {
+      subject.user == "{{ andamio_user }}") {
     return polkit.Result.YES;
   }
 });

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Crea un cliente WireGuard. Uso: sudo wg-add-client.sh <nombre> <último octeto 2-254>
 set -euo pipefail
-# HOMELAB_SERVER_IP: de andamio.env (Ansible, group_vars/all.yml) o del entorno (en un
+# ANDAMIO_SERVER_IP: de andamio.env (Ansible, group_vars/all.yml) o del entorno (en un
 # servidor nuevo, el rol wireguard crea el primer cliente antes de que exista andamio.env).
 # shellcheck source=/dev/null
-[ -f /etc/homelab/andamio.env ] && . /etc/homelab/andamio.env
-: "${HOMELAB_SERVER_IP:?falta HOMELAB_SERVER_IP (/etc/homelab/andamio.env)}"
+[ -f /etc/andamio/andamio.env ] && . /etc/andamio/andamio.env
+: "${ANDAMIO_SERVER_IP:?falta ANDAMIO_SERVER_IP (/etc/andamio/andamio.env)}"
 
 NAME=${1:?uso: wg-add-client.sh <nombre> <ip 2-254>}
 OCT=${2:?uso: wg-add-client.sh <nombre> <ip 2-254>}
@@ -37,8 +37,8 @@ Address = 10.8.0.$OCT/32
 [Peer]
 PublicKey = $(cat /etc/wireguard/server.pub)
 PresharedKey = $PSK
-Endpoint = $HOMELAB_SERVER_IP:51820
-AllowedIPs = 10.8.0.0/24, $HOMELAB_SERVER_IP/32
+Endpoint = $ANDAMIO_SERVER_IP:51820
+AllowedIPs = 10.8.0.0/24, $ANDAMIO_SERVER_IP/32
 PersistentKeepalive = 25
 EOF
 

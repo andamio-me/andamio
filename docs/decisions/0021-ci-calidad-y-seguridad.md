@@ -5,7 +5,7 @@
 
 ## Contexto
 El pipeline de las apps revisaba lint y tipos, construía y desplegaba. No corría
-tests, no revisaba vulnerabilidades de las imágenes ni secretos, y homelab-infra
+tests, no revisaba vulnerabilidades de las imágenes ni secretos, y andamio
 (scripts y Ansible) no tenía CI.
 
 ## Decisión
@@ -20,11 +20,11 @@ tests, no revisaba vulnerabilidades de las imágenes ni secretos, y homelab-infr
   solo como informe (corre una vez, en la red interna).
 - Trivy fijado por digest y gitleaks por checksum: un tag se puede mover.
 
-**homelab-infra (`infra-ci`):** shellcheck (nivel warning) en scripts, ansible-lint
+**andamio (`infra-ci`):** shellcheck (nivel warning) en scripts, ansible-lint
 con las colecciones de `ansible/requirements.yml`, y gitleaks sobre todo el historial.
 
 **Dependabot** en los cinco repos: npm, actions e imagen base en las apps; actions e
-imágenes de los stacks en homelab-infra. Un PR semanal agrupado, `cooldown` de 7 días
+imágenes de los stacks en andamio. Un PR semanal agrupado, `cooldown` de 7 días
 y sin saltos de versión mayor automáticos. Mezclar un PR de stacks no despliega: se
 aplica con `./hl aplicar`.
 
@@ -39,12 +39,12 @@ aplica con `./hl aplicar`.
   `name[casing]` por convención de nombres en español (ver `ansible/.ansible-lint`).
 
 - Al publicar v4, dashboard y andamio se desplegaron a la vez y andamio falló: dos
-  `git pull` simultáneos en `/srv/homelab/infra` ("Cannot fast-forward to multiple
+  `git pull` simultáneos en `/srv/andamio/infra` ("Cannot fast-forward to multiple
   branches"). Producción siguió con la versión anterior. `deploy-app.sh` ahora hace el
   pull con `flock` y explícito (`origin main`).
-- Dependabot de las apps no puede leer homelab-infra (privado) para revisar el workflow
+- Dependabot de las apps no puede leer andamio (privado) para revisar el workflow
   reutilizable: las apps no llevan el ecosistema github-actions; esas actions las
-  revisa el Dependabot de homelab-infra.
+  revisa el Dependabot de andamio.
 
 ## Consecuencias
 - Un deploy puede frenarse por una vulnerabilidad nueva en una dependencia: es lo

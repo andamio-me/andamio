@@ -4,7 +4,7 @@
 - **Fecha:** 2026-10-06
 
 ## Contexto
-El homelab necesita un único punto de entrada con TLS automático, y a futuro
+La plataforma necesita un único punto de entrada con TLS automático, y a futuro
 un mini-PaaS que publique apps sin editar archivos de configuración.
 
 ## Decisión

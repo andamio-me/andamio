@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Crea las redes compartidas del homelab. Idempotente.
+# Crea las redes compartidas de andamio. Idempotente.
 set -euo pipefail
 
 create() {

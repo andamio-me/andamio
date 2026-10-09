@@ -1,4 +1,4 @@
-# 0023. Certificado propio (homelab_tls: custom)
+# 0023. Certificado propio (andamio_tls: custom)
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-10-09
@@ -17,7 +17,7 @@ proxy de Cloudflare).
 - El certificado va en claro en `host/tls/cert.pem` (es público). La llave, cifrada con sops
   en `host/sops/tls-key.sops`, como los demás secretos del host; andamio no hace copias en
   claro y pide borrar la original.
-- Ansible los copia a `/etc/homelab/tls` (0700, del usuario de Traefik), montado en Traefik
+- Ansible los copia a `/etc/andamio/tls` (0700, del usuario de Traefik), montado en Traefik
   como `/certs`. `dynamic/tls.yml` lo declara y lo hace el certificado por defecto. El
   entrypoint `websecure` queda con `tls: {}` y sin resolvers de ACME.
 - Traefik no vigila los archivos del certificado: si cambian, Ansible lo reinicia.
@@ -36,4 +36,4 @@ proxy de Cloudflare).
 ## Consecuencias
 - Origin Certificate: los paneles privados muestran error de certificado (no pasan por el
   proxy). `andamio` lo advierte y recomienda `cloudflare`.
-- La renovación es manual: mismo comando, commit y `hl aplicar homelab`.
+- La renovación es manual: mismo comando, commit y `hl aplicar andamio`.

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Backup diario del homelab con restic (destino: RESTIC_REPOSITORY en /etc/restic/env,
-# p. ej. B2 o S3). Lo ejecuta homelab-backup.service (root).
+# Backup diario de andamio con restic (destino: RESTIC_REPOSITORY en /etc/restic/env,
+# p. ej. B2 o S3). Lo ejecuta andamio-backup.service (root).
 set -euo pipefail
 
-set -a; . /etc/restic/env; . /etc/homelab/andamio.env; set +a
-STAGING=/var/backups/homelab
+set -a; . /etc/restic/env; . /etc/andamio/andamio.env; set +a
+STAGING=/var/backups/andamio
 install -d -m 700 "$STAGING"
 
 # Aviso a Uptime Kuma (monitor push "Backup diario")
 notify() {
   [ -n "${KUMA_PUSH_URL:-}" ] && curl -fsS -m 10 --retry 3 "${KUMA_PUSH_URL}?status=$1&msg=$2" > /dev/null || true
-  if [ -f /etc/homelab/telegram.env ]; then
+  if [ -f /etc/andamio/telegram.env ]; then
     local icon="✅"; [ "$1" = "up" ] || icon="❌"
-    ( set -a; . /etc/homelab/telegram.env; set +a
-      echo "$icon Backup: $2 (${SECONDS}s)" | /srv/homelab/infra/scripts/telegram-send.sh ) || true
+    ( set -a; . /etc/andamio/telegram.env; set +a
+      echo "$icon Backup: $2 (${SECONDS}s)" | /srv/andamio/infra/scripts/telegram-send.sh ) || true
   fi
 }
 trap 'notify down "fallo_en_linea_$LINENO"' ERR
-# systemd lo corta si pasa de TimeoutStartSec (homelab-backup.service): avisar igual.
+# systemd lo corta si pasa de TimeoutStartSec (andamio-backup.service): avisar igual.
 trap 'notify down "cortado_por_tiempo"; exit 1' TERM
 
 echo "==> PostgreSQL (pg_dumpall)"
@@ -29,7 +29,7 @@ docker exec redis redis-cli SAVE > /dev/null
 docker cp redis:/data/dump.rdb "$STAGING/redis.rdb"
 
 echo "==> Seafile (MariaDB, dump coherente)"
-# Los archivos de Seafile ya están en /srv/homelab/data/seafile; su base, en un
+# Los archivos de Seafile ya están en /srv/andamio/data/seafile; su base, en un
 # volumen de Docker: se respalda con un dump (copiar archivos de una base viva no sirve).
 if docker ps --format '{{.Names}}' | grep -qx seafile-mysql; then
   docker exec seafile-mysql sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --routines'     > "$STAGING/seafile-mysql.sql.tmp"
@@ -51,12 +51,12 @@ echo "==> Subiendo al repositorio restic"
 # Cada paso contra el destino con límite de tiempo: una petición colgada (pasó el 2026-10-08,
 # forget --prune 10 h sin salida) cuenta como fallo y avisa, en vez de bloquear las
 # noches siguientes. Duran segundos o pocos minutos; los límites sobran de largo.
-timeout 2h restic backup "$STAGING" /srv/homelab /etc/ssh /etc/wireguard /etc/homelab \
-  "/home/$HOMELAB_USER/.ssh" "/home/$HOMELAB_USER/.docker/config.json" \
-  --tag homelab --exclude-caches
+timeout 2h restic backup "$STAGING" /srv/andamio /etc/ssh /etc/wireguard /etc/andamio \
+  "/home/$ANDAMIO_USER/.ssh" "/home/$ANDAMIO_USER/.docker/config.json" \
+  --tag andamio --exclude-caches
 
 echo "==> Retención: 7 diarios, 4 semanales, 6 mensuales"
-timeout 1h restic forget --tag homelab --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+timeout 1h restic forget --tag andamio --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
 
 echo "==> Verificación del repositorio"
 timeout 30m restic check

@@ -1,6 +1,6 @@
 # Convenciones de los stacks
 
-Todo servicio del homelab cumple estas reglas. Plantilla: `stacks/_template/compose.yaml`.
+Todo servicio de andamio cumple estas reglas. Plantilla: `stacks/_template/compose.yaml`.
 
 | Regla | Cómo | Por qué |
 |---|---|---|

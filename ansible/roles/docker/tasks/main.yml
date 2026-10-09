@@ -28,6 +28,6 @@
 # El grupo docker equivale a root: solo el usuario de operación.
 - name: Usuario de operación en el grupo docker
   ansible.builtin.user:
-    name: "{{ homelab_user }}"
+    name: "{{ andamio_user }}"
     groups: docker
     append: true

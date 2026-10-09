@@ -72,16 +72,16 @@ if [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ]; then
 else warn "$A_TIME" "$(L "Reloj sin sincronizar (afecta certificados y logs)" "Clock not synchronized (affects certificates and logs)")" "sudo timedatectl set-ntp true"; fi
 
 # --- Backups ---
-journal=$(L "journalctl -u homelab-backup -n 50 $ONSERVER" "journalctl -u homelab-backup -n 50 $ONSERVER")
+journal=$(L "journalctl -u andamio-backup -n 50 $ONSERVER" "journalctl -u andamio-backup -n 50 $ONSERVER")
 if [ "$BACKUPS" = true ]; then
-  if [ "$(systemctl show homelab-backup.service -p Result --value)" != success ]; then
+  if [ "$(systemctl show andamio-backup.service -p Result --value)" != success ]; then
     fail Backups "$(L "El último backup falló" "The last backup failed")" "$journal"
   fi
   last=$(set -a; . /etc/restic/env; set +a
-         timeout 60 restic snapshots --tag homelab --json 2> /dev/null \
+         timeout 60 restic snapshots --tag andamio --json 2> /dev/null \
            | python3 -c 'import json,sys,datetime as d; s=json.load(sys.stdin); t=max(x["time"] for x in s)[:19]; print(int((d.datetime.utcnow()-d.datetime.fromisoformat(t)).total_seconds()//3600))' 2> /dev/null)
   if [ -z "$last" ]; then fail Backups "$(L "No pude leer el repositorio de backups" "Couldn't read the backup repository")" \
-    "$(L "sudo systemctl start homelab-backup $ONSERVER y revisa" "sudo systemctl start homelab-backup $ONSERVER and check") $journal"
+    "$(L "sudo systemctl start andamio-backup $ONSERVER y revisa" "sudo systemctl start andamio-backup $ONSERVER and check") $journal"
   elif [ "$last" -gt 26 ]; then fail Backups "$(L "El último backup es de hace $last horas" "The last backup is $last hours old")" "$journal"
   else ok Backups "$(L "Último backup hace $last h, fuera del servidor y cifrado" "Last backup $last h ago, off the server and encrypted")"; fi
 else

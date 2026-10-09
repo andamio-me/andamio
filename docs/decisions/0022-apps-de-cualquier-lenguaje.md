@@ -26,7 +26,7 @@ se declara en `app.yml`:
 - **Worker:** el latido es opcional (`heartbeat: true`).
 - **Migraciones:** `migrate: true` (imagen aparte) o `migrate: { command: ... }` con la
   misma imagen de la app.
-- **`homelab app create --repo dueño/nombre --port N --health /ruta`** registra un repo
+- **`andamio app create --repo dueño/nombre --port N --health /ruta`** registra un repo
   existente (no crea uno desde la plantilla de Node) e imprime el `ci.yml` a agregar.
 
 ## Prueba

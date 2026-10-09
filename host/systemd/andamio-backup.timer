@@ -1,5 +1,5 @@
 [Unit]
-Description=Backup diario del homelab
+Description=Backup diario de andamio
 
 [Timer]
 OnCalendar=*-*-* 03:30:00

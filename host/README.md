@@ -6,17 +6,17 @@ Configuración del sistema operativo (todo lo que vive fuera de Docker).
 
 | Archivo en el repo | Destino en el servidor | Aplicar con |
 |---|---|---|
-| `ssh/00-homelab-hardening.conf` | `/etc/ssh/sshd_config.d/00-homelab-hardening.conf` | `sudo sshd -t && sudo systemctl reload ssh` (verificar con `sudo sshd -T`) |
+| `ssh/00-andamio-hardening.conf` | `/etc/ssh/sshd_config.d/00-andamio-hardening.conf` | `sudo sshd -t && sudo systemctl reload ssh` (verificar con `sudo sshd -T`) |
 | `systemd/ssh.socket.d/override.conf` | `/etc/systemd/system/ssh.socket.d/override.conf` | `sudo systemctl daemon-reload && sudo systemctl restart ssh.socket` (puerto 2222) |
 | `docker/daemon.json` | `/etc/docker/daemon.json` | `sudo dockerd --validate --config-file ...` y `sudo systemctl restart docker` |
-| `apt/52homelab-unattended` | `/etc/apt/apt.conf.d/52homelab-unattended` | Se lee en la próxima ejecución de unattended-upgrades |
-| `sysctl/99-homelab.conf` | `/etc/sysctl.d/99-homelab.conf` | `sudo sysctl --system` |
+| `apt/52andamio-unattended` | `/etc/apt/apt.conf.d/52andamio-unattended` | Se lee en la próxima ejecución de unattended-upgrades |
+| `sysctl/99-andamio.conf` | `/etc/sysctl.d/99-andamio.conf` | `sudo sysctl --system` |
 | `systemd/cockpit.socket.d/listen.conf` | `/etc/systemd/system/cockpit.socket.d/listen.conf` | `sudo systemctl daemon-reload && sudo systemctl restart cockpit.socket` |
-| `systemd/homelab-backup.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now homelab-backup.timer` |
-| `systemd/homelab-telegram-bot.service` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now homelab-telegram-bot` |
-| `systemd/homelab-daily-summary.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now homelab-daily-summary.timer` |
-| `systemd/homelab-container-health.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now homelab-container-health.timer` |
-| `polkit/50-homelab-backup.rules` | `/etc/polkit-1/rules.d/` | Se aplica al copiarlo |
+| `systemd/andamio-backup.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now andamio-backup.timer` |
+| `systemd/andamio-telegram-bot.service` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now andamio-telegram-bot` |
+| `systemd/andamio-daily-summary.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now andamio-daily-summary.timer` |
+| `systemd/andamio-container-health.{service,timer}` | `/etc/systemd/system/` | `sudo systemctl daemon-reload && sudo systemctl enable --now andamio-container-health.timer` |
+| `polkit/50-andamio-backup.rules` | `/etc/polkit-1/rules.d/` | Se aplica al copiarlo |
 
 ## Secretos (fuera del repo, en el gestor de contraseñas)
 
@@ -24,15 +24,15 @@ Configuración del sistema operativo (todo lo que vive fuera de Docker).
 |---|---|
 | `/etc/restic/password` | Contraseña del repositorio restic |
 | `/etc/restic/env` | Credenciales de B2 y `KUMA_PUSH_URL` |
-| `/etc/homelab/telegram.env` | `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` |
-| `/srv/homelab/infra/stacks/*/.env` | Contraseñas de cada stack |
+| `/etc/andamio/telegram.env` | `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` |
+| `/srv/andamio/infra/stacks/*/.env` | Contraseñas de cada stack |
 
 ## Cambios sin archivo propio
 
 ~~~bash
 # Comando `system` y paquetes usados por los scripts
 sudo apt install -y restic jq
-sudo ln -sf /srv/homelab/infra/scripts/system-status.sh /usr/local/bin/system
+sudo ln -sf /srv/andamio/infra/scripts/system-status.sh /usr/local/bin/system
 
 # SSH: quitar el archivo de cloud-init que activaba contraseñas
 sudo rm /etc/ssh/sshd_config.d/50-cloud-init.conf
@@ -56,9 +56,9 @@ sudo systemctl disable --now NetworkManager NetworkManager-wait-online NetworkMa
 sudo systemctl mask NetworkManager wpa_supplicant
 sudo apt purge -y snapd
 
-# Raíz del homelab
-sudo mkdir -p /srv/homelab/{infra,apps}
-sudo chown -R andamio:andamio /srv/homelab && chmod 750 /srv/homelab
+# Raíz de andamio
+sudo mkdir -p /srv/andamio/{infra,apps}
+sudo chown -R andamio:andamio /srv/andamio && chmod 750 /srv/andamio
 ~~~
 
 La red la maneja systemd-networkd (netplan sin `renderer`). NetworkManager no
@@ -68,9 +68,9 @@ gestionaba ninguna interfaz.
 
 ~~~bash
 # Los hashes deben coincidir con los de los archivos del repo
-sudo sha256sum /etc/ssh/sshd_config.d/00-homelab-hardening.conf \
-  /etc/docker/daemon.json /etc/apt/apt.conf.d/52homelab-unattended \
-  /etc/sysctl.d/99-homelab.conf /etc/systemd/system/cockpit.socket.d/listen.conf
+sudo sha256sum /etc/ssh/sshd_config.d/00-andamio-hardening.conf \
+  /etc/docker/daemon.json /etc/apt/apt.conf.d/52andamio-unattended \
+  /etc/sysctl.d/99-andamio.conf /etc/systemd/system/cockpit.socket.d/listen.conf
 
 # Configuración SSH efectiva
 sudo sshd -T | grep -Ei '^(permitrootlogin|passwordauthentication|authenticationmethods|allowusers) '

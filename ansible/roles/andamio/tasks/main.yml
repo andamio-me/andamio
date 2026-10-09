@@ -2,15 +2,15 @@
 
 - name: Nivel de monitoreo
   ansible.builtin.set_fact:
-    homelab_monitoring_level: >-
-      {{ homelab_monitoring if homelab_monitoring != 'auto'
+    andamio_monitoring_level: >-
+      {{ andamio_monitoring if andamio_monitoring != 'auto'
          else ('completo' if ansible_facts['memtotal_mb'] >= 2900 else 'minimo') }}
 
 - name: Stacks activos (Uptime Kuma solo en el nivel completo)
   ansible.builtin.set_fact:
-    homelab_stacks_active: >-
-      {{ homelab_stacks if homelab_monitoring_level == 'completo'
-         else homelab_stacks | reject('equalto', 'stacks/uptime-kuma') | list }}
+    andamio_stacks_active: >-
+      {{ andamio_stacks if andamio_monitoring_level == 'completo'
+         else andamio_stacks | reject('equalto', 'stacks/uptime-kuma') | list }}
 
 # --- Secretos del host: cifrados en host/sops/, descifrados en tu WSL ---
 
@@ -23,15 +23,15 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: /etc/restic, group: root, mode: "0700" }
-    - { path: /etc/homelab, group: "{{ homelab_user }}", mode: "0750" }
+    - { path: /etc/andamio, group: "{{ andamio_user }}", mode: "0750" }
   tags: secretos
 
 - name: Configuración no secreta para los scripts del servidor
   ansible.builtin.template:
     src: andamio.env.j2
-    dest: /etc/homelab/andamio.env
+    dest: /etc/andamio/andamio.env
     owner: root
-    group: "{{ homelab_user }}"
+    group: "{{ andamio_user }}"
     mode: "0640"
   tags: secretos
 
@@ -44,7 +44,7 @@
     owner: root
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
-  loop: "{{ homelab_sops_files }}"
+  loop: "{{ andamio_sops_files }}"
   no_log: true
   diff: false
   tags: secretos
@@ -53,38 +53,38 @@
 - name: ¿Existen los secretos del host?
   ansible.builtin.stat:
     path: "{{ item }}"
-  loop: "{{ homelab_host_secrets }}"
-  register: homelab_secrets
+  loop: "{{ andamio_host_secrets }}"
+  register: andamio_secrets
 
 - name: Secretos del host restaurados
   ansible.builtin.assert:
     that: item.stat.exists
     fail_msg: "Falta {{ item.item }}. Ver docs/runbooks/restaurar-backup.md"
     quiet: true
-  loop: "{{ homelab_secrets.results }}"
+  loop: "{{ andamio_secrets.results }}"
   loop_control:
     label: "{{ item.item }}"
 
 # --- Repo ---
 
-- name: Raíz del homelab
+- name: Raíz de andamio
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: "{{ homelab_root }}", mode: "0750" }
-    - { path: "{{ homelab_root }}/apps", mode: "0755" }
+    - { path: "{{ andamio_root }}", mode: "0750" }
+    - { path: "{{ andamio_root }}/apps", mode: "0755" }
 
 # Falla si hay cambios locales sin commitear: nunca los pisa.
-- name: homelab-infra al día
+- name: Repo de andamio al día
   become: true
-  become_user: "{{ homelab_user }}"
+  become_user: "{{ andamio_user }}"
   ansible.builtin.git:
-    repo: "{{ homelab_repo }}"
-    dest: "{{ homelab_infra }}"
+    repo: "{{ andamio_repo }}"
+    dest: "{{ andamio_infra }}"
     version: main
     accept_newhostkey: true
 
@@ -97,28 +97,28 @@
     # Comillas dobles: así YAML convierte \n en salto de línea (en >- quedaría literal).
     # Al final, lo no secreto que necesitan los stacks (group_vars/all.yml).
     content: "{{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item ~ '/secrets.sops.env',
-      input_type='dotenv', output_type='dotenv') ~ '\nHOMELAB_HOSTNAME=' ~ homelab_hostname ~ '\n'
-      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and homelab_monitoring_level == 'completo' else '')
+      input_type='dotenv', output_type='dotenv') ~ '\nANDAMIO_HOSTNAME=' ~ andamio_hostname ~ '\n'
+      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and andamio_monitoring_level == 'completo' else '')
       ~ ('POSTGRES_CPUS=' ~ ([1.5, ansible_facts['processor_vcpus']] | min) ~ '\n' if item == 'stacks/data' else '') }}"
-    dest: "{{ homelab_infra }}/{{ item }}/.env"
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    dest: "{{ andamio_infra }}/{{ item }}/.env"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "0600"
-  loop: "{{ homelab_stacks_active + (homelab_db_stacks | map(attribute='stack')) }}"
+  loop: "{{ andamio_stacks_active + (andamio_db_stacks | map(attribute='stack')) }}"
   no_log: true   # nunca mostrar secretos, ni en errores
   diff: false
 
 # --- Acceso: tu llave + llaves de deploy con comando forzado ---
 
-- name: Llaves autorizadas de {{ homelab_user }}
+- name: Llaves autorizadas de {{ andamio_user }}
   ansible.posix.authorized_key:
-    user: "{{ homelab_user }}"
+    user: "{{ andamio_user }}"
     key: "{{ lookup('file', playbook_dir + '/../host/ssh/authorized_keys') }}"
     exclusive: false
 
 - name: Sin líneas de plantilla en authorized_keys
   ansible.builtin.lineinfile:
-    path: /home/{{ homelab_user }}/.ssh/authorized_keys
+    path: /home/{{ andamio_user }}/.ssh/authorized_keys
     regexp: LLAVE_PUBLICA
     state: absent
 
@@ -126,15 +126,15 @@
 
 - name: Comando `system`
   ansible.builtin.file:
-    src: "{{ homelab_infra }}/scripts/system-status.sh"
+    src: "{{ andamio_infra }}/scripts/system-status.sh"
     dest: /usr/local/bin/system
     state: link
 
 - name: polkit, el bot solo puede lanzar el backup
-  when: homelab_backups | bool and homelab_telegram | bool
+  when: andamio_backups | bool and andamio_telegram | bool
   ansible.builtin.template:
-    src: "{{ playbook_dir }}/../host/polkit/50-homelab-backup.rules.j2"
-    dest: /etc/polkit-1/rules.d/50-homelab-backup.rules
+    src: "{{ playbook_dir }}/../host/polkit/50-andamio-backup.rules.j2"
+    dest: /etc/polkit-1/rules.d/50-andamio-backup.rules
     owner: root
     group: root
     mode: "0644"
@@ -162,14 +162,14 @@
   notify: Recargar systemd
 
 # template (no copy): las que llevan el usuario de operación son .j2 (group_vars/all.yml).
-- name: Units del homelab
+- name: Units de andamio
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../host/systemd/{{ item }}{{ '.j2' if (playbook_dir ~ '/../host/systemd/' ~ item ~ '.j2') is file else '' }}"
     dest: /etc/systemd/system/{{ item }}
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ homelab_units }}"
+  loop: "{{ andamio_units }}"
   notify:
     - Recargar systemd
     - Reiniciar bot de Telegram
@@ -182,34 +182,34 @@
     name: "{{ item }}"
     state: started
     enabled: true
-  loop: "{{ homelab_enabled_units }}"
+  loop: "{{ andamio_enabled_units }}"
 
 # --- Docker: login, redes y stacks ---
 
 - name: Login en el registro de imágenes hecho
   become: true
-  become_user: "{{ homelab_user }}"
-  ansible.builtin.command: grep -q '"{{ homelab_registry }}"' /home/{{ homelab_user }}/.docker/config.json
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: grep -q '"{{ andamio_registry }}"' /home/{{ andamio_user }}/.docker/config.json
   changed_when: false
   check_mode: false
-  register: homelab_registry_login
+  register: andamio_registry_login
   failed_when: false
 
 - name: Registro disponible para bajar imágenes privadas
   ansible.builtin.assert:
-    that: homelab_registry_login.rc == 0
+    that: andamio_registry_login.rc == 0
     fail_msg: >-
-      Falta el login en {{ homelab_registry }}. Corre bin/andamio servidor (lo pide), o como
-      {{ homelab_user }}: docker login {{ homelab_registry }} -u {{ homelab_github_owner }}
+      Falta el login en {{ andamio_registry }}. Corre bin/andamio servidor (lo pide), o como
+      {{ andamio_user }}: docker login {{ andamio_registry }} -u {{ andamio_github_owner }}
       con un token de solo lectura de imágenes
     quiet: true
 
 - name: Redes compartidas
   become: true
-  become_user: "{{ homelab_user }}"
-  ansible.builtin.command: "{{ homelab_infra }}/scripts/create-networks.sh"
-  register: homelab_networks
-  changed_when: "'creada' in homelab_networks.stdout"
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: "{{ andamio_infra }}/scripts/create-networks.sh"
+  register: andamio_networks
+  changed_when: "'creada' in andamio_networks.stdout"
 
 - name: Buscar apps (apps/*/app.yml en el repo de tu WSL)
   delegate_to: localhost
@@ -220,13 +220,13 @@
     patterns: app.yml
     recurse: true
     depth: 2
-  register: homelab_apps_found
+  register: andamio_apps_found
 
 - name: Nombres de las apps
   ansible.builtin.set_fact:
-    homelab_app_names: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+    andamio_app_names: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
 
-# También la usa homelab-container-health.service (StateDirectory).
+# También la usa andamio-container-health.service (StateDirectory).
 - name: Carpeta del textfile de node-exporter
   ansible.builtin.file:
     path: /var/lib/node_exporter/textfile
@@ -246,16 +246,16 @@
     lstrip_blocks: true
 
 # --- Llaves de deploy: una por app (apps/<app>/deploy_key.pub) ---
-# sshd las lee de /etc/ssh/deploy_keys/<usuario> (host/ssh/00-homelab-hardening.conf).
+# sshd las lee de /etc/ssh/deploy_keys/<usuario> (host/ssh/00-andamio-hardening.conf).
 # El archivo se reescribe completo: borrar un .pub revoca esa llave.
 
 - name: Llaves de deploy de las apps
   ansible.builtin.set_fact:
-    homelab_deploy_keys: >-
-      {{ (homelab_deploy_keys | default([]))
+    andamio_deploy_keys: >-
+      {{ (andamio_deploy_keys | default([]))
          + ([{'app': item, 'key': lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore')}]
             if lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore') else []) }}
-  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
 
 - name: Directorio de llaves de deploy (solo root escribe)
   ansible.builtin.file:
@@ -268,7 +268,7 @@
 - name: Llaves de deploy autorizadas
   ansible.builtin.template:
     src: deploy-keys.j2
-    dest: /etc/ssh/deploy_keys/{{ homelab_user }}
+    dest: /etc/ssh/deploy_keys/{{ andamio_user }}
     owner: root
     group: root
     mode: "0644"
@@ -276,7 +276,7 @@
 # Después de escribir el archivo de arriba: nunca queda una app sin llave.
 - name: Sin llaves de deploy en ~/.ssh/authorized_keys (ahora viven en deploy_keys)
   ansible.builtin.lineinfile:
-    path: /home/{{ homelab_user }}/.ssh/authorized_keys
+    path: /home/{{ andamio_user }}/.ssh/authorized_keys
     regexp: 'deploy-app\.sh'
     state: absent
 
@@ -285,32 +285,32 @@
 
 - name: Usuarios de Redis de las apps
   vars:
-    homelab_redis_match: >-
+    andamio_redis_match: >-
       {{ lookup('community.sops.sops', playbook_dir ~ '/../apps/' ~ item ~ '/secrets.sops.env',
                 input_type='dotenv', output_type='dotenv')
          | regex_search('^REDIS_URL=redis://([a-z0-9-]+):([A-Za-z0-9]+)@', '\1', '\2', multiline=True)
          | default([], true) }}
   ansible.builtin.set_fact:
-    homelab_redis_users: >-
-      {{ (homelab_redis_users | default([]))
-         + ([{'name': homelab_redis_match[0], 'hash': homelab_redis_match[1] | hash('sha256')}]
-            if homelab_redis_match | length == 2 else []) }}
-  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+    andamio_redis_users: >-
+      {{ (andamio_redis_users | default([]))
+         + ([{'name': andamio_redis_match[0], 'hash': andamio_redis_match[1] | hash('sha256')}]
+            if andamio_redis_match | length == 2 else []) }}
+  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
   no_log: true
 
 - name: Usuario admin de Redis (REDIS_PASSWORD de stacks/data)
   ansible.builtin.set_fact:
-    homelab_redis_default_hash: >-
+    andamio_redis_default_hash: >-
       {{ lookup('community.sops.sops', playbook_dir ~ '/../stacks/data/secrets.sops.env',
                 input_type='dotenv', output_type='dotenv')
          | regex_search('^REDIS_PASSWORD=(.+)$', '\1', multiline=True) | first | hash('sha256') }}
-    homelab_redis_users: "{{ homelab_redis_users | default([]) }}"
+    andamio_redis_users: "{{ andamio_redis_users | default([]) }}"
   no_log: true
 
 # 999 = usuario redis dentro de la imagen oficial.
 - name: Carpeta del aclfile de Redis
   ansible.builtin.file:
-    path: "{{ homelab_infra }}/stacks/data/redis-acl"
+    path: "{{ andamio_infra }}/stacks/data/redis-acl"
     state: directory
     owner: "999"
     group: "999"
@@ -318,25 +318,25 @@
 
 - name: Sin el aclfile viejo (montado como archivo suelto)
   ansible.builtin.file:
-    path: "{{ homelab_infra }}/stacks/data/users.acl"
+    path: "{{ andamio_infra }}/stacks/data/users.acl"
     state: absent
 
 - name: aclfile de Redis
   ansible.builtin.template:
     src: redis-users.acl.j2
-    dest: "{{ homelab_infra }}/stacks/data/redis-acl/users.acl"
+    dest: "{{ andamio_infra }}/stacks/data/redis-acl/users.acl"
     owner: "999"
     group: "999"
     mode: "0600"
   notify: Recargar usuarios de Redis
 
-# Archivos de Seafile: dentro de /srv/homelab para que entren al backup diario.
+# Archivos de Seafile: dentro de /srv/andamio para que entren al backup diario.
 # 0711: se puede atravesar pero no listar. El nginx del contenedor corre como
 # www-data y sirve avatares y miniaturas desde aquí (con 0700 daba 403).
 - name: Carpeta de datos de Seafile
-  when: "'stacks/seafile' in homelab_stacks_active"
+  when: "'stacks/seafile' in andamio_stacks_active"
   ansible.builtin.file:
-    path: "{{ homelab_root }}/data/seafile"
+    path: "{{ andamio_root }}/data/seafile"
     state: directory
     owner: root
     group: root
@@ -346,10 +346,10 @@
 # vacías: su contenido se genera aquí).
 - name: Carpeta de la configuración dinámica de Traefik
   ansible.builtin.file:
-    path: "{{ homelab_infra }}/stacks/proxy/dynamic"
+    path: "{{ andamio_infra }}/stacks/proxy/dynamic"
     state: directory
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "0755"
 
 # Config de Traefik con el dominio, el email y la IP de este servidor. El estático se lee
@@ -357,87 +357,87 @@
 - name: Configuración de Traefik
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../{{ item.src }}"
-    dest: "{{ homelab_infra }}/{{ item.dest }}"
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    dest: "{{ andamio_infra }}/{{ item.dest }}"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "0644"
   loop:
     - { src: stacks/proxy/traefik.yml.j2, dest: stacks/proxy/traefik.yml }
     - { src: stacks/proxy/middlewares.yml.j2, dest: stacks/proxy/dynamic/middlewares.yml }
   loop_control:
     label: "{{ item.dest }}"
-  register: homelab_traefik_conf
+  register: andamio_traefik_conf
 
-# Certificado propio (homelab_tls: custom). La carpeta existe siempre: compose la monta.
+# Certificado propio (andamio_tls: custom). La carpeta existe siempre: compose la monta.
 - name: Carpeta del certificado propio (solo la lee Traefik)
   ansible.builtin.file:
-    path: /etc/homelab/tls
+    path: /etc/andamio/tls
     state: directory
     owner: "65532"
     group: "65532"
     mode: "0700"
 
 - name: Certificado propio en el repo
-  when: homelab_tls == 'custom'
+  when: andamio_tls == 'custom'
   ansible.builtin.assert:
     that:
       - (playbook_dir ~ '/../host/tls/cert.pem') is file
       - (playbook_dir ~ '/../host/sops/tls-key.sops') is file
     fail_msg: >-
-      homelab_tls: custom necesita host/tls/cert.pem y host/sops/tls-key.sops.
+      andamio_tls: custom necesita host/tls/cert.pem y host/sops/tls-key.sops.
       Créalos con: bin/andamio certificado <certificado> <llave>
     quiet: true
 
 - name: Certificado propio
-  when: homelab_tls == 'custom'
+  when: andamio_tls == 'custom'
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../host/tls/cert.pem"
-    dest: /etc/homelab/tls/cert.pem
+    dest: /etc/andamio/tls/cert.pem
     owner: "65532"
     group: "65532"
     mode: "0600"
-  register: homelab_tls_cert
+  register: andamio_tls_cert
 
 - name: Llave del certificado propio (desde sops)
-  when: homelab_tls == 'custom'
+  when: andamio_tls == 'custom'
   ansible.builtin.copy:
     content: >-
       {{ lookup('community.sops.sops', playbook_dir ~ '/../host/sops/tls-key.sops',
                 input_type='json', output_type='binary', rstrip=false) }}
-    dest: /etc/homelab/tls/key.pem
+    dest: /etc/andamio/tls/key.pem
     owner: "65532"
     group: "65532"
     mode: "0600"
   no_log: true
   diff: false
-  register: homelab_tls_key
+  register: andamio_tls_key
 
 - name: Sin certificado propio (otro modo de HTTPS)
-  when: homelab_tls != 'custom'
+  when: andamio_tls != 'custom'
   ansible.builtin.file:
-    path: "/etc/homelab/tls/{{ item }}"
+    path: "/etc/andamio/tls/{{ item }}"
     state: absent
   loop: [cert.pem, key.pem]
 
 - name: Traefik usa el certificado propio
   ansible.builtin.template:
     src: "{{ playbook_dir }}/../stacks/proxy/tls.yml.j2"
-    dest: "{{ homelab_infra }}/stacks/proxy/dynamic/tls.yml"
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    dest: "{{ andamio_infra }}/stacks/proxy/dynamic/tls.yml"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "0644"
-  when: homelab_tls == 'custom'
+  when: andamio_tls == 'custom'
 
 - name: Sin configuración de certificado propio
   ansible.builtin.file:
-    path: "{{ homelab_infra }}/stacks/proxy/dynamic/tls.yml"
+    path: "{{ andamio_infra }}/stacks/proxy/dynamic/tls.yml"
     state: absent
-  when: homelab_tls != 'custom'
+  when: andamio_tls != 'custom'
 
 # En una instalación nueva Traefik aún no existe: lo arranca "Stacks levantados".
 - name: ¿Traefik ya existe?
   ansible.builtin.command: docker inspect traefik --format '{{ '{{' }} .Name {{ '}}' }}'
-  register: homelab_traefik_exists
+  register: andamio_traefik_exists
   changed_when: false
   failed_when: false
   check_mode: false
@@ -445,82 +445,82 @@
 # Traefik lee el certificado al cargar tls.yml: si cambia el archivo, no lo nota solo.
 - name: Reiniciar Traefik si cambió su configuración estática o el certificado
   become: true
-  become_user: "{{ homelab_user }}"
+  become_user: "{{ andamio_user }}"
   ansible.builtin.command: docker restart traefik
   when:
-    - homelab_traefik_conf.results[0].changed or homelab_tls_cert.changed | default(false)
-      or homelab_tls_key.changed | default(false)
-    - homelab_traefik_exists.rc == 0
+    - andamio_traefik_conf.results[0].changed or andamio_tls_cert.changed | default(false)
+      or andamio_tls_key.changed | default(false)
+    - andamio_traefik_exists.rc == 0
     - not ansible_check_mode
   changed_when: true
 
 # Alertas de Grafana por Telegram: solo si está activado (sin token, Grafana no arranca
 # con ese contact point). Sin él, las alertas se evalúan pero no se envían.
 - name: Contact point de Telegram en Grafana
-  when: homelab_telegram | bool
+  when: andamio_telegram | bool
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../stacks/monitoring/grafana/contact-points.telegram.yml"
-    dest: "{{ homelab_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
-    owner: "{{ homelab_user }}"
-    group: "{{ homelab_user }}"
+    dest: "{{ andamio_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
     mode: "0644"
 
 - name: Sin contact point de Telegram (desactivado)
-  when: not (homelab_telegram | bool)
+  when: not (andamio_telegram | bool)
   ansible.builtin.file:
-    path: "{{ homelab_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
+    path: "{{ andamio_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
     state: absent
 
 - name: Stacks levantados
   become: true
-  become_user: "{{ homelab_user }}"
+  become_user: "{{ andamio_user }}"
   ansible.builtin.command: docker compose up -d --quiet-pull
   args:
-    chdir: "{{ homelab_infra }}/{{ item }}"
-  loop: "{{ homelab_stacks_active }}"
-  register: homelab_up
-  changed_when: homelab_up.stderr is search('Creat|Recreat|Start')
+    chdir: "{{ andamio_infra }}/{{ item }}"
+  loop: "{{ andamio_stacks_active }}"
+  register: andamio_up
+  changed_when: andamio_up.stderr is search('Creat|Recreat|Start')
 
 # Traefik corre sin root (65532): en un volumen nuevo, /acme pertenece a root y no puede
 # guardar los certificados ("permission denied" -> el resolver se descarta y no hay HTTPS).
 - name: Ubicación del volumen de certificados de Traefik
   ansible.builtin.command: docker volume inspect proxy_traefik_acme --format '{{ '{{' }} .Mountpoint {{ '}}' }}'
-  register: homelab_acme_volume
+  register: andamio_acme_volume
   changed_when: false
   check_mode: false
 
 - name: Volumen de certificados de Traefik, del usuario de Traefik
   ansible.builtin.file:
-    path: "{{ homelab_acme_volume.stdout }}"
+    path: "{{ andamio_acme_volume.stdout }}"
     state: directory
     owner: "65532"
     group: "65532"
     mode: "0700"
-  register: homelab_acme_perms
+  register: andamio_acme_perms
 
 - name: Reiniciar Traefik para que pida los certificados
   become: true
-  become_user: "{{ homelab_user }}"
+  become_user: "{{ andamio_user }}"
   ansible.builtin.command: docker restart traefik
-  when: homelab_acme_perms.changed and not ansible_check_mode
+  when: andamio_acme_perms.changed and not ansible_check_mode
   changed_when: true
 
 # Seafile (stack propio, no de la plataforma): crea su seafile.conf en el primer
 # arranque; la cuota va después.
 - name: Cuota de Seafile
-  when: "'stacks/seafile' in homelab_stacks_active"
+  when: "'stacks/seafile' in andamio_stacks_active"
   block:
     - name: seafile.conf creado por Seafile
       ansible.builtin.wait_for:
-        path: "{{ homelab_root }}/data/seafile/seafile/conf/seafile.conf"
+        path: "{{ andamio_root }}/data/seafile/seafile/conf/seafile.conf"
         timeout: 300
 
-    - name: Cuota de Seafile ({{ homelab_seafile_quota_gb }} GB por usuario)
+    - name: Cuota de Seafile ({{ andamio_seafile_quota_gb }} GB por usuario)
       community.general.ini_file:
-        path: "{{ homelab_root }}/data/seafile/seafile/conf/seafile.conf"
+        path: "{{ andamio_root }}/data/seafile/seafile/conf/seafile.conf"
         section: quota
         option: default
-        value: "{{ homelab_seafile_quota_gb }}"
+        value: "{{ andamio_seafile_quota_gb }}"
         mode: "0644"
       notify: Reiniciar Seafile
 
@@ -529,14 +529,14 @@
 
 - name: Stacks con base propia
   ansible.builtin.include_tasks: db-stack.yml
-  loop: "{{ homelab_db_stacks }}"
+  loop: "{{ andamio_db_stacks }}"
   loop_control:
-    loop_var: homelab_db_stack
+    loop_var: andamio_db_stack
 
 # --- Apps (apps/<app>/app.yml) ---
 
 - name: Apps
   ansible.builtin.include_tasks: app.yml
-  loop: "{{ homelab_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
   loop_control:
-    loop_var: homelab_app_name
+    loop_var: andamio_app_name
