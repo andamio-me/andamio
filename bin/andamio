@@ -9,6 +9,8 @@
                     con el arreglo de cada problema (no cambia nada)
   andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
                     configura, hace el primero y prueba que se puede restaurar
+  andamio update    trae las mejoras y parches de andamio (fusión de tres vías por
+                    archivo) sin tocar tu configuración, tus apps ni tus secretos
   andamio certificado [cert llave]
                     tu propio certificado HTTPS (homelab_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
@@ -1408,6 +1410,203 @@ check it now and then:  ssh {alias} systemctl status homelab-backup
 To rebuild everything on another server: docs/runbooks/reconstruir-servidor.md"""))
 
 
+# ================= update =================
+
+# El extractor (tools/extraer-plataforma.py) pone aquí la URL del repo público de andamio.
+UPSTREAM_DEFAULT = "https://github.com/Geovani29/andamio.git"
+UPSTREAM_FILE = ROOT / ".andamio" / "upstream"
+UPSTREAM_CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "andamio" / "upstream.git"
+# Lo tuyo: andamio update nunca lo toca (fnmatch: * también cruza carpetas).
+OWN = ["ansible/group_vars/*", "ansible/inventory.yml", "apps/*", "host/sops/*", "host/ssh/authorized_keys",
+       "host/tls/*", ".sops.yaml", "*.sops", "*.sops.*", ".andamio/*"]
+
+
+def git_bytes(*args: str, cwd: Path | None = None) -> bytes:
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    if r.returncode != 0:
+        die(f"git {args[0]}: {r.stderr.decode(errors='replace').strip()}")
+    return r.stdout
+
+
+def git_up(*args: str) -> str:
+    return git_bytes(*args, cwd=UPSTREAM_CACHE).decode()
+
+
+def is_platform(path: str) -> bool:
+    import fnmatch
+    return not any(fnmatch.fnmatch(path, pat) for pat in OWN)
+
+
+def upstream_tree(sha: str) -> dict[str, tuple[str, str]]:
+    """{ruta: (modo, blob)} de los archivos de la plataforma en ese commit de upstream."""
+    out = {}
+    for line in git_up("ls-tree", "-r", "--full-tree", sha).splitlines():
+        meta, path = line.split("\t", 1)
+        mode, kind, blob = meta.split()
+        if kind == "blob" and is_platform(path):
+            out[path] = (mode, blob)
+    return out
+
+
+_LOCAL: dict[str, str | None] = {}
+
+
+def local_blob(path: str) -> str | None:
+    """Hash git de tu archivo (como lo calcularía git), o None si no existe."""
+    if path not in _LOCAL:
+        f = ROOT / path
+        _LOCAL[path] = git_bytes("hash-object", str(f)).decode().strip() if f.is_file() else None
+    return _LOCAL[path]
+
+
+def infer_base(commits: list[str]) -> str:
+    """Repos creados desde el template no comparten historial con upstream: la base es el
+    commit de upstream cuyos archivos más coinciden con los tuyos (empate: el más nuevo)."""
+    best, score = commits[-1], -1
+    for sha in commits:   # del más nuevo al más viejo
+        tree = upstream_tree(sha)
+        hits = sum(1 for p, (_, blob) in tree.items() if local_blob(p) == blob)
+        if hits > score:
+            best, score = sha, hits
+    return best
+
+
+def merge3(path: str, base_blob: str | None, new_blob: str) -> tuple[bytes, bool]:
+    """Fusión de tres vías (tuyo, base, andamio). Devuelve (contenido, hubo_conflicto)."""
+    tmp = Path(tempfile.mkdtemp(prefix="andamio-merge-"))
+    try:
+        files = {"tuyo": (ROOT / path).read_bytes(),
+                 "base": git_bytes("cat-file", "blob", base_blob, cwd=UPSTREAM_CACHE) if base_blob else b"",
+                 "andamio": git_bytes("cat-file", "blob", new_blob, cwd=UPSTREAM_CACHE)}
+        if any(b"\0" in c for c in files.values()):   # binario: no se puede combinar
+            return files["tuyo"], True
+        for name, content in files.items():
+            (tmp / name).write_bytes(content)
+        r = subprocess.run(["git", "merge-file", "-p", "-L", L("tuyo", "yours"), "-L", "base", "-L", "andamio",
+                            str(tmp / "tuyo"), str(tmp / "base"), str(tmp / "andamio")], capture_output=True, check=False)
+        if r.returncode < 0:
+            die(f"git merge-file {path}: {r.stderr.decode(errors='replace')}")
+        return r.stdout, r.returncode > 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    print(L("\033[1mandamio update\033[0m: trae las mejoras y los parches de andamio sin tocar tu "
+            "configuración ni tus apps.",
+            "\033[1mandamio update\033[0m: brings in andamio's improvements and patches without touching "
+            "your configuration or your apps."))
+    import yaml
+    cfg = (yaml.safe_load(CONFIG.read_text()) or {}) if CONFIG.exists() else {}
+    saved = dict(x.split(" ", 1) for x in UPSTREAM_FILE.read_text().splitlines() if " " in x) \
+        if UPSTREAM_FILE.exists() else {}
+    url = args.desde or cfg.get("homelab_upstream") or saved.get("url") or UPSTREAM_DEFAULT
+    if url.startswith("@"):
+        die(L("Este repo es la fuente de andamio (no viene de un template): no hay de dónde actualizar.",
+              "This repo is andamio's source (it doesn't come from the template): nothing to update from."))
+    if run(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip():
+        die(L("Hay cambios sin commit (o archivos nuevos). Súbelos o descártalos antes: así `git diff` "
+              "muestra solo lo que trae la actualización, y se puede deshacer entera.",
+              "There are uncommitted changes (or new files). Commit or discard them first: that way "
+              "`git diff` shows only what the update brings, and it can be undone entirely."))
+
+    title(L("1. Traer la última versión de andamio", "1. Fetching the latest andamio"))
+    if (UPSTREAM_CACHE / "HEAD").exists():
+        git_up("remote", "set-url", "origin", url)
+        git_up("fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/heads/*")
+    else:
+        UPSTREAM_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        git_bytes("clone", "-q", "--bare", url, str(UPSTREAM_CACHE))
+    new = git_up("rev-parse", "HEAD").strip()
+    commits = git_up("rev-list", "HEAD").split()
+    ok(f"{url} @ {new[:8]}")
+
+    title(L("2. ¿De qué versión viene tu repo?", "2. Which version does your repo come from?"))
+    base = saved.get("commit")
+    if base not in commits:
+        base = infer_base(commits)
+        ok(L(f"{base[:8]} (deducida: es la versión que más se parece a tus archivos)",
+             f"{base[:8]} (inferred: the version closest to your files)"))
+    else:
+        ok(f"{base[:8]} ({UPSTREAM_FILE.relative_to(ROOT)})")
+    if base == new:
+        ok(L("Ya estás al día.", "You're up to date."))
+        return
+
+    title(L("3. Qué trae", "3. What it brings"))
+    for line in git_up("log", "--format=%h %s", f"{base}..{new}").splitlines()[:30]:
+        mark = "\033[33m!\033[0m" if re.search(r"(?i)secur|segur|cve|vuln|fix|arregl", line) else " "
+        print(f"  {mark} {line}")
+
+    base_t, new_t = upstream_tree(base), upstream_tree(new)
+    writes: dict[str, tuple[bytes | None, str]] = {}   # ruta -> (contenido o None = borrar, modo)
+    report: dict[str, list[str]] = {k: [] for k in ("update", "add", "remove", "merged", "conflict", "kept")}
+    for path in sorted(set(base_t) | set(new_t)):
+        b, n, loc = base_t.get(path), new_t.get(path), local_blob(path)
+        bb, nb = (b[1] if b else None), (n[1] if n else None)
+        if loc == nb or bb == nb:          # ya está como upstream, o upstream no lo cambió (lo tuyo se respeta)
+            continue
+        if loc == bb:                      # no lo tocaste: va la versión nueva
+            if nb is None:
+                writes[path] = (None, "")
+                report["remove"].append(path)
+            else:
+                writes[path] = (git_bytes("cat-file", "blob", nb, cwd=UPSTREAM_CACHE), n[0])
+                report["add" if bb is None else "update"].append(path)
+        elif nb is None or loc is None:    # lo cambiaste y andamio lo quitó, o lo borraste y andamio lo cambió
+            report["kept"].append(path)
+        else:                              # cambiaron los dos: combinar
+            content, conflict = merge3(path, bb, nb)
+            writes[path] = (content, n[0])
+            report["conflict" if conflict else "merged"].append(path)
+
+    labels = {
+        "update": L("Actualizados", "Updated"), "add": L("Nuevos", "New"), "remove": L("Quitados", "Removed"),
+        "merged": L("Combinados con tus cambios", "Merged with your changes"),
+        "conflict": L("Con conflicto (tus cambios chocan con los de andamio)", "Conflicting (your changes clash with andamio's)"),
+        "kept": L("Conservados como los tienes (andamio los quitó o tú los borraste)",
+                  "Kept as you have them (andamio removed them or you deleted them)"),
+    }
+    title(L("4. Archivos", "4. Files"))
+    for key, items in report.items():
+        if items:
+            print(f"  {labels[key]} ({len(items)}):")
+            for p in items:
+                print(f"      {p}")
+    if not writes:
+        ok(L("Nada que cambiar en tus archivos.", "Nothing to change in your files."))
+    if args.check or (writes and not ask_yes(L("¿Aplicar?", "Apply?"), True)):
+        note(L("No cambié nada.", "Nothing changed."))
+        return
+
+    for path, (content, mode) in writes.items():
+        f = ROOT / path
+        if content is None:
+            f.unlink(missing_ok=True)
+            continue
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(content)
+        f.chmod(0o755 if mode == "100755" else 0o644)
+    UPSTREAM_FILE.parent.mkdir(exist_ok=True)
+    UPSTREAM_FILE.write_text(f"url {url}\ncommit {new}\n")
+
+    title(L("Listo", "Done"))
+    if report["conflict"]:
+        warn(L("Resuelve los conflictos: busca las marcas <<<<<<< y >>>>>>> en los archivos de arriba y "
+               "quédate con lo correcto de cada lado.",
+               "Resolve the conflicts: look for the <<<<<<< and >>>>>>> markers in the files above and keep "
+               "the right part of each side."))
+    note(L("""
+Revisa lo que cambió y súbelo; después aplícalo en el servidor:
+  git diff --stat          (git diff: el detalle; git reset --hard && git clean -fd: lo deshace todo)
+  git add -A && git commit -m "andamio: actualización" && git push
+  bin/andamio servidor     (aplica lo nuevo; también puedes: ansible/hl revisar, luego aplicar)""", """
+Review what changed and push it; then apply it on the server:
+  git diff --stat          (git diff: details; git reset --hard && git clean -fd: undoes it all)
+  git add -A && git commit -m "andamio: update" && git push
+  bin/andamio server       (applies what's new; or: ansible/hl check, then apply)"""))
+
+
 # ================= estado =================
 
 def port_open(ip: str, port: int, timeout: float = 3) -> bool:
@@ -1606,6 +1805,14 @@ def main() -> None:
     p_bk = sub.add_parser("backups", help=L("backups diarios cifrados fuera del servidor (B2 o S3), con prueba",
                                             "daily encrypted off-server backups (B2 or S3), tested"))
     p_bk.set_defaults(func=cmd_backups)
+    p_up = sub.add_parser("update", aliases=["actualizar"],
+                          help=L("trae mejoras y parches de andamio sin tocar tu configuración ni tus apps",
+                                 "brings in andamio's improvements and patches without touching your config or apps"))
+    p_up.add_argument("--check", action="store_true", help=L("solo muestra qué cambiaría", "only show what would change"))
+    p_up.add_argument("--from", dest="desde", metavar="URL",
+                      help=L("repo de andamio de donde traer (por defecto, el oficial)",
+                             "andamio repo to fetch from (default: the official one)"))
+    p_up.set_defaults(func=cmd_update)
     p_cert = sub.add_parser("certificado", aliases=["certificate"],
                             help=L("tu propio certificado HTTPS: ver el actual o reemplazarlo",
                                    "your own HTTPS certificate: show the current one or replace it"))

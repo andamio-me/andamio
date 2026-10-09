@@ -167,6 +167,21 @@ All in `ansible/group_vars/all.yml`:
 | `homelab_backups` | `false` (default). `bin/andamio backups` turns it on: see below |
 | `homelab_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
 
+### Updates
+
+```bash
+bin/andamio update --check   # what would change
+bin/andamio update           # apply, then: git diff, commit, push, bin/andamio server
+```
+
+Brings in andamio's improvements and security fixes without touching what's yours: your
+configuration, apps, secrets, certificate and inventory. Repos created from a template share
+no history with it, so it works file by file with a three-way merge (yours, the version you
+came from, the new one): files you never touched are updated, files only you changed are
+kept, and when both changed it merges them, leaving git-style conflict markers where your
+change and andamio's touch the same lines. It requires a clean working tree, so the whole
+update shows up in `git diff` and can be undone.
+
 ### Security check
 
 ```bash

@@ -172,6 +172,21 @@ Todo en `ansible/group_vars/all.yml`:
 | `homelab_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
 | `homelab_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
 
+### Actualizaciones
+
+```bash
+bin/andamio update --check   # qué cambiaría
+bin/andamio update           # aplicar; luego: git diff, commit, push, bin/andamio servidor
+```
+
+Trae las mejoras y los parches de seguridad de andamio sin tocar lo tuyo: tu configuración,
+tus apps, tus secretos, tu certificado y el inventario. Un repo creado desde un template no
+comparte historial con él, así que trabaja archivo por archivo con una fusión de tres vías
+(lo tuyo, la versión de la que vienes, la nueva): lo que nunca tocaste se actualiza, lo que
+solo cambiaste tú se respeta, y si cambiaron los dos lo combina, con marcas de conflicto
+como las de git donde tu cambio y el de andamio tocan las mismas líneas. Exige el árbol
+limpio, así que toda la actualización se ve en `git diff` y se puede deshacer.
+
 ### Chequeo de seguridad
 
 ```bash

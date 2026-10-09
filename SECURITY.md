@@ -29,7 +29,8 @@ andamio is maintained by one person, so timelines are best effort:
 ## Supported versions
 
 andamio is in alpha: only the latest commit on `main` gets security fixes. Instances
-created from the template should pull fixes from upstream.
+created from the template get them with `bin/andamio update`, which never touches their
+configuration, apps or secrets.
 
 ## Scope
 
