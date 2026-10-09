@@ -1202,8 +1202,11 @@ def step_bootstrap(cfg: dict, alias: str, pub: str) -> None:
                           f"That file can't log in as {initial}@{ip}: is it this VPS's key and the right user?"))
                 ok(L("El archivo .pem entra: con él instalo tu llave (y no se vuelve a usar)",
                      "The .pem file gets in: installing your key with it (it isn't used again)"))
-                done = interactive(["ssh-copy-id", "-i", pub, "-o", f"IdentityFile={pem}", "-o", "IdentitiesOnly=yes",
-                                    *target]) == 0
+                # Sin ssh-copy-id: su chequeo "¿la llave ya entra?" entraría con el .pem y no instalaría nada.
+                key = Path(pub).read_text().strip()
+                done = run(["ssh", "-i", str(pem), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", *target,
+                            'umask 077; mkdir -p ~/.ssh; k=$(cat); grep -qxF "$k" ~/.ssh/authorized_keys 2>/dev/null '
+                            '|| printf "%s\\n" "$k" >> ~/.ssh/authorized_keys'], input=key + "\n").returncode == 0
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
         else:
