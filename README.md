@@ -1,14 +1,21 @@
-# andamio
+<p align="center">
+  <img src="docs/assets/logo.svg" width="96" height="96" alt="andamio">
+</p>
 
-**A secure-by-default PaaS for a single VPS.** Take a server you just bought, harden it,
-and deploy your apps to it, each one isolated, with every change going through git.
+<h1 align="center">andamio</h1>
 
-[Español](README.es.md)
+<p align="center">
+  <b>A secure-by-default PaaS for a single VPS.</b><br>
+  Take a server you just bought, harden it, and deploy your apps to it,<br>
+  each one isolated, with every change going through git.
+</p>
+
+<p align="center"><a href="README.es.md">Español</a></p>
 
 > **Status: alpha.** andamio runs a real server in production (apps, a file-sync service,
-> monitoring, backups). The guided install from a brand-new VPS (`andamio server`) is
-> written but **has not yet been tested end-to-end on a fresh machine**. Expect rough edges.
-> The CLI currently talks in Spanish.
+> monitoring, backups) and the guided install was tested end-to-end on a fresh VPS. The
+> newest features are still being tested on fresh machines: expect rough edges. The CLI
+> speaks English and Spanish.
 
 ---
 

@@ -1,14 +1,21 @@
-# andamio
+<p align="center">
+  <img src="docs/assets/logo.svg" width="96" height="96" alt="andamio">
+</p>
 
-**Un PaaS seguro por defecto para un solo VPS.** Toma el servidor que acabas de comprar,
-lo endurece y despliega tus apps en él, cada una aislada, con cada cambio pasando por git.
+<h1 align="center">andamio</h1>
 
-[English](README.md)
+<p align="center">
+  <b>Un PaaS seguro por defecto para un solo VPS.</b><br>
+  Toma el servidor que acabas de comprar, lo endurece y despliega tus apps en él,<br>
+  cada una aislada, con cada cambio pasando por git.
+</p>
+
+<p align="center"><a href="README.md">English</a></p>
 
 > **Estado: alpha.** andamio mueve un servidor real en producción (apps, sincronización de
-> archivos, monitoreo, backups). La instalación guiada desde un VPS nuevo
-> (`andamio servidor`) está escrita pero **todavía no se probó de punta a punta en una
-> máquina limpia**. Espera asperezas.
+> archivos, monitoreo, backups) y la instalación guiada se probó de punta a punta en un VPS
+> nuevo. Las funciones más recientes todavía se están probando en máquinas limpias: espera
+> asperezas. La CLI habla español e inglés.
 
 ---
 
