@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Backup diario del homelab a B2 con restic. Lo ejecuta homelab-backup.service (root).
+# Backup diario del homelab con restic (destino: RESTIC_REPOSITORY en /etc/restic/env,
+# p. ej. B2 o S3). Lo ejecuta homelab-backup.service (root).
 set -euo pipefail
 
 set -a; . /etc/restic/env; . /etc/homelab/andamio.env; set +a
@@ -35,16 +36,19 @@ if docker ps --format '{{.Names}}' | grep -qx seafile-mysql; then
   mv "$STAGING/seafile-mysql.sql.tmp" "$STAGING/seafile-mysql.sql"
 fi
 
-echo "==> Uptime Kuma (volumen)"
-docker run --rm -v uptime-kuma_kuma_data:/data:ro -v "$STAGING":/out alpine \
-  tar czf /out/uptime-kuma.tgz -C /data .
+# Solo en el nivel de monitoreo completo (en el mínimo no hay Uptime Kuma).
+if docker volume inspect uptime-kuma_kuma_data > /dev/null 2>&1; then
+  echo "==> Uptime Kuma (volumen)"
+  docker run --rm -v uptime-kuma_kuma_data:/data:ro -v "$STAGING":/out alpine \
+    tar czf /out/uptime-kuma.tgz -C /data .
+fi
 
-echo "==> Subiendo a B2"
+echo "==> Subiendo al repositorio restic"
 # Secretos del host (el repo restic va cifrado): llaves de host SSH (el servidor
 # reconstruido conserva su huella), VPN, Telegram, deploy key del repo y login de
 # GHCR. /etc/restic no: sin su contraseña no se puede leer el repo; vive en el
 # gestor de contraseñas.
-# Cada paso contra B2 con límite de tiempo: una petición colgada (pasó el 2026-10-08,
+# Cada paso contra el destino con límite de tiempo: una petición colgada (pasó el 2026-10-08,
 # forget --prune 10 h sin salida) cuenta como fallo y avisa, en vez de bloquear las
 # noches siguientes. Duran segundos o pocos minutos; los límites sobran de largo.
 timeout 2h restic backup "$STAGING" /srv/homelab /etc/ssh /etc/wireguard /etc/homelab \

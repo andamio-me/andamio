@@ -169,8 +169,26 @@ Todo en `ansible/group_vars/all.yml`:
 | `homelab_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
 | `homelab_forge` | `github` (por defecto). Todo lo que andamio necesita de ella pasa por `bin/forge`; agregar GitLab es implementar ese archivo y su pipeline |
 | `homelab_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma) |
-| `homelab_backups` | `false` (por defecto) o `true`, con un repositorio de restic en `host/sops/restic-env.sops` |
+| `homelab_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
 | `homelab_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
+
+### Backups
+
+```bash
+bin/andamio backups
+```
+
+Pregunta dónde guardarlos (Backblaze B2 o cualquier almacenamiento compatible con S3:
+AWS, Cloudflare R2, Wasabi, MinIO), prueba el destino desde tu servidor, hace el primer
+backup en el momento y después una prueba de restauración: carga el dump en un PostgreSQL
+temporal y lo compara con producción, sin tocarla. Desde ahí, cada noche a las 03:30 UTC.
+
+- restic cifra todo en el servidor antes de subirlo: el proveedor nunca ve tus datos. La
+  contraseña del repositorio es aleatoria y vive cifrada en tu repo (sops).
+- Con B2, andamio puede crear la llave del servidor **sin permiso de borrar**, limitada a
+  un bucket (necesita tu master key una vez y no la guarda). Quien tome el servidor no
+  puede borrar tus backups.
+- Se guardan 7 diarios, 4 semanales y 6 mensuales.
 
 ### Tu propio certificado
 
@@ -236,7 +254,8 @@ seguridad en el CI (0021) y apps de cualquier lenguaje (0022).
 - [ ] La misma prueba en más proveedores (Hetzner, DigitalOcean, Oracle, AWS)
 - [ ] GitLab además de GitHub (repos, registro de imágenes y pipeline)
 - [ ] CLI en inglés
-- [ ] Configuración guiada de backups y Telegram (`andamio backups`, `andamio telegram`)
+- [x] Backups guiados (`andamio backups`)
+- [ ] Alertas por Telegram guiadas (`andamio telegram`)
 - [ ] Entornos de preview por pull request
 
 ## Licencia

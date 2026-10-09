@@ -5,6 +5,8 @@
                     (parte 1: solo en tu máquina; no toca ningún servidor)
   andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
                     VPN, llave del repo, registro de imágenes y los stacks (parte 2; se puede repetir)
+  andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
+                    configura, hace el primero y prueba que se puede restaurar
   andamio certificado [cert llave]
                     tu propio certificado HTTPS (homelab_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
@@ -409,8 +411,8 @@ custom: tu propio certificado (de una CA comercial, o un Origin Certificate de C
     note("""
 Monitoreo: "auto" elige según la RAM del VPS (completo con 3 GB o más: métricas, logs,
   Grafana con alertas y Uptime Kuma; mínimo: solo métricas, ~115 MiB).
-Backups y alertas por Telegram necesitan cuentas en otros servicios: se activan después.
-  Sin backups, tus datos solo viven en el VPS.""")
+Backups: después de preparar el servidor, con bin/andamio backups (B2 o S3, guiado).
+  Sin backups, tus datos solo viven en el VPS. Alertas por Telegram: se activan después.""")
     a["monitoring"] = ask("Monitoreo (auto/minimo/completo)", "auto",
                           lambda v: None if v in ("auto", "minimo", "completo") else "auto, minimo o completo.")
     return a
@@ -470,7 +472,7 @@ homelab_registry: {forge_out('registry')}          # registro de las imágenes d
 homelab_github_owner: {a['owner']}
 homelab_repo: git@github-homelab-infra:{a['repo']}.git
 homelab_monitoring: {a['monitoring']}
-homelab_backups: false              # se activa con su configuración (destino de restic)
+homelab_backups: false              # se activa con bin/andamio backups
 homelab_telegram: false             # se activa con su configuración (bot y chat)
 """)
 
@@ -584,9 +586,9 @@ def sudo_password_file(cfg: dict, alias: str) -> Path:
         return _SUDO_FILE
     user = cfg["homelab_user"]
     note(f"""
-Ansible necesita la contraseña de sudo de tu usuario '{user}' en el servidor
-({cfg['homelab_server_ip']}): la que inventaste en el paso 3, cuando bootstrap la pidió dos
-veces. Se pide una sola vez para todo lo que sigue.""")
+andamio necesita la contraseña de sudo de tu usuario '{user}' en el servidor
+({cfg['homelab_server_ip']}): la que le pusiste al crearlo (si lo creó andamio servidor,
+fue en su paso 3, donde se pidió dos veces). Se pide una sola vez para todo lo que sigue.""")
     for intento in range(3):
         pw = getpass.getpass(f"  Contraseña de sudo de '{user}': ")
         if remote(alias, "sudo -S -p '' -v", stdin=pw + "\n").returncode == 0:
@@ -599,6 +601,20 @@ veces. Se pide una sola vez para todo lo que sigue.""")
         warn(f"No es la contraseña de sudo de '{user}' ({2 - intento} intentos más).")
     die(f"No pude verificar la contraseña de '{user}'. Si la perdiste: entra con la consola web de tu "
         f"proveedor como root y cámbiala con `passwd {user}`.")
+
+
+def wipe_sudo() -> None:
+    if _SUDO_FILE:
+        _SUDO_FILE.write_text("\0" * 64)
+        shutil.rmtree(_SUDO_FILE.parent, ignore_errors=True)
+
+
+def remote_sudo(cfg: dict, alias: str, cmd: str) -> int:
+    """Corre un comando con sudo en el servidor, mostrando su salida en vivo. La contraseña
+    (ya verificada) entra por stdin, nunca en la línea de comandos."""
+    pw = sudo_password_file(cfg, alias).read_text()
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", alias, f"sudo -S -p '' {cmd}"],
+                          input=pw + "\n", text=True, check=False).returncode
 
 
 def ansible(args: list[str], cfg: dict, alias: str) -> int:
@@ -897,14 +913,270 @@ def cmd_servidor(args: argparse.Namespace) -> None:
         step_registry(cfg, alias, token)
         step_platform(cfg, alias)
     finally:
-        if _SUDO_FILE:
-            _SUDO_FILE.write_text("\0" * 64)
-            shutil.rmtree(_SUDO_FILE.parent, ignore_errors=True)
+        wipe_sudo()
     title("Listo: tu VPS está seguro y preparado")
     note(f"""
 VPN: importa ~/andamio-vpn/mi-pc.conf en WireGuard (paneles privados solo por VPN).
 Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
 Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta""")
+
+
+# ================= backups =================
+
+RESTIC_ENV = ROOT / "host" / "sops" / "restic-env.sops"
+RESTIC_PW = ROOT / "host" / "sops" / "restic-password.sops"
+# La llave de B2 que crea andamio: un solo bucket y SIN deleteFiles. restic "oculta" en
+# vez de borrar, así que quien tome el servidor no puede borrar tus backups (ADR 0014).
+B2_CAPS = ["listBuckets", "listFiles", "readFiles", "writeFiles"]
+
+
+def server_alias() -> str:
+    """El alias SSH del servidor: el primer host del inventario (lo crea andamio servidor)."""
+    import yaml
+    if not INVENTORY.exists():
+        die("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.")
+    hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["homelab"]["hosts"]
+    return next(iter(hosts))
+
+
+def sops_read(path: Path) -> str:
+    r = run(["sops", "decrypt", "--input-type", "json", "--output-type", "binary", str(path)], cwd=ROOT)
+    if r.returncode != 0:
+        die(f"sops no pudo descifrar {path.relative_to(ROOT)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def encrypt_binary(path: Path, content: str) -> None:
+    """Cifra un archivo entero con sops (como los demás secretos del host). El texto en claro
+    vive solo en una carpeta 0700 y se sobreescribe antes de borrarse."""
+    rel = path.relative_to(ROOT)
+    tmp = Path(tempfile.mkdtemp(prefix="andamio-"))
+    plain = tmp / "secreto"
+    try:
+        plain.write_text(content)
+        plain.chmod(0o600)
+        r = run(["sops", "encrypt", "--input-type", "binary", "--output-type", "json",
+                 "--filename-override", str(rel), str(plain)], cwd=ROOT)
+        if r.returncode != 0:
+            die(f"sops no pudo cifrar {rel}: {r.stderr.strip()}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(r.stdout)
+        ok(f"{rel} (cifrado)")
+    finally:
+        plain.write_bytes(b"\0" * 256)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def b2_api(url: str, body: dict | None = None, token: str | None = None,
+           basic: tuple[str, str] | None = None) -> tuple[int, dict]:
+    import base64
+    import json
+    import urllib.error
+    import urllib.request
+    headers = {"User-Agent": "andamio"}
+    if token:
+        headers["Authorization"] = token
+    if basic:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{basic[0]}:{basic[1]}".encode()).decode()
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=20) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except ValueError:
+            return e.code, {}
+    except OSError as e:
+        return 0, {"message": str(e)}
+
+
+def b2_authorize(key_id: str, key: str) -> tuple[dict | None, str | None]:
+    code, d = b2_api("https://api.backblazeb2.com/b2api/v3/b2_authorize_account", basic=(key_id, key))
+    if code == 200:
+        return d, None
+    if code == 401:
+        return None, "Backblaze no reconoce ese keyID con esa llave (¿mal copiados, o es de otra cuenta?)."
+    return None, f"No pude comprobarla con Backblaze ({code or d.get('message')})."
+
+
+def ask_b2(cfg: dict) -> tuple[str, dict]:
+    note("""
+Backblaze B2: 10 GB gratis, luego unos 6 USD por TB al mes.
+1. En https://secure.backblaze.com/b2_buckets.htm  → Create a Bucket:
+     nombre único (ej. andamio-backups-<algo tuyo>), Files: Private,
+     Object Lock: Enable (recomendado: protege los backups aunque alguien tome el servidor).
+2. La llave que usará el servidor la puede crear andamio, SIN permiso de borrar y solo
+   para ese bucket. Para eso necesita tu Master Application Key una vez (App Keys →
+   Generate New Master Application Key): no se guarda y solo viaja a Backblaze.""")
+    bucket = ask("Nombre del bucket", check=lambda v: None if re.fullmatch(r"[A-Za-z0-9-]{6,50}", v)
+                 else "Entre 6 y 50 letras, números o guiones.")
+    if ask_yes("¿Creo la llave sin permiso de borrar con tu master key? (recomendado)", True):
+        master_id = ask("Master keyID (keyID de la master key)")
+        auth = {}
+
+        def master_problem(k: str) -> str | None:
+            d, error = b2_authorize(master_id, k)
+            auth.update(d or {})
+            return error
+        ask_secret("Master applicationKey (no se ve al escribir)", master_problem)
+        api, token = auth["apiInfo"]["storageApi"]["apiUrl"], auth["authorizationToken"]
+        code, d = b2_api(f"{api}/b2api/v3/b2_list_buckets", {"accountId": auth["accountId"], "bucketName": bucket}, token)
+        if code != 200 or not d.get("buckets"):
+            die(f"No existe el bucket '{bucket}' en tu cuenta de Backblaze. Créalo y vuelve a correr `andamio backups`.")
+        name = f"andamio-{cfg.get('homelab_hostname', 'servidor')}"
+        code, key = b2_api(f"{api}/b2api/v3/b2_create_key", {
+            "accountId": auth["accountId"], "keyName": name, "bucketId": d["buckets"][0]["bucketId"],
+            "capabilities": B2_CAPS}, token)
+        if code != 200:
+            die(f"Backblaze no creó la llave: {key.get('message', code)}")
+        auth.clear()
+        ok(f"Llave '{name}' creada: solo el bucket {bucket}, sin permiso de borrar")
+        key_id, app_key = key["applicationKeyId"], key["applicationKey"]
+    else:
+        note("""
+Crea en App Keys → Add a New Application Key una llave con acceso SOLO a ese bucket.""")
+        key_id = ask("keyID de esa llave")
+        caps: dict = {}
+
+        def key_problem_b2(k: str) -> str | None:
+            d, error = b2_authorize(key_id, k)
+            caps.update((d or {}).get("apiInfo", {}).get("storageApi", {}))
+            return error
+        app_key = ask_secret("applicationKey (no se ve al escribir)", key_problem_b2)
+        allowed = [b.get("name") for b in caps.get("allowed", {}).get("buckets") or []]
+        if bucket not in allowed:
+            warn(f"Esa llave no está limitada al bucket {bucket} (puede ver: {', '.join(filter(None, allowed)) or 'todos'}).")
+        if "deleteFiles" in caps.get("allowed", {}).get("capabilities", caps.get("capabilities", [])):
+            warn("Esa llave PUEDE BORRAR: si alguien toma el servidor, puede borrar tus backups. "
+                 "Mejor deja que andamio cree una sin ese permiso (vuelve a correr y responde s).")
+        if not ask_yes("¿Usarla igual?", False):
+            die("Cancelado: no cambié nada.")
+    return (f"b2:{bucket}:{cfg.get('homelab_hostname', 'andamio')}",
+            {"B2_ACCOUNT_ID": key_id, "B2_ACCOUNT_KEY": app_key})
+
+
+def ask_s3(cfg: dict) -> tuple[str, dict]:
+    note("""
+Cualquier almacenamiento compatible con S3. Crea un bucket PRIVADO y una llave de acceso
+limitada a ese bucket (si el proveedor lo permite, sin permiso de borrar y con
+versionado u Object Lock). Endpoints:
+  AWS S3:         s3.<región>.amazonaws.com        (ej. s3.us-east-1.amazonaws.com)
+  Cloudflare R2:  <id de tu cuenta>.r2.cloudflarestorage.com   (10 GB gratis)
+  Wasabi:         s3.<región>.wasabisys.com
+La llave se prueba desde tu servidor en el paso siguiente.""")
+    endpoint = ask("Endpoint", check=lambda v: None if re.fullmatch(r"(https?://)?[A-Za-z0-9.-]+(:\d+)?/?", v)
+                   else "Solo el host (ej. s3.us-east-1.amazonaws.com).")
+    endpoint = re.sub(r"^https?://", "", endpoint).rstrip("/")
+    bucket = ask("Nombre del bucket", check=lambda v: None if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", v)
+                 else "Minúsculas, números, puntos y guiones (3-63).")
+    m = re.match(r"s3[.-]([a-z0-9-]+)\.amazonaws\.com$", endpoint)
+    region = ask("Región", m.group(1) if m else "auto")
+    key_id = ask("Access Key ID")
+    secret = ask_secret("Secret Access Key (no se ve al escribir)",
+                        lambda v: None if len(v) >= 16 else "Muy corta para ser una Secret Access Key.")
+    return (f"s3:https://{endpoint}/{bucket}/{cfg.get('homelab_hostname', 'andamio')}",
+            {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": secret, "AWS_DEFAULT_REGION": region})
+
+
+def restic_probe(alias: str, repo: str, env: dict, password: str) -> tuple[str, str]:
+    """Prueba el destino DESDE el servidor (allí corre restic) y crea el repositorio si no
+    existe. Los secretos van en el script por stdin: ni en disco ni en la línea de comandos."""
+    import shlex
+    exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in {**env, "RESTIC_REPOSITORY": repo,
+                                                           "RESTIC_PASSWORD": password}.items())
+    r = remote(alias, f"""export {exports}
+if out=$(timeout 60 restic cat config 2>&1 > /dev/null); then echo ANDAMIO:EXISTE; exit 0; fi
+case "$out" in *"wrong password"*|*"no key found"*) echo ANDAMIO:CLAVE; exit 0 ;; esac
+if out=$(timeout 120 restic init 2>&1); then echo ANDAMIO:CREADO; exit 0; fi
+echo ANDAMIO:ERROR; printf '%s\\n' "$out" | tail -n 4
+""")
+    lines = (r.stdout + r.stderr).strip().splitlines()
+    status = next((x.split(":", 1)[1] for x in lines if x.startswith("ANDAMIO:")), "ERROR")
+    return status, "\n".join(x for x in lines if not x.startswith("ANDAMIO:"))
+
+
+def cmd_backups(args: argparse.Namespace) -> None:
+    print("\033[1mandamio backups\033[0m: backups diarios, cifrados y fuera del servidor. "
+          "Se puede volver a correr: retoma donde quedó.")
+    check_tools()
+    cfg = load_config()
+    alias = server_alias()
+    if not ssh_ok([alias]):
+        die(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.")
+    note("""
+Qué se guarda, cada noche (03:30 UTC): las bases de datos (PostgreSQL y Redis), los datos
+de tus apps y la plataforma (/srv/homelab), y lo necesario para reconstruir el servidor
+igual (llaves SSH, VPN, secretos del host). restic lo cifra EN el servidor antes de
+enviarlo: el destino nunca ve tus datos. Se guardan 7 diarios, 4 semanales y 6 mensuales.""")
+
+    if RESTIC_ENV.exists() and RESTIC_PW.exists():
+        title("1-3. Destino")
+        ok(f"Ya configurado ({RESTIC_ENV.relative_to(ROOT)})")
+    else:
+        title("1. ¿Dónde se guardan?")
+        kind = ask("Destino (b2/s3)", "b2", lambda v: None if v in ("b2", "s3") else "b2 o s3.")
+        repo, env = ask_b2(cfg) if kind == "b2" else ask_s3(cfg)
+
+        title("2. Contraseña del repositorio")
+        if RESTIC_PW.exists():
+            password = sops_read(RESTIC_PW).strip()
+            ok(f"Uso la de {RESTIC_PW.relative_to(ROOT)}")
+        else:
+            password = secrets.token_urlsafe(32)
+            note("""
+Aleatoria y cifrada con sops en tu repo: no la ves ni la necesitas escribir. Para leerla
+hace falta tu llave age, así que guarda esa llave fuera de esta máquina (gestor de
+contraseñas): sin ella, nadie (tú tampoco) puede abrir los backups.""")
+
+        title("3. Probar el destino desde el servidor")
+        status, detail = restic_probe(alias, repo, env, password)
+        if status == "CLAVE":
+            warn(f"Ya hay un repositorio de backups en {repo}, con otra contraseña.")
+            if not ask_yes("¿Es tuyo (de una instalación anterior) y tienes su contraseña?", False):
+                die("Usa otro bucket (o borra ese repositorio) y vuelve a correr `andamio backups`.")
+            password = ask_secret("Contraseña de ese repositorio (no se ve al escribir)",
+                                  lambda p: None if restic_probe(alias, repo, env, p)[0] == "EXISTE"
+                                  else "No abre ese repositorio.")
+            status = "EXISTE"
+        if status == "ERROR":
+            die(f"El servidor no pudo usar ese destino:\n{detail}\nRevisa el bucket y la llave, y vuelve a correr.")
+        ok("Repositorio creado" if status == "CREADO" else "Repositorio existente: se sigue usando")
+        encrypt_binary(RESTIC_PW, password + "\n")
+        encrypt_binary(RESTIC_ENV, "".join(f"{k}={v}\n" for k, v in {
+            "RESTIC_REPOSITORY": repo, "RESTIC_PASSWORD_FILE": "/etc/restic/password", **env}.items()))
+        del password, env
+
+    if str(cfg.get("homelab_backups")).lower() != "true":
+        set_config("homelab_backups", "true")
+        ok("homelab_backups: true")
+    step_repo_pushed()
+
+    title("5. Activar en el servidor")
+    try:
+        if ansible(["site.yml", "--tags", "homelab"], cfg, alias) != 0:
+            die("No se pudo activar (el detalle está arriba). Corrígelo y vuelve a correr `andamio backups`.")
+        ok("Backup diario programado")
+
+        title("6. Primer backup (ahora)")
+        note("Puede tardar unos minutos la primera vez.")
+        if remote_sudo(cfg, alias, "systemctl start homelab-backup.service") != 0:
+            remote_sudo(cfg, alias, "journalctl -u homelab-backup.service -n 25 --no-pager")
+            die("El backup falló (el detalle está arriba).")
+        ok("Primer backup hecho")
+
+        title("7. Prueba de restauración")
+        note("Restaura el backup en una base temporal y la compara con producción (no toca nada).")
+        if remote_sudo(cfg, alias, f"{cfg.get('homelab_root', '/srv/homelab')}/infra/scripts/restore-check.sh") != 0:
+            die("La prueba de restauración encontró diferencias (arriba). Tus backups existen, pero revísalo.")
+    finally:
+        wipe_sudo()
+
+    title("Listo: tus datos tienen copia fuera del servidor")
+    note(f"""
+Cada noche a las 03:30 UTC. Con Telegram activado (homelab_telegram) te avisa del
+resultado; si no, revísalo de vez en cuando:  ssh {alias} systemctl status homelab-backup
+Para reconstruir todo en otro servidor: docs/runbooks/reconstruir-servidor.md""")
 
 
 def cmd_certificado(args: argparse.Namespace) -> None:
@@ -964,6 +1236,8 @@ def main() -> None:
     p_init.set_defaults(func=cmd_init)
     p_srv = sub.add_parser("servidor", aliases=["server"], help="prepara el VPS (parte 2; se puede repetir)")
     p_srv.set_defaults(func=cmd_servidor)
+    p_bk = sub.add_parser("backups", help="backups diarios cifrados fuera del servidor (B2 o S3), con prueba")
+    p_bk.set_defaults(func=cmd_backups)
     p_cert = sub.add_parser("certificado", aliases=["certificate"],
                             help="tu propio certificado HTTPS: ver el actual o reemplazarlo")
     p_cert.add_argument("cert", nargs="?", help="certificado PEM (con los intermedios de tu CA)")

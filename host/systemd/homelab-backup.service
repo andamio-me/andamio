@@ -1,5 +1,5 @@
 [Unit]
-Description=Backup del homelab a B2 (restic)
+Description=Backup del homelab (restic)
 Wants=network-online.target
 After=network-online.target docker.service
 

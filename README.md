@@ -164,8 +164,26 @@ All in `ansible/group_vars/all.yml`:
 | `homelab_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider), `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) or `custom` (your own certificate, see below) |
 | `homelab_forge` | `github` (default). Everything andamio needs from it goes through `bin/forge`; adding GitLab means implementing that one file plus its pipeline |
 | `homelab_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma) |
-| `homelab_backups` | `false` (default) or `true` with a restic repository in `host/sops/restic-env.sops` |
+| `homelab_backups` | `false` (default). `bin/andamio backups` turns it on: see below |
 | `homelab_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
+
+### Backups
+
+```bash
+bin/andamio backups
+```
+
+Asks where to store them (Backblaze B2 or any S3-compatible storage: AWS, Cloudflare R2,
+Wasabi, MinIO), tests the destination from your server, runs the first backup right away
+and then a restore test: it restores the dump into a temporary PostgreSQL and compares it
+with production, without touching it. After that, every night at 03:30 UTC.
+
+- restic encrypts everything on the server before upload: the storage provider never sees
+  your data. The repository password is random and lives encrypted in your repo (sops).
+- With B2, andamio can create the server's key **without delete permission**, limited to
+  one bucket (it needs your master key once and doesn't keep it). Whoever takes over the
+  server can't delete your backups.
+- Kept: 7 daily, 4 weekly, 6 monthly.
 
 ### Your own certificate
 
@@ -228,7 +246,8 @@ gates (0021), and apps in any language (0022).
 - [ ] The same test on more providers (Hetzner, DigitalOcean, Oracle, AWS)
 - [ ] GitLab as well as GitHub (repos, image registry and pipeline)
 - [ ] CLI in English
-- [ ] Guided setup for backups and Telegram (`andamio backups`, `andamio telegram`)
+- [x] Guided backups (`andamio backups`)
+- [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request
 
 ## License
