@@ -44,6 +44,14 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "ansible" / "group_vars" / "all.yml"
 
 
+# Idioma: el que decidió bin/andamio (ANDAMIO_LANG), o el del sistema.
+LANG = "es" if (os.environ.get("ANDAMIO_LANG") or os.environ.get("LANG") or "").lower().startswith("es") else "en"
+
+
+def L(es: str, en: str) -> str:
+    return es if LANG == "es" else en
+
+
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=False, text=True, capture_output=True, **kw)
 
@@ -84,7 +92,7 @@ class GitHub:
             if self.gh("api", f"repos/{repo}/branches/main").returncode == 0:
                 return
             time.sleep(2)
-        fail(f"{repo} se creó, pero main no apareció en 30 s")
+        fail(L(f"{repo} se creó, pero main no apareció en 30 s", f"{repo} was created, but main didn't show up in 30 s"))
 
     def clone_url(self, repo: str) -> str:
         return f"git@github.com:{repo}.git"
@@ -95,7 +103,7 @@ class GitHub:
     def known_hosts(self) -> str:
         r = self.gh("api", "meta", "-q", '.ssh_keys[] | "github.com " + .')
         if "github.com ssh-" not in r.stdout:
-            fail("No pude leer las llaves de host de GitHub (gh api meta).")
+            fail(L("No pude leer las llaves de host de GitHub (gh api meta).", "Couldn't read GitHub's host keys (gh api meta)."))
         return r.stdout.strip()
 
     def deploy_key_has(self, repo: str, title: str, pubfile: str | None = None) -> bool:
@@ -163,7 +171,7 @@ jobs:
     def ci_watch(self) -> int:
         r = self.gh("run", "list", "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId")
         if not r.stdout.strip():
-            fail("Este repo no tiene corridas de CI todavía.")
+            fail(L("Este repo no tiene corridas de CI todavía.", "This repo has no CI runs yet."))
         return subprocess.run(["gh", "run", "watch", r.stdout.strip(), "--exit-status"], check=False).returncode
 
     def registry(self) -> str:
@@ -173,27 +181,32 @@ jobs:
         return "GHCR"
 
     def registry_token_help(self) -> str:
-        return """Las imágenes de tus apps son privadas: el servidor necesita un token de GitHub de solo
+        return L("""Las imágenes de tus apps son privadas: el servidor necesita un token de GitHub de solo
 lectura de paquetes. Créalo en  https://github.com/settings/tokens/new  (classic):
   - Note: andamio-server   - Expiration: la que prefieras
   - Scope: SOLO read:packages
-y pégalo aquí (no se muestra ni queda en el historial)."""
+y pégalo aquí (no se muestra ni queda en el historial).""", """Your apps' images are private: the server needs a GitHub token that can only read
+packages. Create it at  https://github.com/settings/tokens/new  (classic):
+  - Note: andamio-server   - Expiration: whatever you prefer
+  - Scope: ONLY read:packages
+and paste it here (it isn't shown or kept in your history).""")
 
     def registry_token_check(self, token: str) -> str | None:
         if not re.fullmatch(r"gh[pousr]_[A-Za-z0-9]{20,}", token):
-            return "Eso no parece un token de GitHub (empiezan con ghp_)."
+            return L("Eso no parece un token de GitHub (empiezan con ghp_).", "That doesn't look like a GitHub token (they start with ghp_).")
         req = urllib.request.Request("https://api.github.com/user", headers={
             "Authorization": f"Bearer {token}", "User-Agent": "andamio", "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 scopes = resp.headers.get("X-OAuth-Scopes", "")
         except urllib.error.HTTPError as e:
-            return ("GitHub dice que ese token no es válido (¿revocado o mal copiado?)." if e.code == 401
-                    else f"No pude comprobarlo con GitHub (HTTP {e.code}).")
+            return (L("GitHub dice que ese token no es válido (¿revocado o mal copiado?).",
+                      "GitHub says that token isn't valid (revoked or mistyped?).") if e.code == 401
+                    else L(f"No pude comprobarlo con GitHub (HTTP {e.code}).", f"Couldn't check it with GitHub (HTTP {e.code})."))
         except OSError as e:
-            return f"No pude comprobarlo con GitHub ({e})."
+            return L(f"No pude comprobarlo con GitHub ({e}).", f"Couldn't check it with GitHub ({e}).")
         if not {s.strip() for s in scopes.split(",")} & {"read:packages", "write:packages"}:
-            return "Al token le falta el permiso read:packages."
+            return L("Al token le falta el permiso read:packages.", "The token is missing the read:packages permission.")
         return None
 
 
@@ -207,8 +220,8 @@ def current() -> GitHub:
         name = (yaml.safe_load(CONFIG.read_text()) or {}).get("homelab_forge")
     name = name or "github"
     if name not in FORGES:
-        fail(f"homelab_forge: {name} no está soportada (hoy: {', '.join(FORGES)}). "
-             "GitLab está en la hoja de ruta.")
+        fail(L(f"homelab_forge: {name} no está soportada (hoy: {', '.join(FORGES)}). GitLab está en la hoja de ruta.",
+               f"homelab_forge: {name} isn't supported (today: {', '.join(FORGES)}). GitLab is on the roadmap."))
     return FORGES[name]()
 
 
@@ -221,7 +234,7 @@ def main() -> None:
 
     def need(n: int) -> list[str]:
         if len(rest) != n:
-            fail(f"uso: forge {cmd} " + " ".join(["ARG"] * n), 2)
+            fail(L("uso", "usage") + f": forge {cmd} " + " ".join(["ARG"] * n), 2)
         return rest
 
     exit_bool = {
@@ -264,7 +277,7 @@ def main() -> None:
         if problem:
             fail(problem)
     else:
-        fail(f"forge: subcomando desconocido '{cmd}' (forge --help)", 2)
+        fail(L(f"forge: subcomando desconocido '{cmd}' (forge --help)", f"forge: unknown subcommand '{cmd}' (forge --help)"), 2)
 
 
 if __name__ == "__main__":

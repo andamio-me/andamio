@@ -259,7 +259,8 @@ gates (0021), and apps in any language (0022).
 - [x] End-to-end test on a fresh VPS (Azure, 1 vCPU and 1 GB)
 - [ ] The same test on more providers (Hetzner, DigitalOcean, Oracle, AWS)
 - [ ] GitLab as well as GitHub (repos, image registry and pipeline)
-- [ ] CLI in English
+- [x] CLI in English and Spanish (`ANDAMIO_LANG=es` for Spanish; it follows `LANG` otherwise)
+- [ ] Ansible task names in English (today they're in Spanish)
 - [x] Guided backups (`andamio backups`)
 - [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request

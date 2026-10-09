@@ -268,7 +268,8 @@ seguridad en el CI (0021) y apps de cualquier lenguaje (0022).
 - [x] Prueba de punta a punta en un VPS nuevo (Azure, 1 vCPU y 1 GB)
 - [ ] La misma prueba en más proveedores (Hetzner, DigitalOcean, Oracle, AWS)
 - [ ] GitLab además de GitHub (repos, registro de imágenes y pipeline)
-- [ ] CLI en inglés
+- [x] CLI en inglés y español (`ANDAMIO_LANG=es` para español; si no, sigue a `LANG`)
+- [ ] Nombres de las tareas de Ansible en inglés (hoy están en español)
 - [x] Backups guiados (`andamio backups`)
 - [ ] Alertas por Telegram guiadas (`andamio telegram`)
 - [ ] Entornos de preview por pull request

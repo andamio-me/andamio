@@ -2,19 +2,29 @@
 # Atajos para el playbook del servidor. Guarda la salida completa en /tmp/hl.log
 # y muestra solo lo que cambia (o cambiaría) y el resumen.
 #
-#   ./hl revisar [rol]   simula, no toca nada   (--check --diff)
-#   ./hl aplicar [rol]   aplica los cambios
+#   ./hl revisar [rol]   simula, no toca nada   (--check --diff)      (en inglés: check)
+#   ./hl aplicar [rol]   aplica los cambios                           (en inglés: apply)
 #
 # [rol]: base, ssh, firewall, docker, wireguard, homelab, secretos (por defecto: todos)
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH=$HOME/.local/bin:$PATH
 
+# Idioma: ANDAMIO_LANG (o LANG) que empiece con "es" = español; si no, inglés.
+LNG=en; [[ ${ANDAMIO_LANG:-${LANG:-}} == es* ]] && LNG=es
+L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
 modo=${1:-}; rol=${2:-}
 case $modo in
-  revisar) extra=(--check --diff) ;;
-  aplicar) extra=() ;;
-  *) sed -n '2,8p' "$0"; exit 1 ;;
+  revisar|check) extra=(--check --diff) ;;
+  aplicar|apply) extra=() ;;
+  *) L "  ./hl revisar [rol]   simula, no toca nada
+  ./hl aplicar [rol]   aplica los cambios
+  [rol]: base, ssh, firewall, docker, wireguard, homelab, secretos (por defecto: todos)
+" "  ./hl check [role]   dry run, changes nothing
+  ./hl apply [role]   applies the changes
+  [role]: base, ssh, firewall, docker, wireguard, homelab, secretos (default: all)
+"; exit 1 ;;
 esac
 tags=(); [ -n "$rol" ] && tags=(--tags "$rol")
 
@@ -25,17 +35,17 @@ server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory
 if [ -z "${ANSIBLE_BECOME_PASSWORD_FILE:-}" ]; then
   pwfile=$(mktemp); trap 'rm -f "$pwfile"' EXIT
   for i in 1 2 3; do
-    read -rsp "Contraseña de sudo de '$user' en el servidor ($server): " pw; echo
+    read -rsp "$(L "Contraseña de sudo de '$user' en el servidor ($server): " "Sudo password for '$user' on the server ($server): ")" pw; echo
     if printf '%s\n' "$pw" | ssh "$server" "sudo -S -p '' -v" 2> /dev/null; then
       printf '%s' "$pw" > "$pwfile"; break
     fi
-    [ "$i" = 3 ] && { echo "✗ Contraseña incorrecta 3 veces" >&2; exit 1; }
-    echo "✗ Incorrecta, intenta de nuevo"
+    [ "$i" = 3 ] && { L "✗ Contraseña incorrecta 3 veces" "✗ Wrong password 3 times" >&2; echo >&2; exit 1; }
+    L "✗ Incorrecta, intenta de nuevo" "✗ Wrong, try again"; echo
   done
   unset pw
   export ANSIBLE_BECOME_PASSWORD_FILE=$pwfile
 fi
-echo "Log completo: /tmp/hl.log"
+L "Log completo: /tmp/hl.log" "Full log: /tmp/hl.log"; echo
 ansible-playbook site.yml "${extra[@]}" "${tags[@]}" 2>&1 | tee /tmp/hl.log \
   | grep --line-buffered -E "^(TASK|changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok=" \
   | grep --line-buffered -E -B1 "^(changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok="

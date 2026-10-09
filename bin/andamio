@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""andamio: prepara tu configuración y tu VPS.
+"""andamio: prepara tu configuración y tu VPS / sets up your configuration and your VPS.
 
   andamio init      preguntas guiadas -> configuración, llave de cifrado y secretos
                     (parte 1: solo en tu máquina; no toca ningún servidor)
@@ -15,6 +15,9 @@
 
 Todo lo que genera queda en este repo (cifrado donde corresponde). Nada se sobreescribe:
 si un archivo ya existe, se respeta.
+
+Idioma: español si ANDAMIO_LANG (o LANG) empieza con "es"; si no, inglés. Cada mensaje
+tiene sus dos versiones juntas: L("español", "English").
 """
 from __future__ import annotations
 
@@ -43,6 +46,24 @@ DEFAULT_ALIAS = "andamio"
 TLS_CERT = ROOT / "host" / "tls" / "cert.pem"          # público: va en claro
 TLS_KEY = ROOT / "host" / "sops" / "tls-key.sops"      # privada: cifrada
 CERT_WARN_DAYS = 30
+
+
+# ---------- idioma ----------
+
+def _lang() -> str:
+    for var in ("ANDAMIO_LANG", "LC_ALL", "LC_MESSAGES", "LANG"):
+        if os.environ.get(var):
+            return "es" if os.environ[var].lower().startswith("es") else "en"
+    return "en"
+
+
+LANG = _lang()
+os.environ["ANDAMIO_LANG"] = LANG     # bin/forge y los scripts lo heredan
+
+
+def L(es: str, en: str) -> str:
+    return es if LANG == "es" else en
+
 
 # Herramientas que necesitas en TU máquina, y cómo instalarlas.
 TOOLS = {
@@ -87,17 +108,20 @@ def ask(question: str, default: str | None = None, check=None, hint: str = "") -
         try:
             value = input(f"  {question}{suffix}: ").strip()
         except EOFError:
-            die("Entrada terminada antes de responder todo.")
+            die(L("Entrada terminada antes de responder todo.", "Input ended before all questions were answered."))
         value = value or (default or "")
-        error = check(value) if check else (None if value else "No puede quedar vacío.")
+        error = check(value) if check else (None if value else L("No puede quedar vacío.", "It can't be empty."))
         if not error:
             return value
         warn(error + (f" {hint}" if hint else ""))
 
 
 def ask_yes(question: str, default: bool) -> bool:
-    answer = ask(question, "s" if default else "n", lambda v: None if v.lower() in ("s", "si", "sí", "n", "no") else "Responde s o n.")
-    return answer.lower().startswith("s")
+    yes, no = L("s", "y"), "n"
+    answer = ask(question, yes if default else no,
+                 lambda v: None if v.lower() in ("s", "si", "sí", "y", "yes", "n", "no")
+                 else L("Responde s o n.", "Answer y or n."))
+    return answer.lower()[0] in ("s", "y")
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -112,7 +136,7 @@ def forge(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
 def forge_out(*args: str) -> str:
     r = forge(*args)
     if r.returncode != 0:
-        die(r.stderr.strip() or f"forge {args[0]} falló")
+        die(r.stderr.strip() or L(f"forge {args[0]} falló", f"forge {args[0]} failed"))
     return r.stdout.strip()
 
 
@@ -122,31 +146,34 @@ def check_ip(v: str):
     try:
         ip = ipaddress.ip_address(v)
     except ValueError:
-        return "No es una IP válida."
+        return L("No es una IP válida.", "That's not a valid IP.")
     if ip.version != 4 or ip.is_private or ip.is_loopback:
-        return "Tiene que ser la IPv4 pública del VPS."
+        return L("Tiene que ser la IPv4 pública del VPS.", "It must be the VPS's public IPv4.")
     return None
 
 
 def check_domain(v: str):
-    return None if re.fullmatch(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}", v) else "Dominio inválido (ej. midominio.com)."
+    return None if re.fullmatch(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}", v) \
+        else L("Dominio inválido (ej. midominio.com).", "Invalid domain (e.g. mydomain.com).")
 
 
 def check_email(v: str):
-    return None if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v) else "Email inválido."
+    return None if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v) else L("Email inválido.", "Invalid email.")
 
 
 def check_user(v: str):
     if v == "root":
-        return "No uses root: el punto es entrar con un usuario propio."
-    return None if re.fullmatch(r"[a-z][a-z0-9-]{1,30}", v) else "Minúsculas, números y guiones (2-31)."
+        return L("No uses root: el punto es entrar con un usuario propio.",
+                 "Don't use root: the point is to log in with your own user.")
+    return None if re.fullmatch(r"[a-z][a-z0-9-]{1,30}", v) \
+        else L("Minúsculas, números y guiones (2-31).", "Lowercase letters, digits and hyphens (2-31).")
 
 
 def check_port(v: str):
     if not v.isdigit() or not 1024 <= int(v) <= 65535:
-        return "Entre 1024 y 65535."
+        return L("Entre 1024 y 65535.", "Between 1024 and 65535.")
     if int(v) in (8080, 51820):
-        return "Ese puerto lo usa andamio (Traefik o la VPN)."
+        return L("Ese puerto lo usa andamio (Traefik o la VPN).", "andamio uses that port (Traefik or the VPN).")
     return None
 
 
@@ -167,14 +194,15 @@ def http_get(url: str, token: str) -> tuple[int, dict, str]:
 def registry_token_problem(token: str) -> str | None:
     """None si el token sirve para bajar imágenes del registro (lo valida la forja)."""
     r = forge("registry-token-check", stdin=token)
-    return None if r.returncode == 0 else (r.stderr.strip() or "No pude validar el token.")
+    return None if r.returncode == 0 else (r.stderr.strip() or L("No pude validar el token.", "Couldn't validate the token."))
 
 
 def cloudflare_token_problem(token: str) -> str | None:
     code, _, body = http_get("https://api.cloudflare.com/client/v4/user/tokens/verify", token)
     if code == 200 and '"active"' in body:
         return None
-    return "Cloudflare no reconoce ese token como activo (¿mal copiado o vencido?)."
+    return L("Cloudflare no reconoce ese token como activo (¿mal copiado o vencido?).",
+             "Cloudflare doesn't see that token as active (mistyped or expired?).")
 
 
 def ask_secret(prompt: str, problem, tries: int = 3) -> str:
@@ -184,8 +212,10 @@ def ask_secret(prompt: str, problem, tries: int = 3) -> str:
         error = problem(value)
         if not error:
             return value
-        warn(error + (f" ({tries - 1 - intento} intentos más)" if intento < tries - 1 else ""))
-    die("No pude verificar el dato. Revísalo y vuelve a correr el comando: retoma donde quedó.")
+        left = tries - 1 - intento
+        warn(error + (L(f" ({left} intentos más)", f" ({left} more tries)") if left else ""))
+    die(L("No pude verificar el dato. Revísalo y vuelve a correr el comando: retoma donde quedó.",
+          "Couldn't verify it. Check it and run the command again: it resumes where it stopped."))
 
 
 def resolves_to(name: str) -> set[str]:
@@ -233,28 +263,34 @@ def covers(sans: list[str], name: str) -> bool:
 def cert_problem(v: str) -> str | None:
     p = local_path(v)
     if not p.is_file():
-        return f"No existe el archivo {p}."
+        return L(f"No existe el archivo {p}.", f"File {p} doesn't exist.")
     info = cert_info(p)
     if not info:
-        return ("No es un certificado PEM (texto que empieza con -----BEGIN CERTIFICATE-----). Si es binario "
-                "(.der/.cer): openssl x509 -inform der -in ARCHIVO -out cert.pem")
+        return L("No es un certificado PEM (texto que empieza con -----BEGIN CERTIFICATE-----). Si es binario "
+                 "(.der/.cer): openssl x509 -inform der -in ARCHIVO -out cert.pem",
+                 "Not a PEM certificate (text starting with -----BEGIN CERTIFICATE-----). If it's binary "
+                 "(.der/.cer): openssl x509 -inform der -in FILE -out cert.pem")
     if info["days"] < 0:
-        return f"Ese certificado venció el {info['expires']}."
+        return L(f"Ese certificado venció el {info['expires']}.", f"That certificate expired on {info['expires']}.")
     return None
 
 
 def key_problem(cert: Path, v: str) -> str | None:
     key = local_path(v)
     if not key.is_file():
-        return f"No existe el archivo {key}."
+        return L(f"No existe el archivo {key}.", f"File {key} doesn't exist.")
     r = run(["openssl", "pkey", "-in", str(key), "-passin", "pass:", "-pubout"])
     if r.returncode != 0:
         if "ENCRYPTED" in key.read_text(errors="ignore"):
-            return (f"La llave tiene contraseña. Quítasela (andamio la cifra con sops igual): "
-                    f"openssl pkey -in {key} -out llave-sin-clave.key")
-        return "No es una llave privada PEM (texto que empieza con -----BEGIN ... PRIVATE KEY-----)."
+            return L(f"La llave tiene contraseña. Quítasela (andamio la cifra con sops igual): "
+                     f"openssl pkey -in {key} -out llave-sin-clave.key",
+                     f"The key has a passphrase. Remove it (andamio encrypts it with sops anyway): "
+                     f"openssl pkey -in {key} -out key-no-passphrase.key")
+        return L("No es una llave privada PEM (texto que empieza con -----BEGIN ... PRIVATE KEY-----).",
+                 "Not a PEM private key (text starting with -----BEGIN ... PRIVATE KEY-----).")
     if run(["openssl", "x509", "-in", str(cert), "-noout", "-pubkey"]).stdout.strip() != r.stdout.strip():
-        return "Esa llave no corresponde al certificado (¿es la de otra solicitud o de otro dominio?)."
+        return L("Esa llave no corresponde al certificado (¿es la de otra solicitud o de otro dominio?).",
+                 "That key doesn't match the certificate (from another request, or another domain?).")
     return None
 
 
@@ -264,47 +300,63 @@ def cert_warnings(info: dict, domain: str) -> list[str]:
     # El comodín se prueba con un nombre que nadie pondría en un certificado.
     missing = [n for n in (domain, f"*.{domain}") if not covers(info["sans"], n.replace("*", "andamio-x7q"))]
     if missing:
-        out.append(f"No cubre {' ni '.join(missing)} (cubre: {', '.join(info['sans'])}). Las apps con "
-                   "otros nombres mostrarán un error de certificado en el navegador.")
+        out.append(L(f"No cubre {' ni '.join(missing)} (cubre: {', '.join(info['sans'])}). Las apps con "
+                     "otros nombres mostrarán un error de certificado en el navegador.",
+                     f"It doesn't cover {' or '.join(missing)} (it covers: {', '.join(info['sans'])}). Apps "
+                     "with other names will show a certificate error in the browser."))
     if info["cloudflare_origin"]:
-        out.append("Es un Origin Certificate de Cloudflare: solo lo aceptan los navegadores a través del "
-                   "proxy de Cloudflare (nube naranja, SSL/TLS en modo Full (strict)). Tus paneles privados "
-                   "(por la VPN) no pasan por Cloudflare y mostrarán un error de certificado. Si tu dominio "
-                   "ya está en Cloudflare, el modo 'cloudflare' de andamio evita esto (gratis, se renueva solo).")
+        out.append(L("Es un Origin Certificate de Cloudflare: solo lo aceptan los navegadores a través del "
+                     "proxy de Cloudflare (nube naranja, SSL/TLS en modo Full (strict)). Tus paneles privados "
+                     "(por la VPN) no pasan por Cloudflare y mostrarán un error de certificado. Si tu dominio "
+                     "ya está en Cloudflare, el modo 'cloudflare' de andamio evita esto (gratis, se renueva solo).",
+                     "It's a Cloudflare Origin Certificate: browsers only accept it through Cloudflare's "
+                     "proxy (orange cloud, SSL/TLS mode Full (strict)). Your private panels (over the VPN) "
+                     "don't go through Cloudflare and will show a certificate error. If your domain is "
+                     "already on Cloudflare, andamio's 'cloudflare' mode avoids this (free, renews itself)."))
     elif info["self_signed"]:
-        out.append("Es autofirmado: ningún navegador lo acepta.")
+        out.append(L("Es autofirmado: ningún navegador lo acepta.", "It's self-signed: no browser accepts it."))
     elif info["chain"] < 2:
-        out.append("Trae solo tu certificado, sin los intermedios de tu CA: algunos clientes lo rechazarán. "
-                   "Usa el archivo 'fullchain' o 'bundle', o pega los intermedios debajo del tuyo.")
+        out.append(L("Trae solo tu certificado, sin los intermedios de tu CA: algunos clientes lo rechazarán. "
+                     "Usa el archivo 'fullchain' o 'bundle', o pega los intermedios debajo del tuyo.",
+                     "It only has your certificate, without your CA's intermediates: some clients will "
+                     "reject it. Use the 'fullchain' or 'bundle' file, or paste the intermediates below yours."))
     if info["days"] < CERT_WARN_DAYS:
-        out.append(f"Vence en {info['days']} días ({info['expires']}).")
+        out.append(L(f"Vence en {info['days']} días ({info['expires']}).",
+                     f"It expires in {info['days']} days ({info['expires']})."))
     return out
 
 
 def show_cert(info: dict) -> None:
-    ok(f"{info['cn']}: cubre {', '.join(info['sans'])}")
-    note(f"Emitido por: {info['issuer']}\nVence: {info['expires']} (en {info['days']} días)")
+    ok(L(f"{info['cn']}: cubre {', '.join(info['sans'])}", f"{info['cn']}: covers {', '.join(info['sans'])}"))
+    note(L(f"Emitido por: {info['issuer']}\nVence: {info['expires']} (en {info['days']} días)",
+           f"Issued by: {info['issuer']}\nExpires: {info['expires']} (in {info['days']} days)"))
 
 
 def ask_cert(domain: str) -> tuple[Path, Path]:
     """Pide certificado y llave, los valida y muestra lo que hay que saber antes de usarlos."""
     if not shutil.which("openssl"):
-        die("Falta openssl para revisar tu certificado: sudo apt install openssl  |  brew install openssl")
-    note("""
+        die(L("Falta openssl para revisar tu certificado: sudo apt install openssl  |  brew install openssl",
+              "openssl is needed to check your certificate: sudo apt install openssl  |  brew install openssl"))
+    note(L("""
 Necesitas dos archivos PEM (texto que empieza con -----BEGIN):
   certificado: el tuyo seguido de los intermedios de tu CA (fullchain o bundle)
   llave privada: la que generaste con la solicitud (CSR), o la que te dio Cloudflare
 En WSL, tu carpeta Descargas de Windows está en /mnt/c/Users/<tu usuario>/Downloads
-(también puedes pegar la ruta de Windows tal cual).""")
+(también puedes pegar la ruta de Windows tal cual).""", """
+You need two PEM files (text starting with -----BEGIN):
+  certificate: yours followed by your CA's intermediates (fullchain or bundle)
+  private key: the one you generated with the request (CSR), or the one Cloudflare gave you
+In WSL, your Windows Downloads folder is /mnt/c/Users/<your user>/Downloads
+(you can also paste the Windows path as is)."""))
     while True:
-        cert = local_path(ask("Ruta del certificado", check=cert_problem))
-        key = local_path(ask("Ruta de la llave privada", check=lambda v: key_problem(cert, v)))
+        cert = local_path(ask(L("Ruta del certificado", "Certificate path"), check=cert_problem))
+        key = local_path(ask(L("Ruta de la llave privada", "Private key path"), check=lambda v: key_problem(cert, v)))
         info = cert_info(cert)
         show_cert(info)
         problems = cert_warnings(info, domain)
         for p in problems:
             warn(p)
-        if not problems or ask_yes("¿Usarlo igual?", False):
+        if not problems or ask_yes(L("¿Usarlo igual?", "Use it anyway?"), False):
             return cert, key
 
 
@@ -318,17 +370,18 @@ def install_cert(cert: Path, key: Path) -> None:
     r = run(["sops", "encrypt", "--input-type", "binary", "--output-type", "json",
              "--filename-override", str(rel), str(key)], cwd=ROOT)
     if r.returncode != 0:
-        die(f"sops no pudo cifrar la llave: {r.stderr.strip()}")
+        die(L(f"sops no pudo cifrar la llave: {r.stderr.strip()}", f"sops couldn't encrypt the key: {r.stderr.strip()}"))
     TLS_KEY.parent.mkdir(parents=True, exist_ok=True)
     TLS_KEY.write_text(r.stdout)
-    ok(f"{rel} (cifrada)")
-    warn(f"Ya está cifrada en el repo: borra la copia sin cifrar ({key}), también de tu carpeta Descargas.")
+    ok(L(f"{rel} (cifrada)", f"{rel} (encrypted)"))
+    warn(L(f"Ya está cifrada en el repo: borra la copia sin cifrar ({key}), también de tu carpeta Descargas.",
+           f"It's now encrypted in the repo: delete the unencrypted copy ({key}), from your Downloads folder too."))
 
 
 # ---------- pasos ----------
 
 def check_tools() -> None:
-    title("Herramientas en tu máquina")
+    title(L("Herramientas en tu máquina", "Tools on your machine"))
     missing = [t for t in TOOLS if not shutil.which(t)]
     try:
         import yaml  # noqa: F401
@@ -340,57 +393,70 @@ def check_tools() -> None:
         TOOLS.update(forge_tools)
         missing = [t for t in forge_tools if not shutil.which(t)]
     for t in missing:
-        warn(f"Falta {t}: {TOOLS[t]}")
+        warn(L(f"Falta {t}: {TOOLS[t]}", f"Missing {t}: {TOOLS[t]}"))
     if missing:
-        die("Instala lo que falta y vuelve a correr andamio.")
-    ok(f"git, ssh, sops, age, ansible y {', '.join(forge_tools)} disponibles")
+        die(L("Instala lo que falta y vuelve a correr andamio.", "Install what's missing and run andamio again."))
+    ok(L(f"git, ssh, sops, age, ansible y {', '.join(forge_tools)} disponibles",
+         f"git, ssh, sops, age, ansible and {', '.join(forge_tools)} available"))
     name = forge_out("name")
     if forge("auth-ok").returncode != 0:
-        die(f"Tu CLI de {name} no tiene sesión iniciada ({', '.join(forge_tools)}): "
-            f"{next(iter(forge_tools.values()))}")
-    ok(f"Sesión iniciada en {name}")
+        die(L(f"Tu CLI de {name} no tiene sesión iniciada ({', '.join(forge_tools)}): ",
+              f"Your {name} CLI isn't logged in ({', '.join(forge_tools)}): ") + next(iter(forge_tools.values())))
+    ok(L(f"Sesión iniciada en {name}", f"Logged in to {name}"))
 
 
 def questions() -> dict:
-    title("2. Tu servidor")
-    note("""
-La IP pública del VPS que compraste (la ves en el panel de tu proveedor).""")
-    a = {"ip": ask("IP del VPS", check=check_ip)}
+    title(L("2. Tu servidor", "2. Your server"))
+    note(L("""
+La IP pública del VPS que compraste (la ves en el panel de tu proveedor).""", """
+The public IP of the VPS you bought (shown in your provider's dashboard)."""))
+    a = {"ip": ask(L("IP del VPS", "VPS IP"), check=check_ip)}
 
-    title("3. Tu dominio")
-    note("""
+    title(L("3. Tu dominio", "3. Your domain"))
+    note(L("""
 andamio publica cada app como <app>.tudominio. En el DNS de tu dominio necesitas dos
-registros A apuntando a la IP del VPS: uno para el dominio y otro para *.dominio.""")
-    a["domain"] = ask("Dominio", check=check_domain).lower()
+registros A apuntando a la IP del VPS: uno para el dominio y otro para *.dominio.""", """
+andamio publishes each app as <app>.yourdomain. Your domain's DNS needs two A records
+pointing to the VPS's IP: one for the domain and one for *.domain."""))
+    a["domain"] = ask(L("Dominio", "Domain"), check=check_domain).lower()
     apex, wild = resolves_to(a["domain"]), resolves_to(f"andamio-check.{a['domain']}")
     if a["ip"] in apex and a["ip"] in wild:
-        ok(f"{a['domain']} y *.{a['domain']} ya apuntan a {a['ip']}")
+        ok(L(f"{a['domain']} y *.{a['domain']} ya apuntan a {a['ip']}",
+             f"{a['domain']} and *.{a['domain']} already point to {a['ip']}"))
     else:
-        warn(f"{a['domain']} -> {', '.join(apex) or 'nada'}; *.{a['domain']} -> {', '.join(wild) or 'nada'}")
-        note(f"""
+        nothing = L("nada", "nothing")
+        warn(f"{a['domain']} -> {', '.join(apex) or nothing}; *.{a['domain']} -> {', '.join(wild) or nothing}")
+        note(L(f"""
 Crea en tu DNS:  A  {a['domain']}  ->  {a['ip']}   y   A  *.{a['domain']}  ->  {a['ip']}
-Sin eso no habrá certificados HTTPS. Puedes seguir y corregirlo antes de preparar el servidor.""")
+Sin eso no habrá certificados HTTPS. Puedes seguir y corregirlo antes de preparar el servidor.""", f"""
+Create in your DNS:  A  {a['domain']}  ->  {a['ip']}   and   A  *.{a['domain']}  ->  {a['ip']}
+Without them there will be no HTTPS certificates. You can go on and fix it before setting up the server."""))
 
-    title("4. Acceso seguro")
-    note("""
+    title(L("4. Acceso seguro", "4. Secure access"))
+    note(L("""
 andamio crea un usuario propio (root deja de poder entrar), SSH solo con llave y en un
-puerto distinto del 22 (menos ruido de bots que prueban contraseñas).""")
-    a["user"] = ask("Usuario de operación", "andamio", check_user)
-    a["port"] = ask("Puerto SSH", str(secrets.choice(range(20000, 30000))), check_port)
+puerto distinto del 22 (menos ruido de bots que prueban contraseñas).""", """
+andamio creates your own user (root can no longer log in), SSH with keys only, on a port
+other than 22 (less noise from bots guessing passwords)."""))
+    a["user"] = ask(L("Usuario de operación", "Operator user"), "andamio", check_user)
+    a["port"] = ask(L("Puerto SSH", "SSH port"), str(secrets.choice(range(20000, 30000))), check_port)
 
     name, host = forge_out("name"), forge_out("ssh-host")
     title(f"5. {name}")
-    note(f"""
-Tus apps viven en repos de {name} y sus imágenes en {forge_out('registry-name')}. El CI construye y despliega.""")
+    note(L(f"""
+Tus apps viven en repos de {name} y sus imágenes en {forge_out('registry-name')}. El CI construye y despliega.""", f"""
+Your apps live in {name} repos and their images in {forge_out('registry-name')}. CI builds and deploys."""))
     login = forge("whoami").stdout.strip()
-    a["owner"] = ask(f"Usuario u organización de {name}", login or None)
+    a["owner"] = ask(L(f"Usuario u organización de {name}", f"{name} user or organization"), login or None)
     remote = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).stdout.strip()
     m = re.search(rf"{re.escape(host)}[:/]([^/]+/[^/.]+)", remote)
-    a["repo"] = ask("Repo de esta configuración (dueño/nombre)", m.group(1) if m else None,
-                    lambda v: None if re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", v) else "Formato dueño/nombre.")
+    a["repo"] = ask(L("Repo de esta configuración (dueño/nombre)", "This configuration's repo (owner/name)"),
+                    m.group(1) if m else None,
+                    lambda v: None if re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", v)
+                    else L("Formato dueño/nombre.", "Format: owner/name."))
 
     title("6. HTTPS")
-    note("""
+    note(L("""
 http (recomendado para empezar): un certificado de Let's Encrypt por app; funciona con
   cualquier DNS. Los nombres de tus apps (también las privadas) quedan en los registros
   públicos de certificados.
@@ -398,50 +464,66 @@ cloudflare: un solo certificado comodín; no publica los nombres. Necesita el DN
   dominio en Cloudflare y un token con permiso Zone:DNS:Edit para esa zona.
 custom: tu propio certificado (de una CA comercial, o un Origin Certificate de Cloudflare).
   Nadie lo renueva solo: Grafana avisa antes de que venza y lo reemplazas con
-  bin/andamio certificado.""")
-    a["tls"] = ask("Modo (http/cloudflare/custom)", "http",
-                   lambda v: None if v in ("http", "cloudflare", "custom") else "http, cloudflare o custom.")
-    a["cf_token"] = (ask_secret("Token de Cloudflare (no se ve al escribir)", cloudflare_token_problem)
+  bin/andamio certificado.""", """
+http (recommended to start): one Let's Encrypt certificate per app; works with any DNS.
+  Your apps' names (private ones too) end up in the public certificate logs.
+cloudflare: a single wildcard certificate; names stay unpublished. Needs the domain's DNS
+  on Cloudflare and a token with Zone:DNS:Edit permission for that zone.
+custom: your own certificate (from a commercial CA, or a Cloudflare Origin Certificate).
+  Nobody renews it for you: Grafana warns before it expires and you replace it with
+  bin/andamio certificate."""))
+    a["tls"] = ask(L("Modo (http/cloudflare/custom)", "Mode (http/cloudflare/custom)"), "http",
+                   lambda v: None if v in ("http", "cloudflare", "custom")
+                   else L("http, cloudflare o custom.", "http, cloudflare or custom."))
+    a["cf_token"] = (ask_secret(L("Token de Cloudflare (no se ve al escribir)", "Cloudflare token (hidden while typing)"),
+                                cloudflare_token_problem)
                      if a["tls"] == "cloudflare" else "")
     if a["cf_token"]:
-        ok("Token de Cloudflare activo")
+        ok(L("Token de Cloudflare activo", "Cloudflare token active"))
     a["cert"], a["key"] = ask_cert(a["domain"]) if a["tls"] == "custom" else (None, None)
     a["email"] = ("" if a["tls"] == "custom" else
-                  ask("Email para Let's Encrypt (avisos de certificados)", check=check_email))
+                  ask(L("Email para Let's Encrypt (avisos de certificados)", "Email for Let's Encrypt (certificate notices)"),
+                      check=check_email))
 
-    title("7. Módulos")
-    note("""
+    title(L("7. Módulos", "7. Modules"))
+    note(L("""
 Monitoreo: "auto" elige según la RAM del VPS (completo con 3 GB o más: métricas, logs,
   Grafana con alertas y Uptime Kuma; mínimo: solo métricas, ~115 MiB).
 Backups: después de preparar el servidor, con bin/andamio backups (B2 o S3, guiado).
-  Sin backups, tus datos solo viven en el VPS. Alertas por Telegram: se activan después.""")
-    a["monitoring"] = ask("Monitoreo (auto/minimo/completo)", "auto",
-                          lambda v: None if v in ("auto", "minimo", "completo") else "auto, minimo o completo.")
+  Sin backups, tus datos solo viven en el VPS. Alertas por Telegram: se activan después.""", """
+Monitoring: "auto" picks by the VPS's RAM (completo with 3 GB or more: metrics, logs,
+  Grafana with alerts and Uptime Kuma; minimo: metrics only, ~115 MiB).
+Backups: after setting up the server, with bin/andamio backups (B2 or S3, guided).
+  Without backups, your data only lives on the VPS. Telegram alerts: turned on later."""))
+    a["monitoring"] = ask(L("Monitoreo (auto/minimo/completo)", "Monitoring (auto/minimo/completo)"), "auto",
+                          lambda v: None if v in ("auto", "minimo", "completo")
+                          else L("auto, minimo o completo.", "auto, minimo or completo."))
     return a
 
 
 def age_recipient() -> str:
-    title("8. Llave de cifrado (age)")
+    title(L("8. Llave de cifrado (age)", "8. Encryption key (age)"))
     if AGE_KEY.exists():
-        ok(f"Uso tu llave existente: {AGE_KEY}")
+        ok(L(f"Uso tu llave existente: {AGE_KEY}", f"Using your existing key: {AGE_KEY}"))
     else:
         AGE_KEY.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         r = run(["age-keygen", "-o", str(AGE_KEY)])
         if r.returncode != 0:
-            die(f"age-keygen falló: {r.stderr.strip()}")
+            die(L(f"age-keygen falló: {r.stderr.strip()}", f"age-keygen failed: {r.stderr.strip()}"))
         AGE_KEY.chmod(0o600)
-        ok(f"Llave creada: {AGE_KEY} (solo tú la puedes leer)")
-        warn("Guárdala también en tu gestor de contraseñas: sin ella no se pueden descifrar tus secretos.")
+        ok(L(f"Llave creada: {AGE_KEY} (solo tú la puedes leer)", f"Key created: {AGE_KEY} (only you can read it)"))
+        warn(L("Guárdala también en tu gestor de contraseñas: sin ella no se pueden descifrar tus secretos.",
+               "Also keep it in your password manager: without it your secrets can't be decrypted."))
     pub = run(["age-keygen", "-y", str(AGE_KEY)]).stdout.strip()
     if not pub.startswith("age1"):
-        die("No pude leer la llave pública de age.")
+        die(L("No pude leer la llave pública de age.", "Couldn't read the age public key."))
     return pub
 
 
 def write_if_missing(path: Path, content: str, mode: int = 0o644) -> bool:
     rel = path.relative_to(ROOT)
     if path.exists():
-        warn(f"{rel} ya existe: no lo toco")
+        warn(L(f"{rel} ya existe: no lo toco", f"{rel} already exists: leaving it alone"))
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -451,31 +533,45 @@ def write_if_missing(path: Path, content: str, mode: int = 0o644) -> bool:
 
 
 def write_config(a: dict, recipient: str) -> None:
-    title("9. Configuración")
-    write_if_missing(SOPS_CONFIG, f"""# Secretos cifrados con sops + age. La llave privada vive solo en tu máquina
+    title(L("9. Configuración", "9. Configuration"))
+    write_if_missing(SOPS_CONFIG, L(f"""# Secretos cifrados con sops + age. La llave privada vive solo en tu máquina
 # ({AGE_KEY}) y en tu gestor de contraseñas.
-creation_rules:
+""", f"""# Secrets encrypted with sops + age. The private key lives only on your machine
+# ({AGE_KEY}) and in your password manager.
+""") + f"""creation_rules:
   - path_regex: \\.sops(\\.env)?$
     age: {recipient}
 """)
-    write_if_missing(CONFIG, f"""# Configuración de este servidor (generada por andamio init). Lo único propio:
-# roles, plantillas y scripts la leen de aquí.
-homelab_user: {a['user']}              # usuario de operación (SSH, docker)
+    c = {k: L(es, en) for k, (es, en) in {
+        "head": ("# Configuración de este servidor (generada por andamio init). Lo único propio:\n"
+                 "# roles, plantillas y scripts la leen de aquí.",
+                 "# This server's configuration (generated by andamio init). The only thing that's yours:\n"
+                 "# roles, templates and scripts read it from here."),
+        "user": ("usuario de operación (SSH, docker)", "operator user (SSH, docker)"),
+        "hostkey": ("la completa andamio servidor al conectar por primera vez",
+                    "filled in by andamio server on first connection"),
+        "forge": ("dónde viven tus repos (bin/forge)", "where your repos live (bin/forge)"),
+        "registry": ("registro de las imágenes de tus apps", "registry for your apps' images"),
+        "backups": ("se activa con bin/andamio backups", "turned on by bin/andamio backups"),
+        "telegram": ("se activa con su configuración (bot y chat)", "turned on with its configuration (bot and chat)"),
+    }.items()}
+    write_if_missing(CONFIG, f"""{c['head']}
+homelab_user: {a['user']}              # {c['user']}
 homelab_uid: 1001
 homelab_ssh_port: {a['port']}
-homelab_ssh_host_key: ""           # la completa andamio init al conectar por primera vez
+homelab_ssh_host_key: ""           # {c['hostkey']}
 homelab_server_ip: {a['ip']}
 homelab_hostname: {a['domain'].split('.')[0]}
 homelab_domain: {a['domain']}
 homelab_tls: {a['tls']}
 homelab_acme_email: "{a['email']}"
-homelab_forge: {forge_out('name').lower()}              # dónde viven tus repos (bin/forge)
-homelab_registry: {forge_out('registry')}          # registro de las imágenes de tus apps
+homelab_forge: {forge_out('name').lower()}              # {c['forge']}
+homelab_registry: {forge_out('registry')}          # {c['registry']}
 homelab_github_owner: {a['owner']}
 homelab_repo: git@github-homelab-infra:{a['repo']}.git
 homelab_monitoring: {a['monitoring']}
-homelab_backups: false              # se activa con bin/andamio backups
-homelab_telegram: false             # se activa con su configuración (bot y chat)
+homelab_backups: false              # {c['backups']}
+homelab_telegram: false             # {c['telegram']}
 """)
 
 
@@ -483,7 +579,7 @@ def encrypt(path: Path, values: dict[str, str]) -> None:
     """Cifra un .env con sops. El texto en claro vive solo en una carpeta 0700 y se borra."""
     rel = path.relative_to(ROOT)
     if path.exists():
-        warn(f"{rel} ya existe: no lo toco")
+        warn(L(f"{rel} ya existe: no lo toco", f"{rel} already exists: leaving it alone"))
         return
     tmp = Path(tempfile.mkdtemp(prefix="andamio-"))
     plain = tmp / "secrets.env"
@@ -493,17 +589,18 @@ def encrypt(path: Path, values: dict[str, str]) -> None:
         r = run(["sops", "encrypt", "--input-type", "dotenv", "--output-type", "dotenv",
                  "--filename-override", str(rel), str(plain)], cwd=ROOT)
         if r.returncode != 0:
-            die(f"sops no pudo cifrar {rel}: {r.stderr.strip()}")
+            die(L(f"sops no pudo cifrar {rel}: {r.stderr.strip()}", f"sops couldn't encrypt {rel}: {r.stderr.strip()}"))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(r.stdout)
-        ok(f"{rel} (cifrado)")
+        ok(L(f"{rel} (cifrado)", f"{rel} (encrypted)"))
     finally:
         plain.write_bytes(b"\0" * 256)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def write_secrets(a: dict) -> None:
-    title("10. Secretos de la plataforma (contraseñas aleatorias, cifradas)")
+    title(L("10. Secretos de la plataforma (contraseñas aleatorias, cifradas)",
+            "10. Platform secrets (random passwords, encrypted)"))
     pw = lambda: secrets.token_urlsafe(32).replace("-", "").replace("_", "")[:40]  # noqa: E731
     encrypt(ROOT / "stacks/proxy/secrets.sops.env", {"CF_DNS_API_TOKEN": a["cf_token"]})
     encrypt(ROOT / "stacks/data/secrets.sops.env",
@@ -512,25 +609,29 @@ def write_secrets(a: dict) -> None:
             {"DOMAIN": a["domain"], "GF_ADMIN_PASSWORD": pw(), "TELEGRAM_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
     for stack in ("uptime-kuma", "whoami"):
         encrypt(ROOT / f"stacks/{stack}/secrets.sops.env", {"DOMAIN": a["domain"]})
-    note("""
-La contraseña de Grafana (usuario admin):  sops decrypt stacks/monitoring/secrets.sops.env""")
+    note(L("""
+La contraseña de Grafana (usuario admin):  sops decrypt stacks/monitoring/secrets.sops.env""", """
+Grafana's password (user admin):  sops decrypt stacks/monitoring/secrets.sops.env"""))
 
 
 def cmd_init(args: argparse.Namespace) -> None:
-    print("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).")
+    print(L("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).",
+            "\033[1mandamio init\033[0m: prepares your VPS's configuration (part 1, only on your machine)."))
     if CONFIG.exists() and "homelab_server_ip:" in CONFIG.read_text() and not args.force:
-        die(f"Ya hay una configuración en {CONFIG.relative_to(ROOT)}. No la sobreescribo (usa --force para "
-            "completar lo que falte; lo existente se respeta igual).")
+        die(L(f"Ya hay una configuración en {CONFIG.relative_to(ROOT)}. No la sobreescribo (usa --force para "
+              "completar lo que falte; lo existente se respeta igual).",
+              f"There's already a configuration in {CONFIG.relative_to(ROOT)}. I won't overwrite it (use "
+              "--force to fill in what's missing; existing files are kept anyway)."))
     check_tools()
     a = questions()
     recipient = age_recipient()
     write_config(a, recipient)
     write_secrets(a)
     if a["tls"] == "custom":
-        title("11. Tu certificado")
+        title(L("11. Tu certificado", "11. Your certificate"))
         install_cert(a["cert"], a["key"])
-    title("Listo. Próximos pasos")
-    note(f"""
+    title(L("Listo. Próximos pasos", "Done. Next steps"))
+    note(L(f"""
 1. Sube tu configuración (va cifrada):
      git add -A && git commit -m "andamio: mi servidor" && git push
 
@@ -541,7 +642,18 @@ def cmd_init(args: argparse.Namespace) -> None:
    Si no lo haces, al mover SSH a tu puerto quedarías fuera del servidor.
 
 3. Prepara el servidor:
-     bin/andamio servidor""")
+     bin/andamio servidor""", f"""
+1. Push your configuration (it's encrypted):
+     git add -A && git commit -m "andamio: my server" && git push
+
+2. If your provider has its own firewall (Azure, AWS, Oracle, Google Cloud, sometimes
+   Hetzner or DigitalOcean), open these inbound ports in it BEFORE step 3:
+     TCP {a['port']} (your new SSH), 80 and 443 (web)   ·   UDP 51820 (VPN)
+   Also keep 22 open until the end: andamio first gets in through it.
+   Otherwise, once SSH moves to your port, you'd be locked out of the server.
+
+3. Set up the server:
+     bin/andamio server"""))
 
 
 # ================= parte 2: el servidor =================
@@ -549,16 +661,16 @@ def cmd_init(args: argparse.Namespace) -> None:
 def load_config() -> dict:
     import yaml
     if not CONFIG.exists():
-        die("Falta la configuración: corre primero `andamio init`.")
+        die(L("Falta la configuración: corre primero `andamio init`.", "No configuration yet: run `andamio init` first."))
     cfg = yaml.safe_load(CONFIG.read_text()) or {}
     for k in ("homelab_user", "homelab_ssh_port", "homelab_server_ip", "homelab_repo", "homelab_github_owner"):
         if not cfg.get(k):
-            die(f"Falta {k} en {CONFIG.relative_to(ROOT)}.")
+            die(L(f"Falta {k} en {CONFIG.relative_to(ROOT)}.", f"{k} is missing in {CONFIG.relative_to(ROOT)}."))
     return cfg
 
 
 def set_config(key: str, value: str) -> None:
-    """Cambia una línea de la configuración (solo la usa para completar la llave de host)."""
+    """Cambia una línea de la configuración (o la agrega si no está)."""
     text = CONFIG.read_text()
     line = f'{key}: "{value}"'
     new, n = re.subn(rf"^{re.escape(key)}:.*$", line, text, flags=re.M)
@@ -587,22 +699,28 @@ def sudo_password_file(cfg: dict, alias: str) -> Path:
     if _SUDO_FILE:
         return _SUDO_FILE
     user = cfg["homelab_user"]
-    note(f"""
+    note(L(f"""
 andamio necesita la contraseña de sudo de tu usuario '{user}' en el servidor
 ({cfg['homelab_server_ip']}): la que le pusiste al crearlo (si lo creó andamio servidor,
-fue en su paso 3, donde se pidió dos veces). Se pide una sola vez para todo lo que sigue.""")
+fue en su paso 3, donde se pidió dos veces). Se pide una sola vez para todo lo que sigue.""", f"""
+andamio needs the sudo password of your user '{user}' on the server
+({cfg['homelab_server_ip']}): the one you set when it was created (if andamio server created
+it, that was in its step 3, where it was asked twice). It's asked only once for everything that follows."""))
     for intento in range(3):
-        pw = getpass.getpass(f"  Contraseña de sudo de '{user}': ")
+        pw = getpass.getpass(L(f"  Contraseña de sudo de '{user}': ", f"  Sudo password for '{user}': "))
         if remote(alias, "sudo -S -p '' -v", stdin=pw + "\n").returncode == 0:
-            ok("Contraseña correcta")
+            ok(L("Contraseña correcta", "Password correct"))
             tmp = Path(tempfile.mkdtemp(prefix="andamio-sudo-"))
             _SUDO_FILE = tmp / "become"
             _SUDO_FILE.write_text(pw)
             _SUDO_FILE.chmod(0o600)
             return _SUDO_FILE
-        warn(f"No es la contraseña de sudo de '{user}' ({2 - intento} intentos más).")
-    die(f"No pude verificar la contraseña de '{user}'. Si la perdiste: entra con la consola web de tu "
-        f"proveedor como root y cámbiala con `passwd {user}`.")
+        warn(L(f"No es la contraseña de sudo de '{user}' ({2 - intento} intentos más).",
+               f"That's not the sudo password for '{user}' ({2 - intento} more tries)."))
+    die(L(f"No pude verificar la contraseña de '{user}'. Si la perdiste: entra con la consola web de tu "
+          f"proveedor como root y cámbiala con `passwd {user}`.",
+          f"Couldn't verify the password for '{user}'. If you lost it: log in as root through your "
+          f"provider's web console and change it with `passwd {user}`."))
 
 
 def wipe_sudo() -> None:
@@ -613,9 +731,10 @@ def wipe_sudo() -> None:
 
 def remote_sudo(cfg: dict, alias: str, cmd: str) -> int:
     """Corre un comando con sudo en el servidor, mostrando su salida en vivo. La contraseña
-    (ya verificada) entra por stdin, nunca en la línea de comandos."""
+    (ya verificada) entra por stdin, nunca en la línea de comandos. sudo limpia el entorno:
+    el idioma se pasa explícito."""
     pw = sudo_password_file(cfg, alias).read_text()
-    return subprocess.run(["ssh", "-o", "BatchMode=yes", alias, f"sudo -S -p '' {cmd}"],
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", alias, f"sudo -S -p '' env ANDAMIO_LANG={LANG} {cmd}"],
                           input=pw + "\n", text=True, check=False).returncode
 
 
@@ -626,38 +745,42 @@ def ansible(args: list[str], cfg: dict, alias: str) -> int:
 
 
 def step_local_key() -> str:
-    title("1. Tu llave SSH")
+    title(L("1. Tu llave SSH", "1. Your SSH key"))
     pub = LOCAL_KEY.with_suffix(".pub")
     if not pub.exists():
-        note("""
+        note(L("""
 No tienes una llave ed25519: la creo ahora. Te pedirá una frase de paso (recomendado:
-protege la llave si alguien copia tu disco). Enter dos veces = sin frase.""")
+protege la llave si alguien copia tu disco). Enter dos veces = sin frase.""", """
+You don't have an ed25519 key: creating one now. It asks for a passphrase (recommended:
+it protects the key if someone copies your disk). Enter twice = no passphrase."""))
         SSH_DIR.mkdir(mode=0o700, exist_ok=True)
         if interactive(["ssh-keygen", "-t", "ed25519", "-f", str(LOCAL_KEY), "-C", f"andamio-{getpass.getuser()}"]) != 0:
-            die("ssh-keygen falló.")
+            die(L("ssh-keygen falló.", "ssh-keygen failed."))
     key = pub.read_text().strip()
-    ok(f"Uso {pub}")
+    ok(L(f"Uso {pub}", f"Using {pub}"))
     if not AUTH_KEYS.exists():
         AUTH_KEYS.parent.mkdir(parents=True, exist_ok=True)
         AUTH_KEYS.write_text(key + "\n")
-        ok(f"{AUTH_KEYS.relative_to(ROOT)}: tu llave pública (la que podrá entrar al servidor)")
+        ok(L(f"{AUTH_KEYS.relative_to(ROOT)}: tu llave pública (la que podrá entrar al servidor)",
+             f"{AUTH_KEYS.relative_to(ROOT)}: your public key (the one allowed into the server)"))
     elif key.split()[1] not in AUTH_KEYS.read_text():
-        warn(f"Tu llave no está en {AUTH_KEYS.relative_to(ROOT)}: no podrías entrar con ella.")
-        if ask_yes("¿Agregarla?", True):
+        warn(L(f"Tu llave no está en {AUTH_KEYS.relative_to(ROOT)}: no podrías entrar con ella.",
+               f"Your key isn't in {AUTH_KEYS.relative_to(ROOT)}: you couldn't log in with it."))
+        if ask_yes(L("¿Agregarla?", "Add it?"), True):
             with AUTH_KEYS.open("a") as f:
                 f.write(key + "\n")
-            ok("Agregada")
+            ok(L("Agregada", "Added"))
     return str(pub)
 
 
 def step_host_key(cfg: dict) -> None:
-    title("2. ¿Es tu servidor?")
+    title(L("2. ¿Es tu servidor?", "2. Is it your server?"))
     ip, port = cfg["homelab_server_ip"], cfg["homelab_ssh_port"]
     known = cfg.get("homelab_ssh_host_key") or ""
     if known:
-        ok("Llave del servidor ya verificada (homelab_ssh_host_key)")
+        ok(L("Llave del servidor ya verificada (homelab_ssh_host_key)", "Server key already verified (homelab_ssh_host_key)"))
         return
-    note("""
+    note(L("""
 La primera conexión es la delicada: si alguien se interpusiera en la red, te mostraría
 su propia llave. Para comprobarla, mírala DENTRO del servidor por un camino que no sea
 la red, y corre ahí:
@@ -669,26 +792,42 @@ la red, y corre ahí:
   - AWS: EC2 -> Connect -> Session Manager (o "Get system log" de la instancia).
 
 Tiene que dar exactamente la misma huella que ves abajo. Si no encuentras cómo, puedes
-seguir: el riesgo es bajo, pero existe.""")
+seguir: el riesgo es bajo, pero existe.""", """
+The first connection is the delicate one: if someone sat in the middle of the network,
+they would show you their own key. To check it, look at it INSIDE the server through a
+path other than the network, and run there:
+
+    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+
+  - Hetzner, DigitalOcean, Vultr, Linode, Contabo: the VPS's "Console" (web console).
+  - Azure: the VM -> Operations -> Run command -> RunShellScript.
+  - AWS: EC2 -> Connect -> Session Manager (or the instance's "Get system log").
+
+It must give exactly the same fingerprint you see below. If you can't find how, you can
+go on: the risk is low, but real."""))
     r = run(["ssh-keyscan", "-t", "ed25519", "-p", "22", ip])
-    lines = [l for l in r.stdout.splitlines() if l and not l.startswith("#")]
+    lines = [x for x in r.stdout.splitlines() if x and not x.startswith("#")]
     if not lines:
         r = run(["ssh-keyscan", "-t", "ed25519", "-p", str(port), ip])
-        lines = [l for l in r.stdout.splitlines() if l and not l.startswith("#")]
+        lines = [x for x in r.stdout.splitlines() if x and not x.startswith("#")]
     if not lines:
-        die(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). ¿El VPS está encendido?")
+        die(L(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). ¿El VPS está encendido?",
+              f"No SSH answer at {ip} (neither on 22 nor on {port}). Is the VPS running?"))
     host_key = " ".join(lines[0].split()[1:3])
     fp = run(["ssh-keygen", "-lf", "-"], input=f"{ip} {host_key}\n").stdout.split()[1]
-    print(f"\n    Huella del servidor:  {fp}\n")
-    if not ask_yes("¿Coincide con la de tu proveedor (o decides seguir sin comprobarla)?", True):
-        die("No sigo. Revisa la IP o pregunta a tu proveedor por la huella SSH (ED25519).")
+    print(L(f"\n    Huella del servidor:  {fp}\n", f"\n    Server fingerprint:  {fp}\n"))
+    if not ask_yes(L("¿Coincide con la de tu proveedor (o decides seguir sin comprobarla)?",
+                     "Does it match your provider's (or do you choose to go on without checking)?"), True):
+        die(L("No sigo. Revisa la IP o pregunta a tu proveedor por la huella SSH (ED25519).",
+              "Stopping. Check the IP or ask your provider for the SSH fingerprint (ED25519)."))
     for host in (ip, f"[{ip}]:{port}"):
         run(["ssh-keygen", "-R", host])
     SSH_DIR.mkdir(mode=0o700, exist_ok=True)
     with (SSH_DIR / "known_hosts").open("a") as f:
         f.write(f"{ip} {host_key}\n[{ip}]:{port} {host_key}\n")
     set_config("homelab_ssh_host_key", host_key)
-    ok("Guardada en known_hosts y en la configuración (el CI la usa para desplegar)")
+    ok(L("Guardada en known_hosts y en la configuración (el CI la usa para desplegar)",
+         "Saved in known_hosts and in the configuration (CI uses it to deploy)"))
 
 
 def step_ssh_alias(cfg: dict) -> str:
@@ -700,8 +839,8 @@ def step_ssh_alias(cfg: dict) -> str:
         hosts = (((inv.get("all") or {}).get("children") or {}).get("homelab") or {}).get("hosts") or {}
         alias = next(iter(hosts), alias)
     else:
-        INVENTORY.write_text(f"""# Host, usuario, puerto y llave salen de ~/.ssh/config (alias "{alias}").
-all:
+        INVENTORY.write_text(L(f'# Host, usuario, puerto y llave salen de ~/.ssh/config (alias "{alias}").\n',
+                               f'# Host, user, port and key come from ~/.ssh/config (alias "{alias}").\n') + f"""all:
   children:
     homelab:
       hosts:
@@ -727,47 +866,63 @@ Host {alias}
 
 
 def step_bootstrap(cfg: dict, alias: str, pub: str) -> None:
-    title("3. Usuario propio y SSH en tu puerto")
+    title(L("3. Usuario propio y SSH en tu puerto", "3. Your own user and SSH on your port"))
+    user, port = cfg["homelab_user"], cfg["homelab_ssh_port"]
     if ssh_ok([alias]):
-        ok(f"Ya entras como {cfg['homelab_user']} por el puerto {cfg['homelab_ssh_port']}: bootstrap hecho")
+        ok(L(f"Ya entras como {user} por el puerto {port}: bootstrap hecho",
+             f"You already log in as {user} on port {port}: bootstrap done"))
         return
     ip = cfg["homelab_server_ip"]
-    note("""
+    note(L("""
 Con qué usuario te deja entrar tu proveedor: root en Hetzner, DigitalOcean, Vultr o
-Contabo; azureuser en Azure; ubuntu en AWS y Oracle (o el que elegiste al crear el VPS).""")
-    initial = ask("Usuario que te dio el proveedor para entrar", "root", check_user_initial)
+Contabo; azureuser en Azure; ubuntu en AWS y Oracle (o el que elegiste al crear el VPS).""", """
+The user your provider lets you in with: root on Hetzner, DigitalOcean, Vultr or Contabo;
+azureuser on Azure; ubuntu on AWS and Oracle (or the one you chose when creating the VPS)."""))
+    initial = ask(L("Usuario que te dio el proveedor para entrar", "User your provider gave you to log in"),
+                  "root", check_user_initial)
     target = ["-p", "22", f"{initial}@{ip}"]
     if not ssh_ok(target):
-        note(f"""
+        note(L(f"""
 Tu llave todavía no entra como {initial}: tu proveedor te dio una contraseña. La instalo
-con ssh-copy-id (escribes la contraseña UNA vez); desde ahí, solo llave.""")
+con ssh-copy-id (escribes la contraseña UNA vez); desde ahí, solo llave.""", f"""
+Your key can't log in as {initial} yet: your provider gave you a password. Installing the
+key with ssh-copy-id (you type the password ONCE); keys only from then on."""))
         if interactive(["ssh-copy-id", "-i", pub, *target]) != 0 or not ssh_ok(target):
-            die(f"No pude instalar tu llave en {initial}@{ip}. Revisa la contraseña o el usuario.")
-    ok(f"Entras como {initial} con tu llave")
+            die(L(f"No pude instalar tu llave en {initial}@{ip}. Revisa la contraseña o el usuario.",
+                  f"Couldn't install your key for {initial}@{ip}. Check the password or the user."))
+    ok(L(f"Entras como {initial} con tu llave", f"You log in as {initial} with your key"))
     extra = ["-e", f"ansible_user={initial}", "-e", "ansible_port=22"]
     become_file: Path | None = None
     if initial != "root":
         extra += ["--become"]
         if run(["ssh", "-o", "BatchMode=yes", *target, "sudo -n true"]).returncode == 0:
-            ok(f"{initial} usa sudo sin contraseña (normal en Azure y AWS): no hace falta pedirla")
+            ok(L(f"{initial} usa sudo sin contraseña (normal en Azure y AWS): no hace falta pedirla",
+                 f"{initial} uses sudo without a password (normal on Azure and AWS): no need to ask for it"))
         else:
-            note(f"""
+            note(L(f"""
 {initial} necesita contraseña para sudo: la de {initial} que te dio tu proveedor (no la de
-tu usuario nuevo, que todavía no existe).""")
-            pw = ask_secret(f"Contraseña de sudo de '{initial}'",
+tu usuario nuevo, que todavía no existe).""", f"""
+{initial} needs a password for sudo: {initial}'s, from your provider (not your new user's,
+which doesn't exist yet)."""))
+            pw = ask_secret(L(f"Contraseña de sudo de '{initial}'", f"Sudo password for '{initial}'"),
                             lambda v: None if run(["ssh", "-o", "BatchMode=yes", *target, "sudo -S -p '' -v"],
                                                   input=v + "\n").returncode == 0
-                            else f"No es la contraseña de sudo de '{initial}'.")
+                            else L(f"No es la contraseña de sudo de '{initial}'.",
+                                   f"That's not the sudo password for '{initial}'."))
             tmp = Path(tempfile.mkdtemp(prefix="andamio-sudo-"))
             become_file = tmp / "become"
             become_file.write_text(pw)
             become_file.chmod(0o600)
             extra += ["--become-password-file", str(become_file)]
-    note(f"""
-Ahora bootstrap crea tu usuario '{cfg['homelab_user']}' y mueve SSH al puerto {cfg['homelab_ssh_port']}.
-Te va a pedir una contraseña NUEVA para '{cfg['homelab_user']}': invéntala ahora (larga), escríbela
+    note(L(f"""
+Ahora bootstrap crea tu usuario '{user}' y mueve SSH al puerto {port}.
+Te va a pedir una contraseña NUEVA para '{user}': invéntala ahora (larga), escríbela
 dos veces y guárdala en tu gestor. Es solo para sudo (para entrar sigue siendo tu llave),
-y andamio te la pedirá en los pasos siguientes. La conexión se corta al final: es lo esperado.""")
+y andamio te la pedirá en los pasos siguientes. La conexión se corta al final: es lo esperado.""", f"""
+Now bootstrap creates your user '{user}' and moves SSH to port {port}.
+It will ask for a NEW password for '{user}': make one up now (long), type it twice and
+keep it in your password manager. It's only for sudo (you still log in with your key),
+and andamio will ask for it in the next steps. The connection drops at the end: that's expected."""))
     try:
         interactive(["ansible-playbook", "bootstrap.yml", *extra], cwd=ROOT / "ansible")
     finally:
@@ -776,37 +931,45 @@ y andamio te la pedirá en los pasos siguientes. La conexión se corta al final:
             shutil.rmtree(become_file.parent, ignore_errors=True)
     for _ in range(10):
         if ssh_ok([alias]):
-            ok(f"Entras como {cfg['homelab_user']} por el puerto {cfg['homelab_ssh_port']}")
+            ok(L(f"Entras como {user} por el puerto {port}", f"You log in as {user} on port {port}"))
             return
         import time
         time.sleep(3)
-    die(f"No logro entrar con `ssh {alias}`. Revisa el firewall de tu proveedor (el puerto {cfg['homelab_ssh_port']}).")
+    die(L(f"No logro entrar con `ssh {alias}`. Revisa el firewall de tu proveedor (el puerto {port}).",
+          f"Can't log in with `ssh {alias}`. Check your provider's firewall (port {port})."))
 
 
 def check_user_initial(v: str):
-    return None if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", v) else "Usuario inválido."
+    return None if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", v) else L("Usuario inválido.", "Invalid user.")
 
 
-def step_repo_pushed() -> None:
+def step_repo_pushed(cmd: str = "servidor") -> None:
     name = forge_out("name")
-    title(f"4. Tu configuración en {name}")
-    note(f"""
-El servidor se configura desde tu repo en {name}: lo que no esté subido, no existe para él.""")
+    rerun = f"andamio {L(cmd, {'servidor': 'server'}.get(cmd, cmd))}"
+    title(L(f"4. Tu configuración en {name}", f"4. Your configuration on {name}"))
+    note(L(f"""
+El servidor se configura desde tu repo en {name}: lo que no esté subido, no existe para él.""", f"""
+The server is configured from your repo on {name}: whatever isn't pushed doesn't exist for it."""))
     if run(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip():
-        die("Hay cambios sin commit (la configuración, la llave del servidor...). Corre:\n"
-            "    git add -A && git commit -m 'andamio: configuración' && git push\n"
-            "y vuelve a correr `andamio servidor`: retoma donde quedó.")
+        die(L("Hay cambios sin commit (la configuración, la llave del servidor...). Corre:\n"
+              "    git add -A && git commit -m 'andamio: configuración' && git push\n"
+              f"y vuelve a correr `{rerun}`: retoma donde quedó.",
+              "There are uncommitted changes (the configuration, the server key...). Run:\n"
+              "    git add -A && git commit -m 'andamio: configuration' && git push\n"
+              f"and run `{rerun}` again: it resumes where it stopped."))
     run(["git", "-C", str(ROOT), "fetch", "-q"])
     if run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout != run(["git", "-C", str(ROOT), "rev-parse", "@{u}"]).stdout:
-        die(f"Tus commits no están en {name}: corre `git push` y vuelve a correr `andamio servidor`.")
-    ok("Todo subido")
+        die(L(f"Tus commits no están en {name}: corre `git push` y vuelve a correr `{rerun}`.",
+              f"Your commits aren't on {name}: run `git push` and run `{rerun}` again."))
+    ok(L("Todo subido", "Everything pushed"))
 
 
 def step_harden(cfg: dict, alias: str) -> None:
-    title("5. Endurecimiento: SSH, firewall, parches, Docker y VPN")
+    title(L("5. Endurecimiento: SSH, firewall, parches, Docker y VPN", "5. Hardening: SSH, firewall, patches, Docker and VPN"))
     if ansible(["site.yml", "--tags", "base,ssh,firewall,docker,wireguard"], cfg, alias) != 0:
-        die("El endurecimiento falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.")
-    ok("Servidor endurecido")
+        die(L("El endurecimiento falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.",
+              "Hardening failed (details above). Fix it and run `andamio server` again."))
+    ok(L("Servidor endurecido", "Server hardened"))
 
 
 def remote(alias: str, script: str, stdin: str | None = None) -> subprocess.CompletedProcess:
@@ -819,12 +982,15 @@ def remote(alias: str, script: str, stdin: str | None = None) -> subprocess.Comp
 
 def step_repo_key(cfg: dict, alias: str) -> None:
     name = forge_out("name")
-    title("6. Llave del servidor para leer tu repo")
-    note(f"""
+    title(L("6. Llave del servidor para leer tu repo", "6. The server's key to read your repo"))
+    note(L(f"""
 El servidor baja tu configuración de {name} con una llave propia, de SOLO LECTURA y solo
-para ese repo. Se genera en el servidor: la privada nunca sale de ahí.""")
+para ese repo. Se genera en el servidor: la privada nunca sale de ahí.""", f"""
+The server pulls your configuration from {name} with its own key, READ-ONLY and for that
+repo only. It's generated on the server: the private key never leaves it."""))
     m = re.search(r":([^/]+/[^/]+?)(\.git)?$", cfg["homelab_repo"])
-    repo = m.group(1) if m else die("homelab_repo no tiene el formato git@github-homelab-infra:dueño/repo.git")
+    repo = m.group(1) if m else die(L("homelab_repo no tiene el formato git@github-homelab-infra:dueño/repo.git",
+                                      "homelab_repo isn't in the git@github-homelab-infra:owner/repo.git format"))
     host, known_hosts = forge_out("ssh-host"), forge_out("known-hosts")
     r = remote(alias, f"""set -e
 umask 077
@@ -843,17 +1009,18 @@ EOF
 cat $k.pub
 """)
     if r.returncode != 0 or "ssh-ed25519" not in r.stdout:
-        die(f"No pude preparar la llave en el servidor: {r.stderr.strip()}")
+        die(L(f"No pude preparar la llave en el servidor: {r.stderr.strip()}",
+              f"Couldn't prepare the key on the server: {r.stderr.strip()}"))
     tmp = Path(tempfile.mkstemp(suffix=".pub")[1])
     try:
         tmp.write_text(r.stdout.strip().splitlines()[-1] + "\n")
         if forge("deploy-key-has", repo, "andamio-server", str(tmp)).returncode == 0:
-            ok(f"Ya registrada en {name}")
+            ok(L(f"Ya registrada en {name}", f"Already registered on {name}"))
         else:
             add = forge("deploy-key-add", repo, "andamio-server", str(tmp))
             if add.returncode != 0:
-                die(f"{name} rechazó la llave: {add.stderr.strip()}")
-            ok(f"Registrada en {repo} como deploy key de solo lectura")
+                die(L(f"{name} rechazó la llave: {add.stderr.strip()}", f"{name} rejected the key: {add.stderr.strip()}"))
+            ok(L(f"Registrada en {repo} como deploy key de solo lectura", f"Registered on {repo} as a read-only deploy key"))
     finally:
         tmp.unlink()
 
@@ -867,37 +1034,40 @@ def ask_registry_token(cfg: dict, alias: str) -> str | None:
     """Pide el token del registro al principio (antes de minutos de salida de Ansible, donde
     es fácil pegarlo a destiempo y que quede impreso). None si el servidor ya tiene login."""
     host, name = registry(cfg)
-    title(f"4b. Acceso a tus imágenes ({name})")
+    title(L(f"4b. Acceso a tus imágenes ({name})", f"4b. Access to your images ({name})"))
     if remote(alias, f"grep -q '\"{host}\"' ~/.docker/config.json 2>/dev/null").returncode == 0:
-        ok(f"El servidor ya puede bajar imágenes de {name}")
+        ok(L(f"El servidor ya puede bajar imágenes de {name}", f"The server can already pull images from {name}"))
         return None
     note(forge_out("registry-token-help"))
-    token = ask_secret("Token de solo lectura de imágenes (no se ve al escribir)", registry_token_problem)
-    ok("Token válido: lo uso cuando Docker esté instalado (paso 7).")
+    token = ask_secret(L("Token de solo lectura de imágenes (no se ve al escribir)", "Read-only image token (hidden while typing)"),
+                       registry_token_problem)
+    ok(L("Token válido: lo uso cuando Docker esté instalado (paso 7).", "Token valid: used once Docker is installed (step 7)."))
     return token
 
 
 def step_registry(cfg: dict, alias: str, token: str | None) -> None:
     host, name = registry(cfg)
-    title(f"7. Login en {name}")
+    title(L(f"7. Login en {name}", f"7. Login to {name}"))
     if token is None:
-        ok("Ya hecho")
+        ok(L("Ya hecho", "Already done"))
         return
     r = remote(alias, f"docker login {host} -u {cfg['homelab_github_owner']} --password-stdin", stdin=token + "\n")
     if r.returncode != 0:
-        die(f"docker login falló: {r.stderr.strip()}")
-    ok(f"Login en {name} hecho (el token queda solo en el servidor)")
+        die(L(f"docker login falló: {r.stderr.strip()}", f"docker login failed: {r.stderr.strip()}"))
+    ok(L(f"Login en {name} hecho (el token queda solo en el servidor)", f"Logged in to {name} (the token stays only on the server)"))
 
 
 def step_platform(cfg: dict, alias: str) -> None:
-    title("8. Plataforma: Traefik, datos, monitoreo")
+    title(L("8. Plataforma: Traefik, datos, monitoreo", "8. Platform: Traefik, data, monitoring"))
     if ansible(["site.yml", "--tags", "homelab"], cfg, alias) != 0:
-        die("La plataforma falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.")
-    ok("Plataforma arriba")
+        die(L("La plataforma falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.",
+              "The platform failed (details above). Fix it and run `andamio server` again."))
+    ok(L("Plataforma arriba", "Platform up"))
 
 
 def cmd_servidor(args: argparse.Namespace) -> None:
-    print("\033[1mandamio servidor\033[0m: prepara tu VPS (parte 2). Se puede volver a correr: retoma donde quedó.")
+    print(L("\033[1mandamio servidor\033[0m: prepara tu VPS (parte 2). Se puede volver a correr: retoma donde quedó.",
+            "\033[1mandamio server\033[0m: sets up your VPS (part 2). Safe to run again: it resumes where it stopped."))
     check_tools()
     cfg = load_config()
     pub = step_local_key()
@@ -907,7 +1077,7 @@ def cmd_servidor(args: argparse.Namespace) -> None:
     step_bootstrap(cfg, alias, pub)
     step_repo_pushed()
     token = ask_registry_token(cfg, alias)
-    title("4c. Contraseña de sudo")
+    title(L("4c. Contraseña de sudo", "4c. Sudo password"))
     sudo_password_file(cfg, alias)
     try:
         step_harden(cfg, alias)
@@ -916,11 +1086,16 @@ def cmd_servidor(args: argparse.Namespace) -> None:
         step_platform(cfg, alias)
     finally:
         wipe_sudo()
-    title("Listo: tu VPS está seguro y preparado")
-    note(f"""
+    title(L("Listo: tu VPS está seguro y preparado", "Done: your VPS is secure and ready"))
+    note(L(f"""
 VPN: importa ~/andamio-vpn/mi-pc.conf en WireGuard (paneles privados solo por VPN).
 Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
-Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta""")
+Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta
+Chequeo de seguridad:  bin/andamio estado     Backups:  bin/andamio backups""", f"""
+VPN: import ~/andamio-vpn/mi-pc.conf into WireGuard (private panels only over the VPN).
+Grafana (if your monitoring is completo): https://grafana.{cfg.get('homelab_domain')} over the VPN.
+First app:  bin/homelab app create <name> --repo <owner/repo> --port <port> --health /path
+Security check:  bin/andamio status     Backups:  bin/andamio backups"""))
 
 
 # ================= backups =================
@@ -936,7 +1111,8 @@ def server_alias() -> str:
     """El alias SSH del servidor: el primer host del inventario (lo crea andamio servidor)."""
     import yaml
     if not INVENTORY.exists():
-        die("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.")
+        die(L("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.",
+              "ansible/inventory.yml is missing: run `bin/andamio server` first."))
     hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["homelab"]["hosts"]
     return next(iter(hosts))
 
@@ -944,7 +1120,8 @@ def server_alias() -> str:
 def sops_read(path: Path) -> str:
     r = run(["sops", "decrypt", "--input-type", "json", "--output-type", "binary", str(path)], cwd=ROOT)
     if r.returncode != 0:
-        die(f"sops no pudo descifrar {path.relative_to(ROOT)}: {r.stderr.strip()}")
+        die(L(f"sops no pudo descifrar {path.relative_to(ROOT)}: {r.stderr.strip()}",
+              f"sops couldn't decrypt {path.relative_to(ROOT)}: {r.stderr.strip()}"))
     return r.stdout
 
 
@@ -960,10 +1137,10 @@ def encrypt_binary(path: Path, content: str) -> None:
         r = run(["sops", "encrypt", "--input-type", "binary", "--output-type", "json",
                  "--filename-override", str(rel), str(plain)], cwd=ROOT)
         if r.returncode != 0:
-            die(f"sops no pudo cifrar {rel}: {r.stderr.strip()}")
+            die(L(f"sops no pudo cifrar {rel}: {r.stderr.strip()}", f"sops couldn't encrypt {rel}: {r.stderr.strip()}"))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(r.stdout)
-        ok(f"{rel} (cifrado)")
+        ok(L(f"{rel} (cifrado)", f"{rel} (encrypted)"))
     finally:
         plain.write_bytes(b"\0" * 256)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -998,85 +1175,112 @@ def b2_authorize(key_id: str, key: str) -> tuple[dict | None, str | None]:
     if code == 200:
         return d, None
     if code == 401:
-        return None, "Backblaze no reconoce ese keyID con esa llave (¿mal copiados, o es de otra cuenta?)."
-    return None, f"No pude comprobarla con Backblaze ({code or d.get('message')})."
+        return None, L("Backblaze no reconoce ese keyID con esa llave (¿mal copiados, o es de otra cuenta?).",
+                       "Backblaze doesn't recognize that keyID with that key (mistyped, or from another account?).")
+    return None, L(f"No pude comprobarla con Backblaze ({code or d.get('message')}).",
+                   f"Couldn't check it with Backblaze ({code or d.get('message')}).")
 
 
 def ask_b2(cfg: dict) -> tuple[str, dict]:
-    note("""
+    note(L("""
 Backblaze B2: 10 GB gratis, luego unos 6 USD por TB al mes.
 1. En https://secure.backblaze.com/b2_buckets.htm  → Create a Bucket:
      nombre único (ej. andamio-backups-<algo tuyo>), Files: Private,
      Object Lock: Enable (recomendado: protege los backups aunque alguien tome el servidor).
 2. La llave que usará el servidor la puede crear andamio, SIN permiso de borrar y solo
    para ese bucket. Para eso necesita tu Master Application Key una vez (App Keys →
-   Generate New Master Application Key): no se guarda y solo viaja a Backblaze.""")
-    bucket = ask("Nombre del bucket", check=lambda v: None if re.fullmatch(r"[A-Za-z0-9-]{6,50}", v)
-                 else "Entre 6 y 50 letras, números o guiones.")
-    if ask_yes("¿Creo la llave sin permiso de borrar con tu master key? (recomendado)", True):
-        master_id = ask("Master keyID (keyID de la master key)")
+   Generate New Master Application Key): no se guarda y solo viaja a Backblaze.""", """
+Backblaze B2: 10 GB free, then about 6 USD per TB per month.
+1. At https://secure.backblaze.com/b2_buckets.htm  → Create a Bucket:
+     unique name (e.g. andamio-backups-<something of yours>), Files: Private,
+     Object Lock: Enable (recommended: protects backups even if someone takes the server).
+2. andamio can create the key the server will use, WITHOUT delete permission and for
+   that bucket only. For that it needs your Master Application Key once (App Keys →
+   Generate New Master Application Key): it isn't stored and only travels to Backblaze."""))
+    bucket = ask(L("Nombre del bucket", "Bucket name"),
+                 check=lambda v: None if re.fullmatch(r"[A-Za-z0-9-]{6,50}", v)
+                 else L("Entre 6 y 50 letras, números o guiones.", "6 to 50 letters, digits or hyphens."))
+    if ask_yes(L("¿Creo la llave sin permiso de borrar con tu master key? (recomendado)",
+                 "Create the key without delete permission using your master key? (recommended)"), True):
+        master_id = ask(L("Master keyID (keyID de la master key)", "Master keyID (the master key's keyID)"))
         auth = {}
 
         def master_problem(k: str) -> str | None:
             d, error = b2_authorize(master_id, k)
             auth.update(d or {})
             return error
-        ask_secret("Master applicationKey (no se ve al escribir)", master_problem)
+        ask_secret(L("Master applicationKey (no se ve al escribir)", "Master applicationKey (hidden while typing)"), master_problem)
         api, token = auth["apiInfo"]["storageApi"]["apiUrl"], auth["authorizationToken"]
         code, d = b2_api(f"{api}/b2api/v3/b2_list_buckets", {"accountId": auth["accountId"], "bucketName": bucket}, token)
         if code != 200 or not d.get("buckets"):
-            die(f"No existe el bucket '{bucket}' en tu cuenta de Backblaze. Créalo y vuelve a correr `andamio backups`.")
-        name = f"andamio-{cfg.get('homelab_hostname', 'servidor')}"
+            die(L(f"No existe el bucket '{bucket}' en tu cuenta de Backblaze. Créalo y vuelve a correr `andamio backups`.",
+                  f"Bucket '{bucket}' doesn't exist in your Backblaze account. Create it and run `andamio backups` again."))
+        name = f"andamio-{cfg.get('homelab_hostname', 'server')}"
         code, key = b2_api(f"{api}/b2api/v3/b2_create_key", {
             "accountId": auth["accountId"], "keyName": name, "bucketId": d["buckets"][0]["bucketId"],
             "capabilities": B2_CAPS}, token)
         if code != 200:
-            die(f"Backblaze no creó la llave: {key.get('message', code)}")
+            die(L(f"Backblaze no creó la llave: {key.get('message', code)}", f"Backblaze didn't create the key: {key.get('message', code)}"))
         auth.clear()
-        ok(f"Llave '{name}' creada: solo el bucket {bucket}, sin permiso de borrar")
+        ok(L(f"Llave '{name}' creada: solo el bucket {bucket}, sin permiso de borrar",
+             f"Key '{name}' created: bucket {bucket} only, no delete permission"))
         key_id, app_key = key["applicationKeyId"], key["applicationKey"]
     else:
-        note("""
-Crea en App Keys → Add a New Application Key una llave con acceso SOLO a ese bucket.""")
-        key_id = ask("keyID de esa llave")
+        note(L("""
+Crea en App Keys → Add a New Application Key una llave con acceso SOLO a ese bucket.""", """
+Create a key in App Keys → Add a New Application Key with access to that bucket ONLY."""))
+        key_id = ask(L("keyID de esa llave", "That key's keyID"))
         caps: dict = {}
 
         def key_problem_b2(k: str) -> str | None:
             d, error = b2_authorize(key_id, k)
             caps.update((d or {}).get("apiInfo", {}).get("storageApi", {}))
             return error
-        app_key = ask_secret("applicationKey (no se ve al escribir)", key_problem_b2)
+        app_key = ask_secret(L("applicationKey (no se ve al escribir)", "applicationKey (hidden while typing)"), key_problem_b2)
         allowed = [b.get("name") for b in caps.get("allowed", {}).get("buckets") or []]
         if bucket not in allowed:
-            warn(f"Esa llave no está limitada al bucket {bucket} (puede ver: {', '.join(filter(None, allowed)) or 'todos'}).")
+            seen = ", ".join(filter(None, allowed)) or L("todos", "all")
+            warn(L(f"Esa llave no está limitada al bucket {bucket} (puede ver: {seen}).",
+                   f"That key isn't limited to bucket {bucket} (it can see: {seen})."))
         if "deleteFiles" in caps.get("allowed", {}).get("capabilities", caps.get("capabilities", [])):
-            warn("Esa llave PUEDE BORRAR: si alguien toma el servidor, puede borrar tus backups. "
-                 "Mejor deja que andamio cree una sin ese permiso (vuelve a correr y responde s).")
-        if not ask_yes("¿Usarla igual?", False):
-            die("Cancelado: no cambié nada.")
+            warn(L("Esa llave PUEDE BORRAR: si alguien toma el servidor, puede borrar tus backups. "
+                   "Mejor deja que andamio cree una sin ese permiso (vuelve a correr y responde s).",
+                   "That key CAN DELETE: if someone takes the server, they can delete your backups. "
+                   "Better let andamio create one without that permission (run again and answer y)."))
+        if not ask_yes(L("¿Usarla igual?", "Use it anyway?"), False):
+            die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
     return (f"b2:{bucket}:{cfg.get('homelab_hostname', 'andamio')}",
             {"B2_ACCOUNT_ID": key_id, "B2_ACCOUNT_KEY": app_key})
 
 
 def ask_s3(cfg: dict) -> tuple[str, dict]:
-    note("""
+    note(L("""
 Cualquier almacenamiento compatible con S3. Crea un bucket PRIVADO y una llave de acceso
 limitada a ese bucket (si el proveedor lo permite, sin permiso de borrar y con
 versionado u Object Lock). Endpoints:
   AWS S3:         s3.<región>.amazonaws.com        (ej. s3.us-east-1.amazonaws.com)
   Cloudflare R2:  <id de tu cuenta>.r2.cloudflarestorage.com   (10 GB gratis)
   Wasabi:         s3.<región>.wasabisys.com
-La llave se prueba desde tu servidor en el paso siguiente.""")
+La llave se prueba desde tu servidor en el paso siguiente.""", """
+Any S3-compatible storage. Create a PRIVATE bucket and an access key limited to that
+bucket (if the provider allows it, without delete permission and with versioning or
+Object Lock). Endpoints:
+  AWS S3:         s3.<region>.amazonaws.com        (e.g. s3.us-east-1.amazonaws.com)
+  Cloudflare R2:  <your account id>.r2.cloudflarestorage.com   (10 GB free)
+  Wasabi:         s3.<region>.wasabisys.com
+The key is tested from your server in the next step."""))
     endpoint = ask("Endpoint", check=lambda v: None if re.fullmatch(r"(https?://)?[A-Za-z0-9.-]+(:\d+)?/?", v)
-                   else "Solo el host (ej. s3.us-east-1.amazonaws.com).")
+                   else L("Solo el host (ej. s3.us-east-1.amazonaws.com).", "Just the host (e.g. s3.us-east-1.amazonaws.com)."))
     endpoint = re.sub(r"^https?://", "", endpoint).rstrip("/")
-    bucket = ask("Nombre del bucket", check=lambda v: None if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", v)
-                 else "Minúsculas, números, puntos y guiones (3-63).")
+    bucket = ask(L("Nombre del bucket", "Bucket name"),
+                 check=lambda v: None if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", v)
+                 else L("Minúsculas, números, puntos y guiones (3-63).", "Lowercase letters, digits, dots and hyphens (3-63)."))
     m = re.match(r"s3[.-]([a-z0-9-]+)\.amazonaws\.com$", endpoint)
-    region = ask("Región", m.group(1) if m else "auto")
+    region = ask(L("Región", "Region"), m.group(1) if m else "auto")
     key_id = ask("Access Key ID")
-    secret = ask_secret("Secret Access Key (no se ve al escribir)",
-                        lambda v: None if len(v) >= 16 else "Muy corta para ser una Secret Access Key.")
+    secret = ask_secret(L("Secret Access Key (no se ve al escribir)", "Secret Access Key (hidden while typing)"),
+                        lambda v: None if len(v) >= 16
+                        else L("Muy corta para ser una Secret Access Key.", "Too short to be a Secret Access Key."))
     return (f"s3:https://{endpoint}/{bucket}/{cfg.get('homelab_hostname', 'andamio')}",
             {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": secret, "AWS_DEFAULT_REGION": region})
 
@@ -1099,51 +1303,68 @@ echo ANDAMIO:ERROR; printf '%s\\n' "$out" | tail -n 4
 
 
 def cmd_backups(args: argparse.Namespace) -> None:
-    print("\033[1mandamio backups\033[0m: backups diarios, cifrados y fuera del servidor. "
-          "Se puede volver a correr: retoma donde quedó.")
+    print(L("\033[1mandamio backups\033[0m: backups diarios, cifrados y fuera del servidor. "
+            "Se puede volver a correr: retoma donde quedó.",
+            "\033[1mandamio backups\033[0m: daily, encrypted, off-server backups. "
+            "Safe to run again: it resumes where it stopped."))
     check_tools()
     cfg = load_config()
     alias = server_alias()
     if not ssh_ok([alias]):
-        die(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.")
-    note("""
+        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.",
+              f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
+    note(L("""
 Qué se guarda, cada noche (03:30 UTC): las bases de datos (PostgreSQL y Redis), los datos
 de tus apps y la plataforma (/srv/homelab), y lo necesario para reconstruir el servidor
 igual (llaves SSH, VPN, secretos del host). restic lo cifra EN el servidor antes de
-enviarlo: el destino nunca ve tus datos. Se guardan 7 diarios, 4 semanales y 6 mensuales.""")
+enviarlo: el destino nunca ve tus datos. Se guardan 7 diarios, 4 semanales y 6 mensuales.""", """
+What's saved, every night (03:30 UTC): the databases (PostgreSQL and Redis), your apps'
+data and the platform (/srv/homelab), and what's needed to rebuild the same server
+(SSH keys, VPN, host secrets). restic encrypts it ON the server before sending it: the
+destination never sees your data. 7 daily, 4 weekly and 6 monthly are kept."""))
 
     if RESTIC_ENV.exists() and RESTIC_PW.exists():
-        title("1-3. Destino")
-        ok(f"Ya configurado ({RESTIC_ENV.relative_to(ROOT)})")
+        title(L("1-3. Destino", "1-3. Destination"))
+        ok(L(f"Ya configurado ({RESTIC_ENV.relative_to(ROOT)})", f"Already configured ({RESTIC_ENV.relative_to(ROOT)})"))
     else:
-        title("1. ¿Dónde se guardan?")
-        kind = ask("Destino (b2/s3)", "b2", lambda v: None if v in ("b2", "s3") else "b2 o s3.")
+        title(L("1. ¿Dónde se guardan?", "1. Where are they stored?"))
+        kind = ask(L("Destino (b2/s3)", "Destination (b2/s3)"), "b2",
+                   lambda v: None if v in ("b2", "s3") else L("b2 o s3.", "b2 or s3."))
         repo, env = ask_b2(cfg) if kind == "b2" else ask_s3(cfg)
 
-        title("2. Contraseña del repositorio")
+        title(L("2. Contraseña del repositorio", "2. Repository password"))
         if RESTIC_PW.exists():
             password = sops_read(RESTIC_PW).strip()
-            ok(f"Uso la de {RESTIC_PW.relative_to(ROOT)}")
+            ok(L(f"Uso la de {RESTIC_PW.relative_to(ROOT)}", f"Using the one in {RESTIC_PW.relative_to(ROOT)}"))
         else:
             password = secrets.token_urlsafe(32)
-            note("""
+            note(L("""
 Aleatoria y cifrada con sops en tu repo: no la ves ni la necesitas escribir. Para leerla
 hace falta tu llave age, así que guarda esa llave fuera de esta máquina (gestor de
-contraseñas): sin ella, nadie (tú tampoco) puede abrir los backups.""")
+contraseñas): sin ella, nadie (tú tampoco) puede abrir los backups.""", """
+Random and encrypted with sops in your repo: you don't see it or need to type it. Reading
+it takes your age key, so keep that key off this machine too (password manager):
+without it, nobody (you included) can open the backups."""))
 
-        title("3. Probar el destino desde el servidor")
+        title(L("3. Probar el destino desde el servidor", "3. Testing the destination from the server"))
         status, detail = restic_probe(alias, repo, env, password)
         if status == "CLAVE":
-            warn(f"Ya hay un repositorio de backups en {repo}, con otra contraseña.")
-            if not ask_yes("¿Es tuyo (de una instalación anterior) y tienes su contraseña?", False):
-                die("Usa otro bucket (o borra ese repositorio) y vuelve a correr `andamio backups`.")
-            password = ask_secret("Contraseña de ese repositorio (no se ve al escribir)",
+            warn(L(f"Ya hay un repositorio de backups en {repo}, con otra contraseña.",
+                   f"There's already a backup repository at {repo}, with another password."))
+            if not ask_yes(L("¿Es tuyo (de una instalación anterior) y tienes su contraseña?",
+                             "Is it yours (from a previous install) and do you have its password?"), False):
+                die(L("Usa otro bucket (o borra ese repositorio) y vuelve a correr `andamio backups`.",
+                      "Use another bucket (or delete that repository) and run `andamio backups` again."))
+            password = ask_secret(L("Contraseña de ese repositorio (no se ve al escribir)",
+                                    "That repository's password (hidden while typing)"),
                                   lambda p: None if restic_probe(alias, repo, env, p)[0] == "EXISTE"
-                                  else "No abre ese repositorio.")
+                                  else L("No abre ese repositorio.", "It doesn't open that repository."))
             status = "EXISTE"
         if status == "ERROR":
-            die(f"El servidor no pudo usar ese destino:\n{detail}\nRevisa el bucket y la llave, y vuelve a correr.")
-        ok("Repositorio creado" if status == "CREADO" else "Repositorio existente: se sigue usando")
+            die(L(f"El servidor no pudo usar ese destino:\n{detail}\nRevisa el bucket y la llave, y vuelve a correr.",
+                  f"The server couldn't use that destination:\n{detail}\nCheck the bucket and the key, and run again."))
+        ok(L("Repositorio creado", "Repository created") if status == "CREADO"
+           else L("Repositorio existente: se sigue usando", "Existing repository: it keeps being used"))
         encrypt_binary(RESTIC_PW, password + "\n")
         encrypt_binary(RESTIC_ENV, "".join(f"{k}={v}\n" for k, v in {
             "RESTIC_REPOSITORY": repo, "RESTIC_PASSWORD_FILE": "/etc/restic/password", **env}.items()))
@@ -1152,33 +1373,39 @@ contraseñas): sin ella, nadie (tú tampoco) puede abrir los backups.""")
     if str(cfg.get("homelab_backups")).lower() != "true":
         set_config("homelab_backups", "true")
         ok("homelab_backups: true")
-    step_repo_pushed()
+    step_repo_pushed("backups")
 
-    title("5. Activar en el servidor")
+    title(L("5. Activar en el servidor", "5. Turning it on in the server"))
     try:
         if ansible(["site.yml", "--tags", "homelab"], cfg, alias) != 0:
-            die("No se pudo activar (el detalle está arriba). Corrígelo y vuelve a correr `andamio backups`.")
-        ok("Backup diario programado")
+            die(L("No se pudo activar (el detalle está arriba). Corrígelo y vuelve a correr `andamio backups`.",
+                  "Couldn't turn it on (details above). Fix it and run `andamio backups` again."))
+        ok(L("Backup diario programado", "Daily backup scheduled"))
 
-        title("6. Primer backup (ahora)")
-        note("Puede tardar unos minutos la primera vez.")
+        title(L("6. Primer backup (ahora)", "6. First backup (now)"))
+        note(L("Puede tardar unos minutos la primera vez.", "It can take a few minutes the first time."))
         if remote_sudo(cfg, alias, "systemctl start homelab-backup.service") != 0:
             remote_sudo(cfg, alias, "journalctl -u homelab-backup.service -n 25 --no-pager")
-            die("El backup falló (el detalle está arriba).")
-        ok("Primer backup hecho")
+            die(L("El backup falló (el detalle está arriba).", "The backup failed (details above)."))
+        ok(L("Primer backup hecho", "First backup done"))
 
-        title("7. Prueba de restauración")
-        note("Restaura el backup en una base temporal y la compara con producción (no toca nada).")
+        title(L("7. Prueba de restauración", "7. Restore test"))
+        note(L("Restaura el backup en una base temporal y la compara con producción (no toca nada).",
+               "Restores the backup into a temporary database and compares it with production (touches nothing)."))
         if remote_sudo(cfg, alias, f"{cfg.get('homelab_root', '/srv/homelab')}/infra/scripts/restore-check.sh") != 0:
-            die("La prueba de restauración encontró diferencias (arriba). Tus backups existen, pero revísalo.")
+            die(L("La prueba de restauración encontró diferencias (arriba). Tus backups existen, pero revísalo.",
+                  "The restore test found differences (above). Your backups exist, but look into it."))
     finally:
         wipe_sudo()
 
-    title("Listo: tus datos tienen copia fuera del servidor")
-    note(f"""
+    title(L("Listo: tus datos tienen copia fuera del servidor", "Done: your data has a copy off the server"))
+    note(L(f"""
 Cada noche a las 03:30 UTC. Con Telegram activado (homelab_telegram) te avisa del
 resultado; si no, revísalo de vez en cuando:  ssh {alias} systemctl status homelab-backup
-Para reconstruir todo en otro servidor: docs/runbooks/reconstruir-servidor.md""")
+Para reconstruir todo en otro servidor: docs/runbooks/reconstruir-servidor.md""", f"""
+Every night at 03:30 UTC. With Telegram on (homelab_telegram) you get the result; if not,
+check it now and then:  ssh {alias} systemctl status homelab-backup
+To rebuild everything on another server: docs/runbooks/reconstruir-servidor.md"""))
 
 
 # ================= estado =================
@@ -1200,12 +1427,13 @@ def tls_seen_from_internet(host: str) -> tuple[bool, str]:
             with ssl.create_default_context().wrap_socket(s, server_hostname=host) as t:
                 cert = t.getpeercert()
     except ssl.SSLCertVerificationError as e:
-        return False, f"un navegador lo rechaza: {e.verify_message}"
+        return False, L(f"un navegador lo rechaza: {e.verify_message}", f"a browser rejects it: {e.verify_message}")
     except OSError as e:
-        return False, f"no responde ({e})"
+        return False, L(f"no responde ({e})", f"no answer ({e})")
     expires = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
     issuer = dict(x[0] for x in cert["issuer"]).get("organizationName", "?")
-    return True, f"válido para un navegador ({issuer}, {(expires - datetime.now(timezone.utc)).days} días)"
+    days = (expires - datetime.now(timezone.utc)).days
+    return True, L(f"válido para un navegador ({issuer}, {days} días)", f"valid for a browser ({issuer}, {days} days)")
 
 
 def redirects_to_https(host: str) -> bool:
@@ -1220,16 +1448,18 @@ def redirects_to_https(host: str) -> bool:
 
 
 def cmd_estado(args: argparse.Namespace) -> None:
-    print("\033[1mandamio estado\033[0m: chequeo de seguridad y salud de tu servidor (no cambia nada).")
+    print(L("\033[1mandamio estado\033[0m: chequeo de seguridad y salud de tu servidor (no cambia nada).",
+            "\033[1mandamio status\033[0m: security and health check of your server (changes nothing)."))
     cfg = load_config()
     alias = server_alias()
     if not ssh_ok([alias]):
-        die(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.")
+        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.",
+              f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
     ip, ssh_port, domain = cfg["homelab_server_ip"], int(cfg["homelab_ssh_port"]), cfg["homelab_domain"]
     backups = str(cfg.get("homelab_backups", False)).lower() == "true"
 
-    title("Desde el servidor")
-    script = f"SSH_PORT={ssh_port} BACKUPS={'true' if backups else 'false'}\n" + \
+    title(L("Desde el servidor", "From the server"))
+    script = f"ANDAMIO_LANG={LANG} SSH_PORT={ssh_port} BACKUPS={'true' if backups else 'false'}\n" + \
         (ROOT / "scripts" / "security-check.sh").read_text()
     try:
         pw = sudo_password_file(cfg, alias).read_text()
@@ -1245,68 +1475,86 @@ def cmd_estado(args: argparse.Namespace) -> None:
         elif parts[0] in ("OK", "WARN", "FAIL"):
             results.append((parts + ["", ""])[:4])
     if not results:
-        die(f"El chequeo no corrió en el servidor: {r.stderr.strip()[-300:]}")
+        die(L(f"El chequeo no corrió en el servidor: {r.stderr.strip()[-300:]}",
+              f"The check didn't run on the server: {r.stderr.strip()[-300:]}"))
 
     # Desde Internet: lo que de verdad ve cualquiera (Docker puede saltarse UFW). Con la VPN
     # activa, tus conexiones entran por ella y el firewall las trata distinto: no valdrían.
     seen_as = remote(alias, 'echo "${SSH_CLIENT%% *}"').stdout.strip()
-    if seen_as.startswith("10.8.0."):
-        warn("Tu PC está conectada a la VPN del servidor: las pruebas desde Internet no serían "
-             "reales. Desconéctala y vuelve a correr `andamio estado` para hacerlas.")
-        listening, ssh_port_probe = [], False
-    else:
-        ssh_port_probe = True
+    on_vpn = seen_as.startswith("10.8.0.")
+    if on_vpn:
+        listening = []
+    ssh_port_probe = not on_vpn
     net = []
     for port in sorted(set(listening) - {ssh_port, 80, 443}):
         if port_open(ip, port):
-            net.append(["FAIL", "Internet", f"El puerto {port} responde desde Internet y andamio no lo usa",
-                        f"ciérralo: quita el servicio o su ports: en compose; ssh al servidor: sudo ss -tlnp 'sport = :{port}'"])
+            net.append(["FAIL", "Internet", L(f"El puerto {port} responde desde Internet y andamio no lo usa",
+                                              f"Port {port} answers from the internet and andamio doesn't use it"),
+                        L(f"ciérralo: quita el servicio o su ports: en compose; ssh al servidor: sudo ss -tlnp 'sport = :{port}'",
+                          f"close it: remove the service or its ports: in compose; on the server: sudo ss -tlnp 'sport = :{port}'")])
         else:
-            net.append(["OK", "Internet", f"El puerto {port} escucha, pero el firewall lo bloquea desde Internet", ""])
+            net.append(["OK", "Internet", L(f"El puerto {port} escucha, pero el firewall lo bloquea desde Internet",
+                                            f"Port {port} listens, but the firewall blocks it from the internet"), ""])
     if ssh_port != 22 and ssh_port_probe:
-        net.append(["FAIL", "Internet", "El puerto 22 responde desde Internet",
-                    "ciérralo en el firewall de tu proveedor (y revisa sudo ufw status)"]
-                   if port_open(ip, 22) else ["OK", "Internet", "El puerto 22 está cerrado (SSH solo en el tuyo)", ""])
+        net.append(["FAIL", "Internet", L("El puerto 22 responde desde Internet", "Port 22 answers from the internet"),
+                    L("ciérralo en el firewall de tu proveedor (y revisa sudo ufw status)",
+                      "close it in your provider's firewall (and check sudo ufw status)")]
+                   if port_open(ip, 22) else
+                   ["OK", "Internet", L("El puerto 22 está cerrado (SSH solo en el tuyo)",
+                                        "Port 22 is closed (SSH only on yours)"), ""])
     host = f"whoami.{domain}"
     good, msg = tls_seen_from_internet(host)
-    net.append(["OK", "Internet", f"HTTPS de {host}: {msg}", ""] if good else
-               ["FAIL", "Internet", f"HTTPS de {host}: {msg}", "revisa el DNS (A y *.dominio) y docker logs traefik"])
-    net.append(["OK", "Internet", "HTTP redirige a HTTPS", ""] if redirects_to_https(host) else
-               ["WARN", "Internet", "HTTP no redirige a HTTPS", "revisa stacks/proxy/traefik.yml (entryPoint web)"])
+    net.append(["OK", "Internet", L(f"HTTPS de {host}: {msg}", f"HTTPS of {host}: {msg}"), ""] if good else
+               ["FAIL", "Internet", L(f"HTTPS de {host}: {msg}", f"HTTPS of {host}: {msg}"),
+                L("revisa el DNS (A y *.dominio) y docker logs traefik", "check the DNS (A and *.domain) and docker logs traefik")])
+    net.append(["OK", "Internet", L("HTTP redirige a HTTPS", "HTTP redirects to HTTPS"), ""] if redirects_to_https(host) else
+               ["WARN", "Internet", L("HTTP no redirige a HTTPS", "HTTP doesn't redirect to HTTPS"),
+                L("revisa stacks/proxy/traefik.yml (entryPoint web)", "check stacks/proxy/traefik.yml (entryPoint web)")])
 
     icon = {"OK": "\033[32m✓\033[0m", "WARN": "\033[33m!\033[0m", "FAIL": "\033[31m✗\033[0m"}
     for i, (status, area, what, fix) in enumerate(results + net):
         if i == len(results):
-            title("Desde Internet")
+            title(L("Desde Internet", "From the internet"))
+            if on_vpn:
+                warn(L("Tu PC está conectada a la VPN del servidor: las pruebas de puertos desde Internet no "
+                       "serían reales. Desconéctala y vuelve a correr `andamio estado` para hacerlas.",
+                       "Your PC is connected to the server's VPN: port tests from the internet wouldn't be "
+                       "real. Disconnect it and run `andamio status` again to run them."))
         print(f"  {icon[status]} {area:<13} {what}")
         if fix and status != "OK":
             print(f"    \033[2m→ {fix}\033[0m")
     every = [x[0] for x in results + net]
-    title(f"{every.count('OK')} bien · {every.count('WARN')} avisos · {every.count('FAIL')} problemas")
+    title(L(f"{every.count('OK')} bien · {every.count('WARN')} avisos · {every.count('FAIL')} problemas",
+            f"{every.count('OK')} good · {every.count('WARN')} warnings · {every.count('FAIL')} problems"))
     if "FAIL" in every:
         sys.exit(1)
 
 
 def cmd_certificado(args: argparse.Namespace) -> None:
     cfg = load_config()
+    cmd = L("certificado", "certificate")
     if not args.cert:
-        title("Tu certificado (homelab_tls: custom)")
+        title(L("Tu certificado (homelab_tls: custom)", "Your certificate (homelab_tls: custom)"))
         if not TLS_CERT.exists():
-            die(f"No hay certificado propio en {TLS_CERT.relative_to(ROOT)}. Agrega uno con: "
-                "bin/andamio certificado <certificado> <llave>")
+            die(L(f"No hay certificado propio en {TLS_CERT.relative_to(ROOT)}. Agrega uno con: "
+                  f"bin/andamio {cmd} <certificado> <llave>",
+                  f"No custom certificate in {TLS_CERT.relative_to(ROOT)}. Add one with: "
+                  f"bin/andamio {cmd} <certificate> <key>"))
         info = cert_info(TLS_CERT)
         show_cert(info)
         for p in cert_warnings(info, cfg.get("homelab_domain", "")):
             warn(p)
         if cfg.get("homelab_tls") != "custom":
-            warn(f"Tu configuración usa homelab_tls: {cfg.get('homelab_tls')}: este certificado no se está usando.")
+            warn(L(f"Tu configuración usa homelab_tls: {cfg.get('homelab_tls')}: este certificado no se está usando.",
+                   f"Your configuration uses homelab_tls: {cfg.get('homelab_tls')}: this certificate isn't in use."))
         return
     if not args.key:
-        die("Falta la llave: bin/andamio certificado <certificado> <llave>")
+        die(L(f"Falta la llave: bin/andamio {cmd} <certificado> <llave>", f"The key is missing: bin/andamio {cmd} <certificate> <key>"))
     if not shutil.which("openssl"):
-        die("Falta openssl: sudo apt install openssl  |  brew install openssl")
+        die(L("Falta openssl: sudo apt install openssl  |  brew install openssl",
+              "openssl is missing: sudo apt install openssl  |  brew install openssl"))
 
-    title("1. Revisar el certificado nuevo")
+    title(L("1. Revisar el certificado nuevo", "1. Checking the new certificate"))
     error = cert_problem(args.cert) or key_problem(local_path(args.cert), args.key)
     if error:
         die(error)
@@ -1316,42 +1564,54 @@ def cmd_certificado(args: argparse.Namespace) -> None:
     problems = cert_warnings(info, cfg.get("homelab_domain", ""))
     for p in problems:
         warn(p)
-    if problems and not ask_yes("¿Usarlo igual?", False):
-        die("Cancelado: no cambié nada.")
+    if problems and not ask_yes(L("¿Usarlo igual?", "Use it anyway?"), False):
+        die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
 
-    title("2. Guardarlo en tu configuración")
+    title(L("2. Guardarlo en tu configuración", "2. Saving it in your configuration"))
     if cfg.get("homelab_tls") != "custom":
-        warn(f"Hoy usas homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt).")
-        if not ask_yes("¿Cambiar a tu certificado (homelab_tls: custom)?", False):
-            die("Cancelado: no cambié nada.")
+        warn(L(f"Hoy usas homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt).",
+               f"You currently use homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt)."))
+        if not ask_yes(L("¿Cambiar a tu certificado (homelab_tls: custom)?", "Switch to your certificate (homelab_tls: custom)?"), False):
+            die(L("Cancelado: no cambié nada.", "Cancelled: nothing changed."))
         set_config("homelab_tls", "custom")
         ok("homelab_tls: custom")
     install_cert(cert, key)
 
-    title("Listo. Para usarlo en el servidor")
-    note(f"""
+    title(L("Listo. Para usarlo en el servidor", "Done. To use it on the server"))
+    note(L(f"""
 git add {TLS_CERT.relative_to(ROOT)} {TLS_KEY.relative_to(ROOT)} {CONFIG.relative_to(ROOT)}
 git commit -m "andamio: certificado nuevo (vence {info['expires']})" && git push
 ansible/hl aplicar homelab
-Traefik se reinicia solo para cargarlo (unos segundos sin servicio).""")
+Traefik se reinicia solo para cargarlo (unos segundos sin servicio).""", f"""
+git add {TLS_CERT.relative_to(ROOT)} {TLS_KEY.relative_to(ROOT)} {CONFIG.relative_to(ROOT)}
+git commit -m "andamio: new certificate (expires {info['expires']})" && git push
+ansible/hl apply homelab
+Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="andamio", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="andamio", description=L(
+        "andamio: prepara tu configuración y tu VPS.", "andamio: sets up your configuration and your VPS."))
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_init = sub.add_parser("init", help="configuración guiada (parte 1, local)")
-    p_init.add_argument("--force", action="store_true", help="completar una configuración existente")
+    p_init = sub.add_parser("init", help=L("configuración guiada (parte 1, local)", "guided configuration (part 1, local)"))
+    p_init.add_argument("--force", action="store_true",
+                        help=L("completar una configuración existente", "fill in an existing configuration"))
     p_init.set_defaults(func=cmd_init)
-    p_srv = sub.add_parser("servidor", aliases=["server"], help="prepara el VPS (parte 2; se puede repetir)")
+    p_srv = sub.add_parser("servidor", aliases=["server"],
+                           help=L("prepara el VPS (parte 2; se puede repetir)", "sets up the VPS (part 2; safe to repeat)"))
     p_srv.set_defaults(func=cmd_servidor)
-    p_st = sub.add_parser("estado", aliases=["status"], help="chequeo de seguridad y salud del servidor")
+    p_st = sub.add_parser("estado", aliases=["status"],
+                          help=L("chequeo de seguridad y salud del servidor", "security and health check of the server"))
     p_st.set_defaults(func=cmd_estado)
-    p_bk = sub.add_parser("backups", help="backups diarios cifrados fuera del servidor (B2 o S3), con prueba")
+    p_bk = sub.add_parser("backups", help=L("backups diarios cifrados fuera del servidor (B2 o S3), con prueba",
+                                            "daily encrypted off-server backups (B2 or S3), tested"))
     p_bk.set_defaults(func=cmd_backups)
     p_cert = sub.add_parser("certificado", aliases=["certificate"],
-                            help="tu propio certificado HTTPS: ver el actual o reemplazarlo")
-    p_cert.add_argument("cert", nargs="?", help="certificado PEM (con los intermedios de tu CA)")
-    p_cert.add_argument("key", nargs="?", help="su llave privada PEM")
+                            help=L("tu propio certificado HTTPS: ver el actual o reemplazarlo",
+                                   "your own HTTPS certificate: show the current one or replace it"))
+    p_cert.add_argument("cert", nargs="?", help=L("certificado PEM (con los intermedios de tu CA)",
+                                                  "PEM certificate (with your CA's intermediates)"))
+    p_cert.add_argument("key", nargs="?", help=L("su llave privada PEM", "its PEM private key"))
     p_cert.set_defaults(func=cmd_certificado)
     args = parser.parse_args()
     args.func(args)
