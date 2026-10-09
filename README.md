@@ -124,7 +124,7 @@ Your app, any language, needs a `Dockerfile`. Optionally:
 ```bash
 # Register an existing repo: creates its deploy key, the CI variables, a database
 # and Redis user if you ask for them, and prints the CI workflow to add to your repo.
-bin/homelab app create myapp --repo <you>/myapp --port 8000 --health /healthz
+bin/andamio app create myapp --repo <you>/myapp --port 8000 --health /healthz
 
 # Add the printed .github/workflows/ci.yml to your app repo, then
 git push   # tests, scans, builds and deploys
@@ -134,6 +134,44 @@ Your app is at `https://myapp.example.com` (through the VPN, unless you passed `
 
 Useful flags: `--public` (reachable from the internet), `--db` (PostgreSQL), `--redis`,
 `--host <sub>` or `--host @` (root domain), `--mem 512m`.
+
+### Secrets
+
+Two kinds, two places:
+
+**Runtime** (your app reads them while running: API keys, SMTP, Stripe...):
+
+```bash
+bin/andamio app secret set myapp ANTHROPIC_API_KEY   # asks for the value, hidden
+cat key.txt | bin/andamio app secret set myapp ANTHROPIC_API_KEY   # or from a pipe
+bin/andamio app secret list myapp                    # names only, never values
+bin/andamio app secret rm myapp ANTHROPIC_API_KEY
+```
+
+The value never goes on the command line (so not into your shell history). It's stored
+encrypted with sops in `apps/myapp/secrets.sops.env`, committed (the commit message carries
+only the name), and applied: the app restarts with the new variable. `DOMAIN`,
+`DATABASE_URL`, `REDIS_URL` and `TAG` are set by andamio and can't be changed by hand.
+
+Why not GitHub Secrets for these? They only exist inside CI: getting them to the server
+would mean the deploy key carries secrets, and they're write-only, so a rebuilt server
+would have nowhere to get them from. With sops they live encrypted in your repo and
+`andamio server` restores them.
+
+**Build-time** (only to build the image: a private npm package token, Sentry's token for
+source maps...): keep them in GitHub Secrets and list them in your app's `ci.yml`:
+
+```yaml
+    with:
+      build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
+    secrets: inherit
+```
+
+```dockerfile
+RUN --mount=type=secret,id=NPM_TOKEN NPM_TOKEN=$(cat /run/secrets/NPM_TOKEN) npm ci
+```
+
+BuildKit mounts each one only for that `RUN`: it never ends up in an image layer.
 
 ### `apps/<app>/app.yml`
 

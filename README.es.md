@@ -129,7 +129,7 @@ Tu app, en cualquier lenguaje, necesita un `Dockerfile`. Opcionalmente:
 ```bash
 # Registra un repo existente: crea su llave de deploy, las variables del CI, un usuario de
 # base y de Redis si los pides, e imprime el workflow de CI que agregas a tu repo.
-bin/homelab app create miapp --repo <tú>/miapp --port 8000 --health /healthz
+bin/andamio app create miapp --repo <tú>/miapp --port 8000 --health /healthz
 
 # Agrega a tu app el .github/workflows/ci.yml que imprimió, y luego
 git push   # tests, escaneos, build y deploy
@@ -139,6 +139,45 @@ Tu app queda en `https://miapp.ejemplo.com` (por la VPN, salvo que uses `--publi
 
 Opciones útiles: `--public` (accesible desde internet), `--db` (PostgreSQL), `--redis`,
 `--host <sub>` o `--host @` (dominio raíz), `--mem 512m`.
+
+### Secretos
+
+Dos tipos, dos lugares:
+
+**De ejecución** (tu app los lee mientras corre: claves de API, SMTP, Stripe...):
+
+```bash
+bin/andamio app secret set miapp ANTHROPIC_API_KEY   # pide el valor, oculto
+cat clave.txt | bin/andamio app secret set miapp ANTHROPIC_API_KEY   # o desde un pipe
+bin/andamio app secret list miapp                    # solo nombres, nunca valores
+bin/andamio app secret rm miapp ANTHROPIC_API_KEY
+```
+
+El valor nunca va en la línea de comandos (ni queda en el historial de tu terminal). Se
+guarda cifrado con sops en `apps/miapp/secrets.sops.env`, se hace commit (el mensaje lleva
+solo el nombre) y se aplica: la app se reinicia con la variable nueva. `DOMAIN`,
+`DATABASE_URL`, `REDIS_URL` y `TAG` los pone andamio y no se cambian a mano.
+
+¿Por qué no GitHub Secrets para estos? Solo existen dentro del CI: llevarlos al servidor
+obligaría a que la llave de deploy transporte secretos, y son de solo escritura, así que un
+servidor reconstruido no tendría de dónde sacarlos. Con sops viven cifrados en tu repo y
+`andamio servidor` los repone.
+
+**De build** (solo para construir la imagen: el token de un paquete npm privado, el de
+Sentry para subir source maps...): déjalos en GitHub Secrets y nómbralos en el `ci.yml` de
+tu app:
+
+```yaml
+    with:
+      build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
+    secrets: inherit
+```
+
+```dockerfile
+RUN --mount=type=secret,id=NPM_TOKEN NPM_TOKEN=$(cat /run/secrets/NPM_TOKEN) npm ci
+```
+
+BuildKit monta cada uno solo durante ese `RUN`: nunca queda en una capa de la imagen.
 
 ### `apps/<app>/app.yml`
 

@@ -165,8 +165,10 @@ jobs:
       deploy_port: ${{{{ vars.DEPLOY_PORT }}}}
       deploy_user: ${{{{ vars.DEPLOY_USER }}}}
       deploy_known_hosts: ${{{{ vars.DEPLOY_KNOWN_HOSTS }}}}
-    secrets:
-      DEPLOY_SSH_KEY: ${{{{ secrets.DEPLOY_SSH_KEY }}}}"""
+      # {L("Secretos que el Dockerfile necesita AL CONSTRUIR (RUN --mount=type=secret,id=NOMBRE):",
+           "Secrets the Dockerfile needs AT BUILD TIME (RUN --mount=type=secret,id=NAME):")}
+      # build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
+    secrets: inherit   # DEPLOY_SSH_KEY {L("y los de build_secrets", "and the build_secrets ones")}"""
 
     def ci_watch(self) -> int:
         r = self.gh("run", "list", "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId")

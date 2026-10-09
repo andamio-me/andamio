@@ -33,9 +33,13 @@ server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory
 # La contraseña se verifica contra el servidor antes de lanzar Ansible (3 intentos).
 # Si ya viene verificada (bin/andamio), no se vuelve a pedir.
 if [ -z "${ANSIBLE_BECOME_PASSWORD_FILE:-}" ]; then
+  # De la terminal, no de stdin: quien llama pudo usar stdin para otra cosa
+  # (andamio app secret set lee el valor de un pipe).
+  { : < /dev/tty; } 2> /dev/null \
+    || { L "✗ Hace falta una terminal para pedir la contraseña de sudo" "✗ A terminal is needed to ask for the sudo password" >&2; echo >&2; exit 1; }
   pwfile=$(mktemp); trap 'rm -f "$pwfile"' EXIT
   for i in 1 2 3; do
-    read -rsp "$(L "Contraseña de sudo de '$user' en el servidor ($server): " "Sudo password for '$user' on the server ($server): ")" pw; echo
+    read -rsp "$(L "Contraseña de sudo de '$user' en el servidor ($server): " "Sudo password for '$user' on the server ($server): ")" pw < /dev/tty; echo
     if printf '%s\n' "$pw" | ssh "$server" "sudo -S -p '' -v" 2> /dev/null; then
       printf '%s' "$pw" > "$pwfile"; break
     fi

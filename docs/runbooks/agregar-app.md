@@ -5,7 +5,7 @@ Todo desde el WSL. Requisitos: `gh` autenticado, llave age en
 
 ## 1. Crear
 ~~~bash
-homelab app create <nombre> [--public] [--db] [--redis] [--host <sub>] [--mem 256m]
+andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--host <sub>] [--mem 256m]
 ~~~
 - Sin `--public`, la app solo se abre con la VPN (`vpn-only`).
 - `--db`: usuario y base propios en PostgreSQL (`DATABASE_URL`) y migraciones Prisma.
@@ -25,9 +25,9 @@ git commit --allow-empty -m "primer deploy" && git push
 
 ## 3. Día a día
 ~~~bash
-homelab app list                 # apps, URL, acceso y estado
-homelab app logs <nombre>        # logs en vivo
-homelab app rollback <nombre>    # volver al deploy exitoso anterior
+andamio app list                 # apps, URL, acceso y estado
+andamio app logs <nombre>        # logs en vivo
+andamio app rollback <nombre>    # volver al deploy exitoso anterior
 ~~~
 
 ## Worker (procesos en segundo plano)
@@ -49,7 +49,7 @@ worker:
 ## Cambiar algo de una app
 - Recursos, acceso, host: editar `apps/<nombre>/app.yml`, `cd ansible && ansible-playbook apps.yml`,
   commit + push y `./hl aplicar homelab`.
-- Un secreto o variable: `sops apps/<nombre>/secrets.sops.env`, commit + push y `./hl aplicar homelab`.
+- Un secreto o variable: `andamio app secret set <nombre> <CLAVE>` (cifra, commit, push y aplica).
 - Rotar la llave de deploy: borrar `apps/<nombre>/deploy_key.pub` y seguir como arriba.
 
 ## Quitar una app (manual por ahora)

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Mini-PaaS del homelab. Se usa desde tu WSL.
+# Mini-PaaS de andamio: `bin/andamio app ...` llama a este script (bin/homelab sigue
+# funcionando igual). Se usa desde tu máquina.
 #
-#   homelab app create <nombre> [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
-#   homelab app list
-#   homelab app logs <nombre>
-#   homelab app rollback <nombre>
-#   homelab app destroy <nombre>
+#   andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
+#   andamio app secret set|rm <nombre> <CLAVE>      andamio app secret list <nombre>
+#   andamio app list | logs <nombre> | rollback <nombre> | destroy <nombre>
 #
 # create: repo desde homelab-app-template, apps/<nombre>/app.yml, secretos y llave de
 # deploy (apps.yml), commit + push de homelab-infra y configuración del servidor.
@@ -36,18 +35,24 @@ die() { echo "✗ $*" >&2; exit 1; }
 forge() { "$INFRA/bin/forge" "$@"; }
 step() { printf '\n==> %s\n' "$*"; }
 usage() {
-  L "  homelab app create <nombre> [--repo dueño/repo] [--port 3000] [--health /ruta]
+  L "  andamio app create <nombre> [--repo dueño/repo] [--port 3000] [--health /ruta]
                              [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
-  homelab app list
-  homelab app logs <nombre>
-  homelab app rollback <nombre>
-  homelab app destroy <nombre>
-" "  homelab app create <name> [--repo owner/repo] [--port 3000] [--health /path]
+  andamio app secret set <nombre> <CLAVE>    (el valor se pide oculto, o por un pipe)
+  andamio app secret rm <nombre> <CLAVE>
+  andamio app secret list <nombre>           (solo los nombres)
+  andamio app list
+  andamio app logs <nombre>
+  andamio app rollback <nombre>
+  andamio app destroy <nombre>
+" "  andamio app create <name> [--repo owner/repo] [--port 3000] [--health /path]
                            [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
-  homelab app list
-  homelab app logs <name>
-  homelab app rollback <name>
-  homelab app destroy <name>
+  andamio app secret set <name> <KEY>        (the value is asked hidden, or read from a pipe)
+  andamio app secret rm <name> <KEY>
+  andamio app secret list <name>             (names only)
+  andamio app list
+  andamio app logs <name>
+  andamio app rollback <name>
+  andamio app destroy <name>
 "
   exit 1
 }
@@ -125,7 +130,7 @@ app_create() {
   # migrate. Un repo existente declara sus migraciones a mano en app.yml si las tiene.
   local migrate=$db; [ -n "$repo" ] && migrate=false
   cat > "$dir/app.yml" <<EOF
-# $(L "Creada con" "Created with"): homelab app create $name. $(L "compose.yaml se genera de aquí" "compose.yaml is generated from this") (ansible/apps.yml).
+# $(L "Creada con" "Created with"): andamio app create $name. $(L "compose.yaml se genera de aquí" "compose.yaml is generated from this") (ansible/apps.yml).
 name: $name
 ${repo:+repo: $repo
 }host: "$host"
@@ -150,7 +155,7 @@ EOF
 
   step "$(L "Commit y push de este repo" "Commit and push this repo")"
   git -C "$INFRA" add "apps/$name"
-  git -C "$INFRA" commit -qm "feat(apps): $name (homelab app create)"
+  git -C "$INFRA" commit -qm "feat(apps): $name (andamio app create)"
   git -C "$INFRA" push -q
 
   step "$(L "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)" \
@@ -186,6 +191,71 @@ EOF
     $INFRA/bin/forge ci-watch
   $(L Luego Then): $(app_url "$host")$vpn
 EOF
+}
+
+# Secretos de ejecución de una app (apps/<app>/secrets.sops.env -> .env en el servidor).
+# El valor nunca va en la línea de comandos: se escribe oculto o llega por un pipe.
+RESERVED="DOMAIN DATABASE_URL REDIS_URL TAG"   # los pone andamio
+app_secret() {
+  local sub=${1:-} name=${2:-} key=${3:-}
+  [ -n "$sub" ] && [ -n "$name" ] || usage
+  valid_name "$name"
+  local rel=apps/$name/secrets.sops.env
+  [ -f "$INFRA/apps/$name/app.yml" ] || die "$(L "No existe la app" "No such app"): $name"
+  [ -f "$INFRA/$rel" ] || die "$(L "Falta $rel (se crea con andamio app create)" "$rel is missing (andamio app create creates it)")"
+  if [ "$sub" = list ]; then
+    (cd "$INFRA" && sops decrypt --input-type dotenv --output-type dotenv "$rel") | grep -oE '^[A-Za-z_][A-Za-z0-9_]*' \
+      | while read -r k; do
+          if [[ " $RESERVED " == *" $k "* ]]; then echo "  $k  ($(L "lo pone andamio" "set by andamio"))"; else echo "  $k"; fi
+        done
+    return
+  fi
+  [[ $sub == set || $sub == rm ]] || usage
+  [[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] \
+    || die "$(L "Nombre inválido: MAYÚSCULAS, números y _ (ej. ANTHROPIC_API_KEY)" "Invalid name: UPPERCASE, digits and _ (e.g. ANTHROPIC_API_KEY)")"
+  [[ " $RESERVED " == *" $key "* ]] \
+    && die "$(L "$key lo pone andamio: no se cambia a mano" "andamio sets $key: it isn't changed by hand")"
+  no_uncommitted
+
+  local value=""
+  if [ "$sub" = set ]; then
+    if [ -t 0 ]; then
+      read -rsp "$(L "Valor de $key para $name (no se ve al escribir): " "Value of $key for $name (hidden while typing): ")" value; echo
+    else
+      value=$(cat)   # por pipe: cat clave.txt | andamio app secret set ...
+    fi
+    [ -n "$value" ] || die "$(L "El valor está vacío" "The value is empty")"
+    [[ $value != *$'\n'* ]] || die "$(L "El valor tiene que ser una sola línea" "The value must be a single line")"
+  fi
+
+  local tmp; tmp=$(mktemp -d); chmod 700 "$tmp"
+  # shellcheck disable=SC2064   # el temporal se fija ahora, a propósito
+  trap "shred -u '$tmp'/* 2> /dev/null; rm -rf '$tmp'" EXIT
+  (cd "$INFRA" && sops decrypt --input-type dotenv --output-type dotenv "$rel") > "$tmp/actual"
+  if [ "$sub" = rm ] && ! grep -q "^$key=" "$tmp/actual"; then
+    die "$(L "$name no tiene $key" "$name doesn't have $key")"
+  fi
+  local verb; verb=$(L "actualizado" "updated"); grep -q "^$key=" "$tmp/actual" || verb=$(L "agregado" "added")
+  [ "$sub" = rm ] && verb=$(L "quitado" "removed")
+  # El valor llega a awk por el entorno (V), nunca como argumento.
+  K=$key V=$value MODE=$sub awk '
+    BEGIN { k = ENVIRON["K"] "=" }
+    index($0, k) == 1 { if (ENVIRON["MODE"] == "set" && !done) { print k ENVIRON["V"]; done = 1 }; next }
+    { print }
+    END { if (ENVIRON["MODE"] == "set" && !done) print k ENVIRON["V"] }' "$tmp/actual" > "$tmp/nuevo"
+  unset value
+  (cd "$INFRA" && sops encrypt --input-type dotenv --output-type dotenv --filename-override "$rel" "$tmp/nuevo") > "$tmp/cifrado"
+  mv "$tmp/cifrado" "$INFRA/$rel"
+  echo "✓ $key $verb ($rel, $(L cifrado encrypted))"
+
+  step "$(L "Commit y push (solo el nombre, nunca el valor)" "Commit and push (only the name, never the value)")"
+  git -C "$INFRA" add "$rel"
+  git -C "$INFRA" commit -qm "secret($name): $sub $key"
+  git -C "$INFRA" push -q
+
+  step "$(L "Servidor: .env de $name y reinicio de la app (pide tu contraseña de sudo)" \
+            "Server: $name's .env and app restart (asks for your sudo password)")"
+  "$INFRA/ansible/hl" apply homelab
 }
 
 app_list() {
@@ -278,7 +348,7 @@ REMOTE
 
   step "$(L "Quitar apps/$name de este repo" "Removing apps/$name from this repo")"
   git -C "$INFRA" rm -rq "apps/$name"
-  git -C "$INFRA" commit -qm "feat(apps): $(L destruir destroy) $name (homelab app destroy)"
+  git -C "$INFRA" commit -qm "feat(apps): $(L destruir destroy) $name (andamio app destroy)"
   git -C "$INFRA" push -q
 
   step "$(L "Servidor: revocar llave, quitar del registro y de Redis (pide tu contraseña de sudo)" \
@@ -300,5 +370,6 @@ case ${1:-} in
   logs) shift; app_logs "$@" ;;
   rollback) shift; app_rollback "$@" ;;
   destroy) shift; app_destroy "$@" ;;
+  secret) shift; app_secret "$@" ;;
   *) usage ;;
 esac

@@ -9,6 +9,7 @@
                     con el arreglo de cada problema (no cambia nada)
   andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
                     configura, hace el primero y prueba que se puede restaurar
+  andamio app ...   tus apps: create, secret (set/rm/list), list, logs, rollback, destroy
   andamio update    trae las mejoras y parches de andamio (fusión de tres vías por
                     archivo) sin tocar tu configuración, tus apps ni tus secretos
   andamio certificado [cert llave]
@@ -1092,11 +1093,11 @@ def cmd_servidor(args: argparse.Namespace) -> None:
     note(L(f"""
 VPN: importa ~/andamio-vpn/mi-pc.conf en WireGuard (paneles privados solo por VPN).
 Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain')} con la VPN.
-Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta
+Primera app:  bin/andamio app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta
 Chequeo de seguridad:  bin/andamio estado     Backups:  bin/andamio backups""", f"""
 VPN: import ~/andamio-vpn/mi-pc.conf into WireGuard (private panels only over the VPN).
 Grafana (if your monitoring is completo): https://grafana.{cfg.get('homelab_domain')} over the VPN.
-First app:  bin/homelab app create <name> --repo <owner/repo> --port <port> --health /path
+First app:  bin/andamio app create <name> --repo <owner/repo> --port <port> --health /path
 Security check:  bin/andamio status     Backups:  bin/andamio backups"""))
 
 
@@ -1789,6 +1790,9 @@ Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 
 def main() -> None:
+    # `andamio app ...`: el mini-PaaS de apps vive en bin/homelab (bash); se le pasa tal cual.
+    if sys.argv[1:2] == ["app"]:
+        os.execv(str(ROOT / "bin" / "homelab"), [str(ROOT / "bin" / "homelab"), *sys.argv[1:]])
     parser = argparse.ArgumentParser(prog="andamio", description=L(
         "andamio: prepara tu configuración y tu VPS.", "andamio: sets up your configuration and your VPS."))
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1805,6 +1809,8 @@ def main() -> None:
     p_bk = sub.add_parser("backups", help=L("backups diarios cifrados fuera del servidor (B2 o S3), con prueba",
                                             "daily encrypted off-server backups (B2 or S3), tested"))
     p_bk.set_defaults(func=cmd_backups)
+    sub.add_parser("app", help=L("tus apps: create, secret, list, logs, rollback, destroy (andamio app para ver cómo)",
+                                 "your apps: create, secret, list, logs, rollback, destroy (andamio app to see how)"))
     p_up = sub.add_parser("update", aliases=["actualizar"],
                           help=L("trae mejoras y parches de andamio sin tocar tu configuración ni tus apps",
                                  "brings in andamio's improvements and patches without touching your config or apps"))
