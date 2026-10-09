@@ -15,6 +15,9 @@ VERSION=${VERSION:-${SHA:0:7}}
 
 INFRA=/srv/homelab/infra
 DIR=$INFRA/apps/$APP
+# Idioma de los mensajes (los ve quien despliega, en la pestaña Actions): el del servidor.
+LNG=$(sed -n 's/^ANDAMIO_LANG=//p' /etc/homelab/andamio.env 2> /dev/null)
+L() { if [ "${LNG:-en}" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 [ -f "$DIR/compose.yaml" ] || { echo "App desconocida: $APP"; exit 1; }
 # andamio app stop: mientras esté detenida, un push no la vuelve a levantar.
 if grep -qx 'stopped: true' "$DIR/app.yml" 2> /dev/null; then
@@ -79,7 +82,48 @@ fail() {  # deja la versión anterior en .env, registra y avisa
   sed -i "s/^TAG=.*/TAG=$PREV/" .env
   record failed
   notify "❌ Deploy de $APP $VERSION falló: $1. Sigue corriendo la versión anterior."
-  echo "❌ $1"; exit 1
+  echo "❌ $1. $(L "Sigue corriendo la versión anterior" "The previous version keeps running")."; exit 1
+}
+
+# Por qué no quedó sana una versión: los errores típicos de una app que no está lista para
+# un servidor, con su arreglo. Escribe líneas "💡" (el pipeline las muestra arriba de la corrida).
+explain() {  # explain <contenedor>
+  local c=$1 logs port path state var
+  logs=$(docker logs --tail 80 "$c" 2>&1 || true)
+  port=$(docker inspect "$c" 2> /dev/null | grep -oE '"traefik\.http\.services\.[^"]+\.loadbalancer\.server\.port": "[0-9]+"' \
+    | grep -oE '[0-9]+"$' | tr -d '"' | head -n 1)
+  path=$(docker inspect -f '{{index .Config.Labels "andamio.health"}}' "$c" 2> /dev/null || true)
+  state=$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$c" 2> /dev/null || echo "gone 0")
+  local found=0
+  hint() { echo "💡 $*"; found=1; }
+  if grep -qiE '(listen|running|serving|started|bound).*(127\.0\.0\.1|localhost)' <<< "$logs"; then
+    hint "$(L "Tu app escucha en 127.0.0.1/localhost: dentro del contenedor nadie más la alcanza. Haz que escuche en 0.0.0.0 (puerto $port)." \
+              "Your app listens on 127.0.0.1/localhost: inside the container nothing else can reach it. Make it listen on 0.0.0.0 (port $port).")"
+  fi
+  if grep -qiE 'EADDRINUSE|address already in use' <<< "$logs"; then
+    hint "$(L "El puerto ya está en uso dentro del contenedor: ¿la app arranca dos servidores?" "The port is already in use inside the container: does the app start two servers?")"
+  fi
+  var=$(grep -oE "KeyError: '[A-Z][A-Z0-9_]+'|[A-Z][A-Z0-9_]{2,} (is not set|is required|is missing|must be set)|(Missing|missing|Undefined|undefined) (environment )?variable:? ?[A-Z][A-Z0-9_]{2,}" <<< "$logs" \
+        | grep -oE '[A-Z][A-Z0-9_]{2,}' | grep -vE '^(KEY|ERROR|MISSING)$' | head -n 1 || true)
+  if [ -n "$var" ]; then
+    hint "$(L "Falta la variable $var. Agrégala: andamio app secret set $APP $var" "Variable $var is missing. Add it: andamio app secret set $APP $var")"
+  fi
+  if grep -qE "ModuleNotFoundError|No module named|Cannot find module|ERR_MODULE_NOT_FOUND|cannot find package" <<< "$logs"; then
+    hint "$(L "Falta una dependencia: agrégala a requirements.txt / package.json / go.mod (en la imagen solo está lo que declaras)." \
+              "A dependency is missing: add it to requirements.txt / package.json / go.mod (the image only has what you declare).")"
+  fi
+  if grep -qE "EACCES|Permission denied|Read-only file system" <<< "$logs"; then
+    hint "$(L "La app intenta escribir donde no puede (corre sin root). Escribe en /tmp; lo que deba durar, en la base de datos." \
+              "The app tries to write where it can't (it runs without root). Write to /tmp; whatever must last, to the database.")"
+  fi
+  if [ -z "$(tr -d '[:space:]' <<< "$logs")" ] && [[ $state != running* ]]; then
+    hint "$(L "La app se cierra sin escribir nada: revisa el comando de arranque (CMD) de tu Dockerfile." \
+              "The app exits without printing anything: check your Dockerfile's start command (CMD).")"
+  fi
+  if [ "$found" = 0 ] && [[ $state == "running 0" ]] && [ -n "$path" ]; then
+    hint "$(L "La app corre pero no respondió en http://<contenedor>:$port$path en 90 s: ¿escucha en el puerto $port (port: en app.yml) y en 0.0.0.0? ¿esa ruta responde 200?" \
+              "The app runs but didn't answer at http://<container>:$port$path within 90 s: does it listen on port $port (port: in app.yml) and on 0.0.0.0? Does that path return 200?")"
+  fi
 }
 
 # Deploys de apps distintas pueden llegar a la vez (cada app tiene su propia cola en el
@@ -114,9 +158,12 @@ NEW=$(docker compose ps -q app | grep -vxF -f <(printf '%s\n' $OLD) || true)
 
 echo "==> Esperando el healthcheck de ${NEW:0:12}"
 if ! wait_healthy "$NEW"; then
+  echo "--- $(L "últimos logs de la versión nueva" "last logs of the new version") ---"
   docker logs --tail 30 "$NEW" 2>&1 || true
+  echo "---"
+  explain "$NEW"
   docker rm -f "$NEW" > /dev/null
-  fail "la versión nueva no quedó sana"
+  fail "$(L "la versión nueva no quedó sana" "the new version didn't become healthy")"
 fi
 
 # Worker (si la app tiene uno): se reemplaza cuando la web nueva ya está sana y

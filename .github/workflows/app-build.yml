@@ -291,7 +291,19 @@ jobs:
         env:
           TAG: ${{ needs.build.outputs.tag }}
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        # Si falla, el ❌ y las pistas 💡 del servidor van arriba de la corrida (anotaciones),
+        # como en Railway o Vercel: no hace falta buscarlas en el log.
         run: |
           VERSION="${VERSION:-${TAG::7}}"
+          set +e
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "$TAG $VERSION"
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "$TAG $VERSION" 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            title=$(grep -m1 '^❌' "$RUNNER_TEMP/deploy.log" | sed 's/^❌ *//')
+            echo "::error title=Deploy::${title:-the deploy failed (rc=$rc), see the log of this step}"
+            grep '^💡' "$RUNNER_TEMP/deploy.log" | sed 's/^💡 *//' | while IFS= read -r hint; do
+              echo "::warning title=💡::$hint"
+            done
+          fi
+          exit "$rc"
