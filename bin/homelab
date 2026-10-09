@@ -299,8 +299,11 @@ valid_domain() {
   local d=${1,,}
   [[ $d =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$ ]] \
     || die "$(L "Dominio inválido: $1 (ej. api.suempresa.com)" "Invalid domain: $1 (e.g. api.mycompany.com)")"
-  [[ $d == "$DOMAIN" || $d == *".$DOMAIN" ]] \
-    && die "$(L "$d ya es de este servidor: usa --host ${d%%".$DOMAIN"}" "$d already belongs to this server: use --host ${d%%".$DOMAIN"}")"
+  [ "$d" = "$DOMAIN" ] && die "$(L "$d es el dominio del servidor: usa --host @" "$d is the server's domain: use --host @")"
+  local sub=${d%".$DOMAIN"}
+  if [ "$sub" != "$d" ] && [[ $sub != *.* ]]; then
+    die "$(L "$d es un subdominio directo de este servidor: usa --host $sub" "$d is a direct subdomain of this server: use --host $sub")"
+  fi
   echo "$d"
 }
 valid_origin() {

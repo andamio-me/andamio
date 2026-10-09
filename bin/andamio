@@ -2399,6 +2399,8 @@ def overview() -> None:
 {b('Tus apps')} {d('(cada una queda en https://<app>.tudominio)')}
   app create <app> --repo <dueño/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /ruta]
                                la registra (una vez); desde ahí cada git push a main la despliega
+                               {d('URL: <app>.tudominio · --host api → api.tudominio · --host @ → tudominio')}
+                               {d('     otro dominio o más niveles (v2.api.tudominio): app domain add')}
   app list                     todas, con su URL y estado
   app logs <app>               logs en vivo
   app secret set|rm|list <app> [CLAVE]      secretos de ejecución (el valor se pide oculto)
@@ -2427,6 +2429,8 @@ def overview() -> None:
 {b('Your apps')} {d('(each one lives at https://<app>.yourdomain)')}
   app create <app> --repo <owner/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /path]
                                registers it (once); from then on every git push to main deploys it
+                               {d('URL: <app>.yourdomain · --host api → api.yourdomain · --host @ → yourdomain')}
+                               {d('     another domain or deeper (v2.api.yourdomain): app domain add')}
   app list                     all of them, with URL and status
   app logs <app>               live logs
   app secret set|rm|list <app> [KEY]        runtime secrets (the value is asked hidden)

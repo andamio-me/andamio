@@ -169,7 +169,8 @@ subdominio suyo, con el nombre de la app (o `--host`):
 Por eso creas dos registros DNS una sola vez: `ejemplo.com` y `*.ejemplo.com`. El `*` hace
 que cualquier app futura apunte a tu servidor sin volver a tocar el DNS. El dominio del
 servidor puede ser a su vez un subdominio (`lab.ejemplo.com`) si `ejemplo.com` ya se usa en
-otro lado. Para un dominio fuera del de tu servidor (`api.suempresa.com`), usa `--domain`.
+otro lado. Para un dominio fuera del de tu servidor (`api.suempresa.com`) o un nombre de más niveles
+(`v2.api.ejemplo.com`), usa `--domain` (o después `app domain add`).
 
 Opciones útiles: `--port` (por defecto, el `EXPOSE` del Dockerfile), `--public` (accesible
 desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (dominio raíz),

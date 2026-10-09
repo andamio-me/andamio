@@ -165,7 +165,8 @@ of it, named after the app (or `--host`):
 That's why you create two DNS records once: `example.com` and `*.example.com`. The `*`
 makes every future app point to your server without touching DNS again. A server domain
 can itself be a subdomain (`lab.example.com`) if `example.com` is already used elsewhere.
-For a domain outside your server's (`api.mycompany.com`), use `--domain`.
+For a domain outside your server's (`api.mycompany.com`) or a deeper name (`v2.api.example.com`),
+use `--domain` (or later `app domain add`).
 
 Useful flags: `--port` (default: the Dockerfile's `EXPOSE`), `--public` (reachable from the
 internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root domain),
