@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """andamio: prepara tu configuración y tu VPS / sets up your configuration and your VPS.
 
+  andamio setup     deja tu máquina lista: instala lo que falta, preguntando antes (una vez)
   andamio init      preguntas guiadas -> configuración, llave de cifrado y secretos
                     (parte 1: solo en tu máquina; no toca ningún servidor)
   andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
@@ -62,6 +63,9 @@ def _lang() -> str:
 
 LANG = _lang()
 os.environ["ANDAMIO_LANG"] = LANG     # bin/forge y los scripts lo heredan
+# Lo que instala `andamio setup` (sops, ansible por pipx) vive en ~/.local/bin, que la
+# shell recién instalada a veces aún no tiene en el PATH.
+os.environ["PATH"] = f"{Path.home() / '.local' / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
 def L(es: str, en: str) -> str:
@@ -70,12 +74,12 @@ def L(es: str, en: str) -> str:
 
 # Herramientas que necesitas en TU máquina, y cómo instalarlas.
 TOOLS = {
-    "git": "sudo apt install git  |  brew install git",
-    "ssh": "sudo apt install openssh-client",
-    "ssh-keygen": "sudo apt install openssh-client",
-    "sops": "https://github.com/getsops/sops/releases",
-    "age-keygen": "sudo apt install age  |  brew install age",
-    "ansible-playbook": "pipx install --include-deps ansible",
+    "git": "bin/andamio setup",
+    "ssh": "bin/andamio setup",
+    "ssh-keygen": "bin/andamio setup",
+    "sops": "bin/andamio setup",
+    "age-keygen": "bin/andamio setup",
+    "ansible-playbook": "bin/andamio setup",
 }
 
 
@@ -390,7 +394,7 @@ def check_tools() -> None:
         import yaml  # noqa: F401
     except ImportError:
         missing.append("python3-yaml")
-        TOOLS["python3-yaml"] = "sudo apt install python3-yaml  |  pip install pyyaml"
+        TOOLS["python3-yaml"] = "bin/andamio setup"
     if not missing:   # forge lee la configuración con yaml
         forge_tools = dict(line.split("\t", 1) for line in forge_out("tools").splitlines())
         TOOLS.update(forge_tools)
@@ -398,7 +402,8 @@ def check_tools() -> None:
     for t in missing:
         warn(L(f"Falta {t}: {TOOLS[t]}", f"Missing {t}: {TOOLS[t]}"))
     if missing:
-        die(L("Instala lo que falta y vuelve a correr andamio.", "Install what's missing and run andamio again."))
+        die(L("Falta preparar tu máquina: corre `bin/andamio setup` (lo instala todo, preguntando antes).",
+              "Your machine isn't ready yet: run `bin/andamio setup` (it installs everything, asking first)."))
     ok(L(f"git, ssh, sops, age, ansible y {', '.join(forge_tools)} disponibles",
          f"git, ssh, sops, age, ansible and {', '.join(forge_tools)} available"))
     name = forge_out("name")
@@ -406,6 +411,207 @@ def check_tools() -> None:
         die(L(f"Tu CLI de {name} no tiene sesión iniciada ({', '.join(forge_tools)}): ",
               f"Your {name} CLI isn't logged in ({', '.join(forge_tools)}): ") + next(iter(forge_tools.values())))
     ok(L(f"Sesión iniciada en {name}", f"Logged in to {name}"))
+
+
+# ---------- setup: tu máquina ----------
+
+# Paquetes del sistema por herramienta (apt / brew). gh, sops y ansible van aparte.
+APT_PKGS = {"git": "git", "ssh": "openssh-client", "ssh-keygen": "openssh-client", "age-keygen": "age",
+            "curl": "curl", "openssl": "openssl", "pipx": "pipx"}
+BREW_PKGS = {"git": "git", "age-keygen": "age", "gh": "gh", "sops": "sops", "ansible-playbook": "ansible"}
+COLLECTIONS = ("community.sops", "ansible.posix", "community.general")
+
+
+def has_yaml() -> bool:
+    return run([sys.executable, "-c", "import yaml"]).returncode == 0
+
+
+def missing_collections() -> list[str]:
+    if not shutil.which("ansible-galaxy"):
+        return list(COLLECTIONS)
+    listed = run(["ansible-galaxy", "collection", "list"]).stdout
+    return [c for c in COLLECTIONS if not re.search(rf"^{re.escape(c)}\s", listed, re.M)]
+
+
+def install_sops() -> None:
+    """La última versión oficial de sops, verificada contra el checksum de la misma release
+    antes de instalarla en ~/.local/bin (sin sudo)."""
+    import hashlib
+    import json
+    import platform
+    import urllib.request
+    arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower())
+    osname = "darwin" if sys.platform == "darwin" else "linux"
+    if not arch:
+        die(L(f"No hay sops para {platform.machine()}: instálalo a mano (https://github.com/getsops/sops/releases).",
+              f"No sops build for {platform.machine()}: install it by hand (https://github.com/getsops/sops/releases)."))
+
+    def get(url: str) -> bytes:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "andamio"}), timeout=60) as r:
+            return r.read()
+    tag = json.loads(get("https://api.github.com/repos/getsops/sops/releases/latest"))["tag_name"]
+    name, base = f"sops-{tag}.{osname}.{arch}", f"https://github.com/getsops/sops/releases/download/{tag}/"
+    sums = get(f"{base}sops-{tag}.checksums.txt").decode()
+    expected = next((line.split()[0] for line in sums.splitlines() if line.endswith(f" {name}")), None)
+    binary = get(base + name)
+    if not expected or hashlib.sha256(binary).hexdigest() != expected:
+        die(L(f"El binario de sops no coincide con su checksum oficial: no lo instalo ({name}).",
+              f"The sops binary doesn't match its official checksum: not installing it ({name})."))
+    dest = Path.home() / ".local" / "bin" / "sops"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(binary)
+    dest.chmod(0o755)
+    ok(L(f"sops {tag} (checksum verificado) en {dest}", f"sops {tag} (checksum verified) in {dest}"))
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    print(L("\033[1mandamio setup\033[0m: deja tu máquina lista para usar andamio (una vez). Pregunta antes de instalar.",
+            "\033[1mandamio setup\033[0m: gets your machine ready for andamio (once). Asks before installing."))
+    title(L("1. Qué falta", "1. What's missing"))
+    tools = ["git", "ssh", "ssh-keygen", "age-keygen", "openssl", "gh", "sops", "ansible-playbook"]
+    missing = [t for t in tools if not shutil.which(t)] + ([] if has_yaml() else ["python3-yaml"])
+    if sys.platform == "darwin":
+        manager = "brew" if shutil.which("brew") else None
+    else:
+        osr = Path("/etc/os-release").read_text() if Path("/etc/os-release").exists() else ""
+        manager = "apt" if re.search(r"^ID(_LIKE)?=.*\b(debian|ubuntu)\b", osr, re.M) and shutil.which("apt-get") else None
+    for t in tools:
+        (warn if t in missing else ok)(L(f"{t}: falta", f"{t}: missing") if t in missing else t)
+    if "python3-yaml" in missing:
+        warn(L("python3-yaml: falta", "python3-yaml: missing"))
+
+    if missing:
+        if not manager:
+            die(L("No sé instalar en este sistema (andamio sabe con apt —Ubuntu/Debian/WSL— y con Homebrew en macOS). "
+                  f"Instala a mano: {', '.join(missing)}",
+                  "I don't know how to install on this system (andamio knows apt —Ubuntu/Debian/WSL— and Homebrew on "
+                  f"macOS). Install by hand: {', '.join(missing)}"))
+        note(L(f"Lo instalo con {manager}" + (" (te pedirá la contraseña de sudo de ESTA máquina)" if manager == "apt" else "")
+               + ". sops viene de su release oficial y se verifica contra su checksum; ansible, con pipx.",
+               f"Installing with {manager}" + (" (it asks for the sudo password of THIS machine)" if manager == "apt" else "")
+               + ". sops comes from its official release, verified against its checksum; ansible, via pipx."))
+        if not ask_yes(L("¿Instalo lo que falta?", "Install what's missing?"), True):
+            die(L("No instalé nada.", "Nothing installed."))
+        title(L("2. Instalando", "2. Installing"))
+        if manager == "apt":
+            pkgs = sorted({APT_PKGS[t] for t in missing if t in APT_PKGS}
+                          | ({"python3-yaml"} if "python3-yaml" in missing else set())
+                          | ({"pipx"} if "ansible-playbook" in missing and not shutil.which("pipx") else set())
+                          | ({"curl"} if "gh" in missing and not shutil.which("curl") else set()))
+            if pkgs and interactive(["sudo", "apt-get", "update", "-qq"]) + \
+                    interactive(["sudo", "apt-get", "install", "-y", "-qq", *pkgs]) != 0:
+                die(L("apt no pudo instalar: " + " ".join(pkgs), "apt couldn't install: " + " ".join(pkgs)))
+            if "gh" in missing:   # repositorio oficial de GitHub CLI (firmado con su llave)
+                if interactive(["sudo", "bash", "-c", """set -e
+install -d -m 755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+apt-get update -qq && apt-get install -y -qq gh"""]) != 0:
+                    die(L("No pude instalar gh.", "Couldn't install gh."))
+            if "sops" in missing:
+                install_sops()
+            if "ansible-playbook" in missing:
+                if interactive(["pipx", "install", "--include-deps", "ansible"]) != 0:
+                    die(L("pipx no pudo instalar ansible.", "pipx couldn't install ansible."))
+                interactive(["pipx", "ensurepath"])
+        else:
+            pkgs = sorted({BREW_PKGS[t] for t in missing if t in BREW_PKGS})
+            if pkgs and interactive(["brew", "install", *pkgs]) != 0:
+                die(L("brew no pudo instalar: " + " ".join(pkgs), "brew couldn't install: " + " ".join(pkgs)))
+            if "python3-yaml" in missing:
+                interactive([sys.executable, "-m", "pip", "install", "--user", "--break-system-packages", "pyyaml"])
+        still = [t for t in tools if not shutil.which(t)] + ([] if has_yaml() else ["python3-yaml"])
+        if still:
+            die(L(f"Sigue faltando: {', '.join(still)}", f"Still missing: {', '.join(still)}"))
+        ok(L("Herramientas instaladas", "Tools installed"))
+
+    title(L("3. Colecciones de Ansible", "3. Ansible collections"))
+    need = missing_collections()
+    if need:
+        if interactive(["ansible-galaxy", "collection", "install", "-r", str(ROOT / "ansible" / "requirements.yml")]) != 0:
+            die(L("ansible-galaxy no pudo instalar las colecciones.", "ansible-galaxy couldn't install the collections."))
+    ok(", ".join(COLLECTIONS))
+
+    title(L("4. Tu identidad en git", "4. Your git identity"))
+    name, email = (run(["git", "config", "--global", k]).stdout.strip() for k in ("user.name", "user.email"))
+    if not (name and email):
+        note(L("Para los commits que hace andamio (tu configuración, tus apps).",
+               "For the commits andamio makes (your configuration, your apps)."))
+        name = name or ask(L("Tu nombre", "Your name"))
+        email = email or ask(L("Tu email", "Your email"), check=check_email)
+        run(["git", "config", "--global", "user.name", name])
+        run(["git", "config", "--global", "user.email", email])
+    ok(f"{name} <{email}>")
+
+    fname = forge_out("name")
+    title(L(f"5. Tu cuenta de {fname}", f"5. Your {fname} account"))
+    if forge("auth-ok").returncode != 0:
+        note(L("""
+Vas a iniciar sesión en GitHub. Elige SSH como protocolo y deja que suba tu llave SSH.
+Si estás en WSL y no se abre el navegador: copia el código que te muestra, abre
+https://github.com/login/device en tu navegador de Windows y pégalo (tienes unos minutos).""", """
+You're about to log in to GitHub. Pick SSH as the protocol and let it upload your SSH key.
+If you're on WSL and no browser opens: copy the code it shows, open
+https://github.com/login/device in your Windows browser and paste it (you have a few minutes)."""))
+        interactive(["gh", "auth", "login", "--git-protocol", "ssh"])
+        if forge("auth-ok").returncode != 0:
+            die(L("No quedó la sesión iniciada: vuelve a correr `bin/andamio setup`.",
+                  "Not logged in yet: run `bin/andamio setup` again."))
+    ok(L(f"Sesión iniciada en {fname} como {forge_out('whoami')}", f"Logged in to {fname} as {forge_out('whoami')}"))
+    host = forge_out("ssh-host")
+    # Las llaves de host oficiales (de la API de la forja), no "la primera que se presente".
+    known = SSH_DIR / "known_hosts"
+    if not run(["ssh-keygen", "-F", host]).stdout.strip():
+        SSH_DIR.mkdir(mode=0o700, exist_ok=True)
+        with known.open("a") as f:
+            f.write(forge_out("known-hosts") + "\n")
+        ok(L(f"Llaves de host oficiales de {host} en ~/.ssh/known_hosts", f"{host}'s official host keys in ~/.ssh/known_hosts"))
+    probe = run(["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", f"git@{host}"])
+    if "successfully authenticated" in probe.stdout + probe.stderr:
+        ok(L(f"Tu llave SSH entra a {host} (andamio sube por ahí el CI de tus apps)",
+             f"Your SSH key gets into {host} (andamio pushes your apps' CI through it)"))
+    else:
+        warn(L(f"Tu llave SSH todavía no entra a {host}. Agrégala:  gh ssh-key add ~/.ssh/id_ed25519.pub",
+               f"Your SSH key can't get into {host} yet. Add it:  gh ssh-key add ~/.ssh/id_ed25519.pub"))
+        note(L("(si no tienes llave: ssh-keygen -t ed25519; si gh pide permiso: gh auth refresh -s admin:public_key)",
+               "(no key yet: ssh-keygen -t ed25519; if gh asks for permission: gh auth refresh -s admin:public_key)"))
+
+    # Corriendo desde el andamio público (recién clonado): tu copia privada, desde el template.
+    origin = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).stdout.strip()
+    upstream = re.sub(r"\.git$", "", UPSTREAM_DEFAULT.split("github.com/")[-1])
+    next_dir = None
+    if not UPSTREAM_DEFAULT.startswith("@") and re.search(rf"[:/]{re.escape(upstream)}(\.git)?$", origin):
+        title(L("6. Tu copia privada de andamio", "6. Your private copy of andamio"))
+        note(L("""
+Este es el andamio público: tu configuración (cifrada) vive en una copia PRIVADA tuya,
+creada desde este template. La creo y la clono.""", """
+This is the public andamio: your (encrypted) configuration lives in a PRIVATE copy of
+yours, created from this template. Creating and cloning it."""))
+        owner = forge_out("whoami")
+        repo_name = ask(L(f"Nombre de tu repo (en {owner}/)", f"Your repo's name (under {owner}/)"), "mi-andamio",
+                        lambda v: None if re.fullmatch(r"[A-Za-z0-9._-]{1,100}", v) else L("Nombre inválido.", "Invalid name."))
+        target = Path(ask(L("Dónde clonarlo", "Where to clone it"), str(Path.home() / repo_name))).expanduser()
+        if target.exists():
+            die(L(f"{target} ya existe.", f"{target} already exists."))
+        full = f"{owner}/{repo_name}"
+        if forge("repo-exists", full).returncode == 0:
+            ok(L(f"{full} ya existe: lo clono", f"{full} already exists: cloning it"))
+        else:
+            r = forge("repo-create", full, upstream)
+            if r.returncode != 0:
+                die(L(f"No pude crear {full}: {r.stderr.strip()}", f"Couldn't create {full}: {r.stderr.strip()}"))
+            ok(L(f"{full} creado (privado, desde {upstream})", f"{full} created (private, from {upstream})"))
+        if interactive(["git", "clone", "-q", forge_out("clone-url", full), str(target)]) != 0:
+            die(L(f"No pude clonar {full}.", f"Couldn't clone {full}."))
+        ok(f"{target}")
+        next_dir = target
+
+    title(L("Listo: tu máquina está preparada", "Done: your machine is ready"))
+    note((f"cd {next_dir}\n" if next_dir else "") + L("Siguiente:  bin/andamio init", "Next:  bin/andamio init"))
+    if "ansible-playbook" in missing:
+        note(L("(abre una terminal nueva para que tu shell vea ~/.local/bin)",
+               "(open a new terminal so your shell sees ~/.local/bin)"))
 
 
 def questions() -> dict:
@@ -688,6 +894,7 @@ def ssh_ok(target: list[str]) -> bool:
 
 def interactive(cmd: list[str], **kw) -> int:
     """Corre un comando que habla con la persona (contraseñas, confirmaciones)."""
+    sys.stdout.flush()   # lo que andamio ya imprimió va antes que lo del comando
     return subprocess.run(cmd, check=False, **kw).returncode
 
 
@@ -1940,6 +2147,7 @@ def overview() -> None:
     print(L(f"""{b('andamio')}: tu VPS seguro y tus apps desplegadas, desde este repo.
 
 {b('Empezar')} {d('(una vez, en este orden)')}
+  setup                        deja tu máquina lista: instala git, gh, sops, age, ansible...
   init                         preguntas guiadas: configuración, llave de cifrado, secretos (solo local)
   servidor                     prepara el VPS: usuario propio, SSH, firewall, VPN, Traefik, monitoreo
   backups                      backups diarios cifrados fuera del servidor (B2 o S3), con prueba
@@ -1966,6 +2174,7 @@ def overview() -> None:
             f"""{b('andamio')}: your secure VPS and your deployed apps, from this repo.
 
 {b('Getting started')} {d('(once, in this order)')}
+  setup                        gets your machine ready: installs git, gh, sops, age, ansible...
   init                         guided questions: configuration, encryption key, secrets (local only)
   server                       sets up the VPS: own user, SSH, firewall, VPN, Traefik, monitoring
   backups                      daily encrypted off-server backups (B2 or S3), tested
@@ -2004,7 +2213,7 @@ def main() -> None:
     if args[0] == "_scaffold":   # interno (andamio app create): _scaffold <dir> <puerto|""> <salida>
         cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
         return
-    known = {"init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
+    known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
              "certificado", "certificate"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
@@ -2013,6 +2222,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     _add = sub.add_parser
     sub.add_parser = lambda *a, **kw: _add(*a, description=kw.get("help"), **kw)  # type: ignore[method-assign]
+    p_setup = sub.add_parser("setup", help=L("deja tu máquina lista: instala lo que falta (una vez)",
+                                             "gets your machine ready: installs what's missing (once)"))
+    p_setup.set_defaults(func=cmd_setup)
     p_init = sub.add_parser("init", help=L("configuración guiada (parte 1, local)", "guided configuration (part 1, local)"))
     p_init.add_argument("--force", action="store_true",
                         help=L("completar una configuración existente", "fill in an existing configuration"))

@@ -75,18 +75,23 @@ written down.
 - A VPS with **Ubuntu 24.04**, 1 GB RAM minimum (2 GB+ is comfortable), and its public IP.
 - A **domain** with two DNS `A` records pointing to that IP: `example.com` and `*.example.com`.
 - A **GitHub** account (your apps live there and their images in GHCR).
-- On your machine (Linux, macOS, or WSL): `git`, `gh` (logged in), `ssh`, `sops`, `age`,
-  `ansible` and `python3-yaml`. `andamio init` checks them and tells you how to install
-  anything missing.
+- Your machine: **Linux** (Ubuntu/Debian), **macOS**, or **Windows with WSL**
+  ([install WSL](https://learn.microsoft.com/windows/wsl/install): `wsl --install` in
+  PowerShell, then work inside Ubuntu). `bin/andamio setup` installs everything else.
 
 ## Quickstart
 
 ```bash
-# 1. Create your own (private) copy of this repo: "Use this template" on GitHub, then
-git clone git@github.com:<you>/<your-andamio>.git && cd <your-andamio>
+# 1. Get andamio (public, no account needed) and get your machine ready, once:
+#    installs git, gh, sops, age, ansible and its collections (asking first; sops is
+#    checksum-verified), sets your git identity, logs you in to GitHub with an SSH key,
+#    and creates YOUR private copy of andamio from this template, then clones it.
+git clone https://github.com/Geovani29/andamio.git && cd andamio
+bin/andamio setup
 
-# 2. Answer a few questions. Creates your config, an encryption key (age) and the
-#    platform secrets, all encrypted. Touches no server.
+# 2. In your copy: answer a few questions. Creates your config, an encryption key (age)
+#    and the platform secrets, all encrypted. Touches no server.
+cd ~/my-andamio
 bin/andamio init
 
 # 3. Commit your encrypted configuration

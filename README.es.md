@@ -79,18 +79,23 @@ está escrita.
 - Un VPS con **Ubuntu 24.04**, 1 GB de RAM como mínimo (2 GB o más es cómodo) y su IP pública.
 - Un **dominio** con dos registros DNS `A` apuntando a esa IP: `ejemplo.com` y `*.ejemplo.com`.
 - Una cuenta de **GitHub** (ahí viven tus apps, y sus imágenes en GHCR).
-- En tu máquina (Linux, macOS o WSL): `git`, `gh` (con sesión iniciada), `ssh`, `sops`,
-  `age`, `ansible` y `python3-yaml`. `andamio init` los revisa y te dice cómo instalar lo
-  que falte.
+- Tu máquina: **Linux** (Ubuntu/Debian), **macOS**, o **Windows con WSL**
+  ([instalar WSL](https://learn.microsoft.com/es-es/windows/wsl/install): `wsl --install` en
+  PowerShell, y luego trabajas dentro de Ubuntu). `bin/andamio setup` instala todo lo demás.
 
 ## Inicio rápido
 
 ```bash
-# 1. Crea tu copia (privada) de este repo: "Use this template" en GitHub, y luego
-git clone git@github.com:<tú>/<tu-andamio>.git && cd <tu-andamio>
+# 1. Baja andamio (público, sin cuenta) y deja tu máquina lista, una vez: instala git,
+#    gh, sops, age, ansible y sus colecciones (preguntando antes; sops se verifica contra
+#    su checksum), configura tu identidad de git, inicia sesión en GitHub con una llave
+#    SSH, y crea TU copia privada de andamio desde este template, y la clona.
+git clone https://github.com/Geovani29/andamio.git && cd andamio
+bin/andamio setup
 
-# 2. Responde unas preguntas. Crea tu configuración, una llave de cifrado (age) y los
-#    secretos de la plataforma, todo cifrado. No toca ningún servidor.
+# 2. En tu copia: responde unas preguntas. Crea tu configuración, una llave de cifrado
+#    (age) y los secretos de la plataforma, todo cifrado. No toca ningún servidor.
+cd ~/mi-andamio
 bin/andamio init
 
 # 3. Sube tu configuración cifrada
