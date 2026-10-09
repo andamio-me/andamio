@@ -90,8 +90,9 @@ está escrita.
 #    gh, sops, age, ansible y sus colecciones (preguntando antes; sops se verifica contra
 #    su checksum), configura tu identidad de git, inicia sesión en GitHub con una llave
 #    SSH, y crea TU copia privada de andamio desde este template, y la clona.
-git clone https://github.com/Geovani29/andamio.git && cd andamio
-bin/andamio setup
+curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+#    (¿prefieres leerlo antes? es corto; lo mismo a mano es
+#     git clone https://github.com/Geovani29/andamio.git ~/andamio && ~/andamio/bin/andamio setup)
 
 # 2. En tu copia: responde unas preguntas. Crea tu configuración, una llave de cifrado
 #    (age) y los secretos de la plataforma, todo cifrado. No toca ningún servidor.

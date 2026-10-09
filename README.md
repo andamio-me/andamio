@@ -86,8 +86,9 @@ written down.
 #    installs git, gh, sops, age, ansible and its collections (asking first; sops is
 #    checksum-verified), sets your git identity, logs you in to GitHub with an SSH key,
 #    and creates YOUR private copy of andamio from this template, then clones it.
-git clone https://github.com/Geovani29/andamio.git && cd andamio
-bin/andamio setup
+curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+#    (rather read it first? it's short: same thing by hand is
+#     git clone https://github.com/Geovani29/andamio.git ~/andamio && ~/andamio/bin/andamio setup)
 
 # 2. In your copy: answer a few questions. Creates your config, an encryption key (age)
 #    and the platform secrets, all encrypted. Touches no server.

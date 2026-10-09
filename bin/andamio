@@ -499,7 +499,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
                           | ({"pipx"} if "ansible-playbook" in missing and not shutil.which("pipx") else set())
                           | ({"curl"} if "gh" in missing and not shutil.which("curl") else set()))
             if pkgs and interactive(["sudo", "apt-get", "update", "-qq"]) + \
-                    interactive(["sudo", "apt-get", "install", "-y", "-qq", *pkgs]) != 0:
+                    interactive(["sudo", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", *pkgs]) != 0:
                 die(L("apt no pudo instalar: " + " ".join(pkgs), "apt couldn't install: " + " ".join(pkgs)))
             if "gh" in missing:   # repositorio oficial de GitHub CLI (firmado con su llave)
                 if interactive(["sudo", "bash", "-c", """set -e
@@ -507,7 +507,7 @@ install -d -m 755 /etc/apt/keyrings
 curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
 chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-apt-get update -qq && apt-get install -y -qq gh"""]) != 0:
+apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh"""]) != 0:
                     die(L("No pude instalar gh.", "Couldn't install gh."))
             if "sops" in missing:
                 install_sops()
