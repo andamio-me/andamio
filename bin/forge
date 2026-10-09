@@ -22,7 +22,7 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge var-set DUEÑO/REPO NOMBRE VALOR    variable de CI (no secreta)
   forge ci-allow-reuse DUEÑO/REPO          permite que tus otros repos usen su pipeline
   forge ci-snippet DUEÑO/REPO VERSIÓN      el archivo de CI que una app agrega para desplegar
-  forge ci-watch                           sigue la última corrida del repo actual
+  forge ci-watch [DUEÑO/REPO [SHA]]        sigue la corrida de ese commit (o la última)
   forge registry                           registro de imágenes (p. ej. ghcr.io)
   forge registry-name                      su nombre para mostrar (p. ej. GHCR)
   forge registry-token-help                cómo crear un token de solo lectura de imágenes
@@ -149,7 +149,7 @@ class GitHub:
         return True
 
     def ci_snippet(self, repo: str, version: str) -> str:
-        return f"""# .github/workflows/ci.yml
+        return f"""# .github/workflows/andamio.yml
 name: CI/CD
 on:
   push: {{ branches: [main] }}
@@ -170,11 +170,20 @@ jobs:
       # build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
     secrets: inherit   # DEPLOY_SSH_KEY {L("y los de build_secrets", "and the build_secrets ones")}"""
 
-    def ci_watch(self) -> int:
-        r = self.gh("run", "list", "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId")
-        if not r.stdout.strip():
-            fail(L("Este repo no tiene corridas de CI todavía.", "This repo has no CI runs yet."))
-        return subprocess.run(["gh", "run", "watch", r.stdout.strip(), "--exit-status"], check=False).returncode
+    def ci_watch(self, repo: str | None = None, sha: str | None = None) -> int:
+        """Sigue la corrida de ese commit (recién empujado: espera hasta 1 min a que aparezca),
+        o la última del repo."""
+        where = ["--repo", repo] if repo else []
+        query = [*where, *(["--commit", sha] if sha else []), "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"]
+        run_id = ""
+        for _ in range(20 if sha else 1):
+            run_id = self.gh("run", "list", *query).stdout.strip()
+            if run_id:
+                break
+            time.sleep(3)
+        if not run_id:
+            fail(L("Ese repo no tiene corridas de CI (¿Actions desactivado?).", "That repo has no CI runs (Actions disabled?)."))
+        return subprocess.run(["gh", "run", "watch", run_id, *where, "--exit-status"], check=False).returncode
 
     def registry(self) -> str:
         return "ghcr.io"
@@ -273,7 +282,7 @@ def main() -> None:
     elif cmd == "ci-allow-reuse":
         print("cambiado" if f.ci_allow_reuse(*need(1)) else "sin cambios")
     elif cmd == "ci-watch":
-        sys.exit(f.ci_watch())
+        sys.exit(f.ci_watch(*rest[:2]))
     elif cmd == "registry-token-check":
         problem = f.registry_token_check(sys.stdin.read().strip())
         if problem:

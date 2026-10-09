@@ -41,6 +41,7 @@ usage() {
   andamio app secret rm <nombre> <CLAVE>
   andamio app secret list <nombre>           (solo los nombres)
   andamio app list
+  andamio app stop|start <nombre>            (apagarla sin borrar nada / volver)
   andamio app logs <nombre>
   andamio app rollback <nombre>
   andamio app destroy <nombre>
@@ -50,6 +51,7 @@ usage() {
   andamio app secret rm <name> <KEY>
   andamio app secret list <name>             (names only)
   andamio app list
+  andamio app stop|start <name>              (turn it off without deleting anything / back on)
   andamio app logs <name>
   andamio app rollback <name>
   andamio app destroy <name>
@@ -72,7 +74,7 @@ app_create() {
   local name=${1:-}; shift || true
   [ -n "$name" ] || usage
   valid_name "$name"
-  local access=vpn db=false redis=false host=$name mem=256m repo="" port=3000 health=""
+  local access=vpn db=false redis=false host=$name mem=256m repo="" port=3000 port_set="" health=""
   local missing; missing=$(L "falta el valor de" "missing value for")
   while [ $# -gt 0 ]; do
     case $1 in
@@ -82,7 +84,7 @@ app_create() {
       --host) host=${2:?$missing --host}; shift ;;
       --mem) mem=${2:?$missing --mem}; shift ;;
       --repo) repo=${2:?$missing --repo}; shift ;;       # repo existente (cualquier lenguaje)
-      --port) port=${2:?$missing --port}; shift ;;
+      --port) port=${2:?$missing --port}; port_set=$port; shift ;;
       --health) health=${2:?$missing --health}; shift ;;
       *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
     esac
@@ -109,6 +111,24 @@ app_create() {
   forge auth-ok || die "$(L "Tu CLI de $(forge name) no tiene sesión iniciada" "Your $(forge name) CLI isn't logged in") ($(forge tools | cut -f2))"
   [ -z "$repo" ] || forge repo-exists "$repo" \
     || die "$(L "No existe $repo en $(forge name) (o no tienes acceso)" "$repo doesn't exist on $(forge name) (or you have no access)")"
+
+  # El repo de la app, clonado aparte: Dockerfile (si falta, se propone uno) y CI.
+  local work=""
+  if [ -n "$repo" ]; then
+    work=$(mktemp -d)
+    # shellcheck disable=SC2064   # el temporal se fija ahora, a propósito
+    trap "rm -rf '$work'" EXIT
+    step "$(L "Revisando el repo $repo" "Checking the repo $repo")"
+    git clone -q --depth 1 "$(forge clone-url "$repo")" "$work/repo" \
+      || die "$(L "No pude clonar $repo por SSH" "Couldn't clone $repo over SSH")"
+    "$INFRA/bin/andamio" _scaffold "$work/repo" "$port_set" "$work/out"
+    local p; p=$(sed -n 's/^port=//p' "$work/out")
+    # Sin --port: el del Dockerfile generado, o el EXPOSE del que ya tenía.
+    if [ -z "$port_set" ] && [ -z "$p" ] && [ -f "$work/repo/Dockerfile" ]; then
+      p=$(grep -m1 -oiE '^EXPOSE +[0-9]+' "$work/repo/Dockerfile" | grep -oE '[0-9]+' || true)
+    fi
+    port=${p:-$port}
+  fi
 
   echo "App:      $name"
   echo "Repo:     ${repo:-$OWNER/$name ($(L "nuevo, desde" "new, from") $TEMPLATE)}"
@@ -168,16 +188,9 @@ EOF
 
   local vpn=""; [ "$access" = vpn ] && vpn="  ($(L "con la VPN" "over the VPN"))"
   if [ -n "$repo" ]; then
-    # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
-    local sha; sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
-      || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
+    push_pipeline "$work/repo" "$repo" "$name"
     echo
-    L "✓ $name registrada. Falta que $repo use el pipeline: agrega este archivo
-  (su Dockerfile despliega la última etapa; si tiene una etapa \"test\", se corre antes):" \
-      "✓ $name registered. $repo still has to use the pipeline: add this file
-  (the last stage of its Dockerfile is deployed; a \"test\" stage, if any, runs first):"
-    printf '\n\n%s\n\n' "$(forge ci-snippet "$INSTANCE_REPO" "$sha")"
-    L "  Con ese archivo en main, cada push despliega. Luego:" "  With that file on main, every push deploys. Then:"
+    L "  Desde ahora cada push a main despliega. Tu app:" "  From now on every push to main deploys. Your app:"
     echo " $(app_url "$host")$vpn"
     return
   fi
@@ -191,6 +204,82 @@ EOF
     $INFRA/bin/forge ci-watch
   $(L Luego Then): $(app_url "$host")$vpn
 EOF
+}
+
+# Sube al repo de la app lo que le falte para desplegarse: el Dockerfile generado y el
+# pipeline (.github/workflows/andamio.yml), en un commit, por SSH (con tu llave: el token
+# de gh no necesita permiso de workflows). Pregunta antes; el push dispara el primer deploy.
+push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
+  local dir=$1 repo=$2 name=$3
+  # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
+  local sha; sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
+    || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
+  if ! grep -rqs "workflows/app-build.yml@" "$dir/.github/workflows"; then
+    mkdir -p "$dir/.github/workflows"
+    forge ci-snippet "$INSTANCE_REPO" "$sha" > "$dir/.github/workflows/andamio.yml"
+  fi
+  if [ ! -f "$dir/Dockerfile" ]; then
+    echo
+    L "! $repo no tiene Dockerfile: sin él no hay qué desplegar. Agrégalo y, junto con este
+  archivo en .github/workflows/andamio.yml, haz push:" "! $repo has no Dockerfile: without it there's nothing to deploy. Add one and push it
+  along with this file at .github/workflows/andamio.yml:"
+    printf '\n%s\n' "$(cat "$dir/.github/workflows/andamio.yml")"
+    return
+  fi
+  local changes; changes=$(git -C "$dir" status --porcelain --untracked-files=all | awk '{print "    " $2}')
+  if [ -z "$changes" ]; then
+    echo "✓ $(L "$repo ya tiene Dockerfile y pipeline: el próximo push despliega" "$repo already has a Dockerfile and the pipeline: the next push deploys")"
+    return
+  fi
+  echo
+  L "Para desplegarse, $repo necesita:" "To deploy, $repo needs:"; echo; echo "$changes"
+  local ok; read -rp "$(L "¿Los subo a $repo? (commit en main y push: arranca el primer deploy) [S/n] " \
+                           "Push them to $repo? (commit on main and push: starts the first deploy) [Y/n] ")" ok < /dev/tty
+  if [[ $ok =~ ^[nN] ]]; then
+    local keep=$HOME/andamio-$name; rm -rf "$keep"; mkdir -p "$keep"
+    (cd "$dir" && git status --porcelain --untracked-files=all | awk '{print $2}' | xargs -I{} cp --parents {} "$keep/")
+    L "No subí nada. Los archivos quedaron en $keep: cópialos a tu repo y haz push." \
+      "Nothing pushed. The files are in $keep: copy them into your repo and push."; echo
+    return
+  fi
+  git -C "$dir" add -A
+  git -C "$dir" commit -qm "$(L "andamio: Dockerfile y pipeline de deploy" "andamio: Dockerfile and deploy pipeline")"
+  git -C "$dir" push -q origin HEAD \
+    || die "$(L "$repo rechazó el push (¿main protegida?). Sube esos archivos con un PR." "$repo rejected the push (protected main?). Add those files through a PR.")"
+  echo "✓ $(L "Subido a $repo: primer deploy en curso" "Pushed to $repo: first deploy running")"
+  step "$(L "Primer deploy (tests, escaneo, build y deploy)" "First deploy (tests, scan, build and deploy)")"
+  forge ci-watch "$repo" "$(git -C "$dir" rev-parse HEAD)" || { L "! El deploy falló: el detalle está arriba." "! The deploy failed: details above."; echo; }
+}
+
+# andamio app stop|start: el estado vive en app.yml (stopped: true), así sobrevive a
+# `hl aplicar` y un push no la despliega mientras esté detenida.
+app_state() {  # app_state <stop|start> <nombre>
+  local want=$1 name=${2:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || die "$(L "No existe la app" "No such app"): $name"
+  no_uncommitted
+  if [ "$want" = stop ]; then
+    grep -qx 'stopped: true' "$f" && die "$(L "$name ya está detenida" "$name is already stopped")"
+    echo "stopped: true" >> "$f"
+  else
+    grep -qx 'stopped: true' "$f" || die "$(L "$name no está detenida" "$name isn't stopped")"
+    sed -i '/^stopped: true$/d' "$f"
+  fi
+  git -C "$INFRA" add "apps/$name/app.yml"
+  git -C "$INFRA" commit -qm "feat(apps): $want $name (andamio app $want)"
+  git -C "$INFRA" push -q
+  step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
+  "$INFRA/ansible/hl" apply homelab
+  echo
+  local host; host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$f")
+  if [ "$want" = stop ]; then
+    L "⏸ $name detenida. Sus datos, base, secretos y dominio siguen ahí; un push no la despliega.
+  Para volver: andamio app start $name" "⏸ $name stopped. Its data, database, secrets and domain are kept; a push won't deploy it.
+  To bring it back: andamio app start $name"
+  else
+    L "▶ $name en marcha otra vez: $(app_url "$host")" "▶ $name running again: $(app_url "$host")"
+  fi
+  echo
 }
 
 # Secretos de ejecución de una app (apps/<app>/secrets.sops.env -> .env en el servidor).
@@ -266,6 +355,7 @@ app_list() {
     name=$(basename "$(dirname "$f")")
     host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$f"); access=$(awk '$1 == "access:" {print $2}' "$f")
     st=$(grep -E "^$name-app-[0-9]+ " <<< "$status" | cut -d' ' -f2- || true)
+    grep -qx 'stopped: true' "$f" && st="⏸ $(L detenida stopped)"
     printf '%-22s %-40s %-7s %s\n' "$name" "$(app_url "$host")" "${access:-vpn}" "${st:-$(L "sin desplegar" "not deployed")}"
   done
 }
@@ -371,5 +461,6 @@ case ${1:-} in
   rollback) shift; app_rollback "$@" ;;
   destroy) shift; app_destroy "$@" ;;
   secret) shift; app_secret "$@" ;;
+  stop|start) app_state "$@" ;;
   *) usage ;;
 esac

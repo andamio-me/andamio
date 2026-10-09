@@ -16,6 +16,10 @@ VERSION=${VERSION:-${SHA:0:7}}
 INFRA=/srv/homelab/infra
 DIR=$INFRA/apps/$APP
 [ -f "$DIR/compose.yaml" ] || { echo "App desconocida: $APP"; exit 1; }
+# andamio app stop: mientras esté detenida, un push no la vuelve a levantar.
+if grep -qx 'stopped: true' "$DIR/app.yml" 2> /dev/null; then
+  echo "⏸ $APP está detenida: no la despliego. Para volver: andamio app start $APP"; exit 1
+fi
 
 notify() {
   [ -r /etc/homelab/telegram.env ] || { echo "⚠ Sin aviso: no puedo leer /etc/homelab/telegram.env" >&2; return 0; }

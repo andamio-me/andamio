@@ -90,7 +90,7 @@
 # Una app que nunca se desplegó no tiene TAG: la levanta su primer deploy.
 
 - name: "{{ homelab_app_name }}: levantada"
-  when: homelab_app_tag.stdout | length > 4
+  when: homelab_app_tag.stdout | length > 4 and not (homelab_app.stopped | default(false))
   become: true
   become_user: "{{ homelab_user }}"
   ansible.builtin.command: docker compose up -d
@@ -98,3 +98,15 @@
     chdir: "{{ homelab_app_dir }}"
   register: homelab_app_up
   changed_when: homelab_app_up.stderr is search('Creat|Recreat|Start')
+
+# andamio app stop: contenedores detenidos (no borrados); datos, base, secretos y dominio
+# intactos. deploy-app.sh tampoco la despliega mientras siga así.
+- name: "{{ homelab_app_name }}: detenida (stopped: true en app.yml)"
+  when: homelab_app.stopped | default(false)
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: docker compose stop
+  args:
+    chdir: "{{ homelab_app_dir }}"
+  register: homelab_app_stop
+  changed_when: homelab_app_stop.stderr is search('Stopped')

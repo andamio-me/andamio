@@ -122,25 +122,39 @@ para el celular con `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 
 ## Despliega tu primera app
 
-Tu app, en cualquier lenguaje, necesita un `Dockerfile`. Opcionalmente:
+Tu app, en cualquier lenguaje, necesita un `Dockerfile`. **Si no lo tiene**, `app create`
+detecta Node (npm, pnpm, yarn), Python (requirements.txt o pyproject.toml), Go o un sitio
+estático y te propone uno listo para el pipeline: etapa `test` si hay tests, imagen final
+mínima sin npm ni pip (para que Trivy no la bloquee) y usuario sin root. Confirmas el
+comando de arranque y lo revisas antes de que se suba nada. Opcionalmente:
 
 - una etapa llamada **`test`**: el CI la construye antes de desplegar; si falla, no se
   despliega nada;
 - una **ruta de salud** HTTP (p. ej. `/healthz`) que responda 200 cuando la app está lista.
 
 ```bash
-# Registra un repo existente: crea su llave de deploy, las variables del CI, un usuario de
-# base y de Redis si los pides, e imprime el workflow de CI que agregas a tu repo.
-bin/andamio app create miapp --repo <tú>/miapp --port 8000 --health /healthz
-
-# Agrega a tu app el .github/workflows/ci.yml que imprimió, y luego
-git push   # tests, escaneos, build y deploy
+bin/andamio app create miapp --repo <tú>/miapp --health /healthz
 ```
+
+Registra la app (llave de deploy, variables del CI, base y usuario de Redis si los pides) y
+te ofrece subir al repo de tu app lo que le falta: el Dockerfile (si se generó) y
+`.github/workflows/andamio.yml`. Ese push arranca el primer deploy y lo ves ahí mismo:
+tests, escaneo, build, deploy. Desde ahí, cada `git push` a `main` despliega.
 
 Tu app queda en `https://miapp.ejemplo.com` (por la VPN, salvo que uses `--public`).
 
-Opciones útiles: `--public` (accesible desde internet), `--db` (PostgreSQL), `--redis`,
-`--host <sub>` o `--host @` (dominio raíz), `--mem 512m`.
+Opciones útiles: `--port` (por defecto, el `EXPOSE` del Dockerfile), `--public` (accesible
+desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (dominio raíz),
+`--mem 512m`.
+
+```bash
+bin/andamio app stop miapp      # apagarla sin borrar nada (datos, base, secretos, dominio)
+bin/andamio app start miapp     # volver a encenderla
+bin/andamio app destroy miapp   # borrarla del todo: pide escribir su nombre y respalda su base antes
+```
+
+Una app detenida sigue detenida aunque vuelvas a aplicar el servidor, y un `git push` no la
+despliega hasta que hagas `start`.
 
 ### Secretos
 

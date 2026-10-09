@@ -1411,6 +1411,150 @@ check it now and then:  ssh {alias} systemctl status homelab-backup
 To rebuild everything on another server: docs/runbooks/reconstruir-servidor.md"""))
 
 
+# ================= app: Dockerfile para el repo de una app =================
+# Lo llama bin/homelab (andamio app create) con el repo de la app ya clonado.
+
+DOCKERFILES = ROOT / "templates" / "dockerfiles"
+KINDS = {"node": ("Node", "3000"), "python": ("Python", "8000"), "go": ("Go", "8080"),
+         "static": (L("sitio estático", "static site"), "8080")}
+DOCKERIGNORE = {
+    "node": ".git\nnode_modules\n.next/cache\n.env*\nnpm-debug.log*\n",
+    "python": ".git\n.venv\nvenv\n__pycache__\n*.pyc\n.pytest_cache\n.env*\n",
+    "go": ".git\n.env*\n",
+    "static": ".git\n.github\n.env*\nDockerfile\n.dockerignore\n",
+}
+
+
+def detect_kind(d: Path) -> str | None:
+    if (d / "package.json").exists():
+        return "node"
+    if (d / "requirements.txt").exists() or (d / "pyproject.toml").exists():
+        return "python"
+    if (d / "go.mod").exists():
+        return "go"
+    if (d / "index.html").exists():
+        return "static"
+    return None
+
+
+def render_dockerfile(kind: str, values: dict[str, str]) -> str:
+    """La plantilla con sus valores; de los comentarios #es:/#en: queda el del idioma actual."""
+    out = []
+    for line in (DOCKERFILES / f"{kind}.Dockerfile").read_text().splitlines(keepends=True):
+        if line[:5] in ("#es: ", "#en: "):
+            if line[1:3] == LANG:
+                out.append("# " + line[5:])
+            continue
+        out.append(line)
+    text = "".join(out)
+    for k, v in values.items():
+        text = text.replace("{{" + k + "}}", v)
+    if "{{" in text:
+        die(f"templates/dockerfiles/{kind}.Dockerfile: {re.findall(r'{{[A-Z_]+}}', text)}")
+    return text
+
+
+def node_values(d: Path) -> tuple[dict[str, str], str]:
+    import json
+    pkg = json.loads((d / "package.json").read_text())
+    scripts, deps = pkg.get("scripts", {}), {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+    if (d / "pnpm-lock.yaml").exists():
+        m = re.match(r"pnpm@(\d+)", pkg.get("packageManager", ""))
+        pm, setup, manifests = "pnpm", f"RUN npm install -g pnpm@{m.group(1) if m else 10}\n", "package.json pnpm-lock.yaml"
+        install, run, prune = "pnpm install --frozen-lockfile", "pnpm run", "RUN pnpm prune --prod"
+    elif (d / "yarn.lock").exists():
+        pm, setup, manifests = "yarn", "RUN corepack enable\n", "package.json yarn.lock"
+        install, run = "yarn install --frozen-lockfile", "yarn run"
+        prune = "RUN yarn install --production --frozen-lockfile --ignore-scripts"
+    else:
+        lock = (d / "package-lock.json").exists()
+        pm, setup = "npm", ""
+        manifests = "package.json package-lock.json" if lock else "package.json"
+        install, run, prune = ("npm ci" if lock else "npm install"), "npm run", "RUN npm prune --omit=dev"
+    test = scripts.get("test", "")
+    start = scripts.get("start") or ("next start" if "next" in deps else f"node {pkg.get('main', 'index.js')}")
+    return {
+        "PM": pm, "NODE": "24", "PM_SETUP": setup, "MANIFESTS": manifests, "INSTALL": install,
+        "BUILD": f"RUN {run} build" if "build" in scripts else "",
+        "TEST": f"\nFROM build AS test\nRUN {run} test\n" if test and "no test specified" not in test else "",
+        "PRUNE": prune,
+    }, start
+
+
+def python_values(d: Path) -> tuple[dict[str, str], str]:
+    req = d / "requirements.txt"
+    deps = (req.read_text() if req.exists() else (d / "pyproject.toml").read_text()).lower()
+    install = ("COPY requirements.txt ./\nRUN pip install -r requirements.txt\nCOPY . ." if req.exists()
+               else "COPY . .\nRUN pip install .")
+    has_tests = (d / "tests").is_dir() or any(d.glob("test_*.py"))
+    mod = "main" if (d / "main.py").exists() else "app" if (d / "app.py").exists() else "main"
+    wsgi = next(iter(d.glob("*/wsgi.py")), None)
+    if (d / "manage.py").exists() and wsgi:
+        start, need = f"gunicorn {wsgi.parent.name}.wsgi --bind 0.0.0.0:$PORT", "gunicorn"
+    elif "fastapi" in deps:
+        start, need = f"uvicorn {mod}:app --host 0.0.0.0 --port $PORT", "uvicorn"
+    elif "flask" in deps:
+        start, need = f"gunicorn {mod}:app --bind 0.0.0.0:$PORT", "gunicorn"
+    else:
+        start, need = f"python {mod}.py", ""
+    if need and need not in deps:
+        warn(L(f"Para arrancar así hace falta {need} en tus dependencias (agrégalo a requirements.txt).",
+               f"Starting it this way needs {need} in your dependencies (add it to requirements.txt)."))
+    return {"PY": "3.13", "INSTALL": install,
+            "TEST": "\nFROM build AS test\nRUN pip install pytest && python -m pytest -q\n" if has_tests else ""}, start
+
+
+def go_values(d: Path) -> dict[str, str]:
+    m = re.search(r"^go (\d+\.\d+)", (d / "go.mod").read_text(), re.M)
+    mains = [p.parent for p in d.glob("cmd/*/main.go")]
+    pkg = "." if (d / "main.go").exists() or not mains else f"./{mains[0].relative_to(d)}"
+    return {"GO": m.group(1) if m else "1.27", "GOSUM": "go.sum " if (d / "go.sum").exists() else "", "PKG": pkg}
+
+
+def cmd_scaffold(args: argparse.Namespace) -> None:
+    """Interno: Dockerfile para el repo clonado de una app. Escribe el resultado en args.out
+    (status=existing|generated|declined|unknown, port=...) para que bin/homelab siga."""
+    d, out = Path(args.dir), Path(args.out)
+    if (d / "Dockerfile").exists():
+        ok(L("Tu repo ya tiene Dockerfile: lo uso tal cual.", "Your repo already has a Dockerfile: using it as is."))
+        out.write_text(f"status=existing\nport={args.port}\n")
+        return
+    kind = detect_kind(d)
+    if not kind:
+        warn(L("Tu repo no tiene Dockerfile y no reconozco el lenguaje (busqué package.json, requirements.txt, "
+               "pyproject.toml, go.mod, index.html). Escribe un Dockerfile y vuelve a correr.",
+               "Your repo has no Dockerfile and I don't recognize the language (looked for package.json, "
+               "requirements.txt, pyproject.toml, go.mod, index.html). Write a Dockerfile and run again."))
+        out.write_text(f"status=unknown\nport={args.port}\n")
+        return
+    label, default_port = KINDS[kind]
+    port = "8080" if kind == "static" else (args.port or default_port)
+    note(L(f"Tu repo no tiene Dockerfile. Detecté: {label}. Te propongo uno listo para el pipeline "
+           "(tests antes de desplegar, imagen final mínima y sin root).",
+           f"Your repo has no Dockerfile. Detected: {label}. Here's one ready for the pipeline "
+           "(tests before deploying, minimal final image, no root)."))
+    values: dict[str, str] = {"PORT": port}
+    if kind in ("node", "python"):
+        extra, start = node_values(d) if kind == "node" else python_values(d)
+        values.update(extra)
+        start = ask(L("Comando para arrancar tu app (puede usar $PORT)", "Command that starts your app (may use $PORT)"), start)
+        values["START"] = start.replace("\\", "\\\\").replace('"', '\\"')
+    elif kind == "go":
+        values.update(go_values(d))
+        note(L(f"Tu app tiene que escuchar en el puerto {port} (o leerlo de la variable PORT).",
+               f"Your app must listen on port {port} (or read it from the PORT variable)."))
+    text = render_dockerfile(kind, values)
+    print("\n" + "\n".join(f"    \033[2m{x}\033[0m" for x in text.splitlines()) + "\n")
+    if not ask_yes(L("¿Uso este Dockerfile? (se sube a tu repo al final, junto con el CI)",
+                     "Use this Dockerfile? (it's pushed to your repo at the end, along with CI)"), True):
+        out.write_text(f"status=declined\nport={args.port}\n")
+        return
+    (d / "Dockerfile").write_text(text)
+    if not (d / ".dockerignore").exists():
+        (d / ".dockerignore").write_text(DOCKERIGNORE[kind])
+    out.write_text(f"status=generated\nport={port}\n")
+
+
 # ================= update =================
 
 # El extractor (tools/extraer-plataforma.py) pone aquí la URL del repo público de andamio.
@@ -1853,6 +1997,9 @@ def main() -> None:
     # `andamio app ...`: el mini-PaaS de apps vive en bin/homelab (bash); se le pasa tal cual.
     if args[0] == "app":
         os.execv(str(ROOT / "bin" / "homelab"), [str(ROOT / "bin" / "homelab"), *args])
+    if args[0] == "_scaffold":   # interno (andamio app create): _scaffold <dir> <puerto|""> <salida>
+        cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
+        return
     known = {"init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
              "certificado", "certificate"}
     if args[0] not in known:

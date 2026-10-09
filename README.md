@@ -118,24 +118,39 @@ your phone with `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 
 ## Deploy your first app
 
-Your app, any language, needs a `Dockerfile`. Optionally:
+Your app, any language, needs a `Dockerfile`. **If it doesn't have one**, `app create`
+detects Node (npm, pnpm, yarn), Python (requirements.txt or pyproject.toml), Go or a static
+site and proposes one ready for the pipeline: a `test` stage when there are tests, a minimal
+final image without npm or pip (so Trivy doesn't block it) and a non-root user. You confirm
+the start command and review it before anything is pushed. Optionally:
 
 - a stage named **`test`**: CI builds it before deploying; if it fails, nothing is deployed;
 - an HTTP **health route** (e.g. `/healthz`) that returns 200 when the app is ready.
 
 ```bash
-# Register an existing repo: creates its deploy key, the CI variables, a database
-# and Redis user if you ask for them, and prints the CI workflow to add to your repo.
-bin/andamio app create myapp --repo <you>/myapp --port 8000 --health /healthz
-
-# Add the printed .github/workflows/ci.yml to your app repo, then
-git push   # tests, scans, builds and deploys
+bin/andamio app create myapp --repo <you>/myapp --health /healthz
 ```
+
+It registers the app (deploy key, CI variables, database and Redis user if you ask for
+them), then offers to push to your app's repo what it still needs: the Dockerfile (if it
+was generated) and `.github/workflows/andamio.yml`. That push starts the first deploy, and
+you watch it right there: tests, scan, build, deploy. From then on, every `git push` to
+`main` deploys.
 
 Your app is at `https://myapp.example.com` (through the VPN, unless you passed `--public`).
 
-Useful flags: `--public` (reachable from the internet), `--db` (PostgreSQL), `--redis`,
-`--host <sub>` or `--host @` (root domain), `--mem 512m`.
+Useful flags: `--port` (default: the Dockerfile's `EXPOSE`), `--public` (reachable from the
+internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root domain),
+`--mem 512m`.
+
+```bash
+bin/andamio app stop myapp      # off, without deleting anything (data, database, secrets, domain)
+bin/andamio app start myapp     # back on
+bin/andamio app destroy myapp   # gone for good: asks you to type its name, backs up its database first
+```
+
+A stopped app stays stopped when you re-apply the server, and a `git push` won't deploy it
+until you `start` it.
 
 ### Secrets
 
