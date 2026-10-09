@@ -158,3 +158,31 @@ groups:
               type: threshold
               expression: A
               conditions: [{ evaluator: { type: lt, params: [1] } }]
+
+      # Todos los certificados que sirve Traefik. Let's Encrypt renueva a 30 días del
+      # vencimiento: si llega a 20, la renovación lleva 10 días fallando. Un certificado
+      # propio (homelab_tls: custom) se renueva a mano: bin/andamio certificado.
+      - uid: cert-expiry
+        title: Certificado HTTPS por vencer
+        condition: C
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: 'El certificado de {{ index .Labels "cn" }} vence en {{ printf "%.0f" .Values.A.Value }} días'
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: min by (cn) ((traefik_tls_certs_not_after - time()) / 86400)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [20] } }]

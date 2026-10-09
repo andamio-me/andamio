@@ -12,6 +12,7 @@ secrets/
 stacks/data/redis-acl/
 stacks/proxy/traefik.yml
 stacks/proxy/dynamic/middlewares.yml
+stacks/proxy/dynamic/tls.yml
 
 # Python
 __pycache__/

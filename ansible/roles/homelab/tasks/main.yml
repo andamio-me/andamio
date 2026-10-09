@@ -367,11 +367,90 @@
     label: "{{ item.dest }}"
   register: homelab_traefik_conf
 
-- name: Reiniciar Traefik si cambió su configuración estática
+# Certificado propio (homelab_tls: custom). La carpeta existe siempre: compose la monta.
+- name: Carpeta del certificado propio (solo la lee Traefik)
+  ansible.builtin.file:
+    path: /etc/homelab/tls
+    state: directory
+    owner: "65532"
+    group: "65532"
+    mode: "0700"
+
+- name: Certificado propio en el repo
+  when: homelab_tls == 'custom'
+  ansible.builtin.assert:
+    that:
+      - (playbook_dir ~ '/../host/tls/cert.pem') is file
+      - (playbook_dir ~ '/../host/sops/tls-key.sops') is file
+    fail_msg: >-
+      homelab_tls: custom necesita host/tls/cert.pem y host/sops/tls-key.sops.
+      Créalos con: bin/andamio certificado <certificado> <llave>
+    quiet: true
+
+- name: Certificado propio
+  when: homelab_tls == 'custom'
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/tls/cert.pem"
+    dest: /etc/homelab/tls/cert.pem
+    owner: "65532"
+    group: "65532"
+    mode: "0600"
+  register: homelab_tls_cert
+
+- name: Llave del certificado propio (desde sops)
+  when: homelab_tls == 'custom'
+  ansible.builtin.copy:
+    content: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../host/sops/tls-key.sops',
+                input_type='json', output_type='binary', rstrip=false) }}
+    dest: /etc/homelab/tls/key.pem
+    owner: "65532"
+    group: "65532"
+    mode: "0600"
+  no_log: true
+  diff: false
+  register: homelab_tls_key
+
+- name: Sin certificado propio (otro modo de HTTPS)
+  when: homelab_tls != 'custom'
+  ansible.builtin.file:
+    path: "/etc/homelab/tls/{{ item }}"
+    state: absent
+  loop: [cert.pem, key.pem]
+
+- name: Traefik usa el certificado propio
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../stacks/proxy/tls.yml.j2"
+    dest: "{{ homelab_infra }}/stacks/proxy/dynamic/tls.yml"
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "0644"
+  when: homelab_tls == 'custom'
+
+- name: Sin configuración de certificado propio
+  ansible.builtin.file:
+    path: "{{ homelab_infra }}/stacks/proxy/dynamic/tls.yml"
+    state: absent
+  when: homelab_tls != 'custom'
+
+# En una instalación nueva Traefik aún no existe: lo arranca "Stacks levantados".
+- name: ¿Traefik ya existe?
+  ansible.builtin.command: docker inspect traefik --format '{{ '{{' }} .Name {{ '}}' }}'
+  register: homelab_traefik_exists
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Traefik lee el certificado al cargar tls.yml: si cambia el archivo, no lo nota solo.
+- name: Reiniciar Traefik si cambió su configuración estática o el certificado
   become: true
   become_user: "{{ homelab_user }}"
   ansible.builtin.command: docker restart traefik
-  when: homelab_traefik_conf.results[0].changed and not ansible_check_mode
+  when:
+    - homelab_traefik_conf.results[0].changed or homelab_tls_cert.changed | default(false)
+      or homelab_tls_key.changed | default(false)
+    - homelab_traefik_exists.rc == 0
+    - not ansible_check_mode
   changed_when: true
 
 # Alertas de Grafana por Telegram: solo si está activado (sin token, Grafana no arranca

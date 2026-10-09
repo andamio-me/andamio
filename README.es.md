@@ -166,10 +166,30 @@ Todo en `ansible/group_vars/all.yml`:
 
 | Opción | Valores |
 |---|---|
-| `homelab_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS) o `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) |
+| `homelab_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
 | `homelab_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma) |
 | `homelab_backups` | `false` (por defecto) o `true`, con un repositorio de restic en `host/sops/restic-env.sops` |
 | `homelab_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
+
+### Tu propio certificado
+
+Con un certificado de una CA comercial, o un Origin Certificate de Cloudflare, elige
+`custom` en `andamio init`, o cámbialo después:
+
+```bash
+bin/andamio certificado fullchain.pem privada.key   # lo valida y lo guarda (la llave, cifrada con sops)
+bin/andamio certificado                             # muestra el actual y cuándo vence
+```
+
+Revisa que la llave corresponda, que cubra `tudominio` y `*.tudominio`, que traiga la
+cadena de intermedios y cuánto le queda. Nadie lo renueva por ti: Grafana avisa 20 días
+antes de que venza cualquier certificado (también los de Let's Encrypt, por si la
+renovación falla). Renovar es el mismo comando con los archivos nuevos.
+
+Un Origin Certificate de Cloudflare solo es válido a través del proxy de Cloudflare. Tus
+paneles privados (por la VPN) no pasan por ahí, así que los navegadores lo rechazarán en
+ellos. Si tu dominio ya está en Cloudflare, el modo `cloudflare` es gratis, se renueva solo
+y sirve para ambos.
 
 ## El modelo de seguridad, con honestidad
 
@@ -211,7 +231,9 @@ seguridad en el CI (0021) y apps de cualquier lenguaje (0022).
 
 ## Hoja de ruta
 
-- [ ] Prueba de punta a punta de `andamio servidor` en VPS nuevos de varios proveedores
+- [x] Prueba de punta a punta en un VPS nuevo (Azure, 1 vCPU y 1 GB)
+- [ ] La misma prueba en más proveedores (Hetzner, DigitalOcean, Oracle, AWS)
+- [ ] GitLab además de GitHub (repos, registro de imágenes y pipeline)
 - [ ] CLI en inglés
 - [ ] Configuración guiada de backups y Telegram (`andamio backups`, `andamio telegram`)
 - [ ] Entornos de preview por pull request

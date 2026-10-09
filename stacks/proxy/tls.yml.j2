@@ -1,0 +1,13 @@
+{# Plantilla: Ansible genera dynamic/tls.yml (rol homelab) solo con homelab_tls: custom. #}
+# Tu certificado (host/tls/cert.pem) y su llave (host/sops/tls-key.sops), copiados por
+# Ansible a /etc/homelab/tls (solo los lee Traefik). Es también el certificado por defecto:
+# lo recibe cualquier nombre que no tenga uno más específico.
+tls:
+  certificates:
+    - certFile: /certs/cert.pem
+      keyFile: /certs/key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/cert.pem
+        keyFile: /certs/key.pem

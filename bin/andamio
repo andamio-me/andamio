@@ -5,6 +5,9 @@
                     (parte 1: solo en tu máquina; no toca ningún servidor)
   andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
                     VPN, llave del repo, GHCR y los stacks (parte 2; se puede repetir)
+  andamio certificado [cert llave]
+                    tu propio certificado HTTPS (homelab_tls: custom): sin argumentos
+                    muestra el actual; con ellos lo valida y lo reemplaza (renovación)
 
 Todo lo que genera queda en este repo (cifrado donde corresponde). Nada se sobreescribe:
 si un archivo ya existe, se respeta.
@@ -33,6 +36,9 @@ AUTH_KEYS = ROOT / "host" / "ssh" / "authorized_keys"
 SSH_DIR = Path.home() / ".ssh"
 LOCAL_KEY = SSH_DIR / "id_ed25519"
 DEFAULT_ALIAS = "andamio"
+TLS_CERT = ROOT / "host" / "tls" / "cert.pem"          # público: va en claro
+TLS_KEY = ROOT / "host" / "sops" / "tls-key.sops"      # privada: cifrada
+CERT_WARN_DAYS = 30
 
 # Herramientas que necesitas en TU máquina, y cómo instalarlas.
 TOOLS = {
@@ -66,6 +72,7 @@ def warn(t: str) -> None:
 
 
 def die(t: str) -> None:
+    sys.stdout.flush()
     print(f"\n\033[31m✗ {t}\033[0m", file=sys.stderr)
     sys.exit(1)
 
@@ -182,6 +189,136 @@ def resolves_to(name: str) -> set[str]:
         return set()
 
 
+# ---------- certificado propio (homelab_tls: custom) ----------
+
+def local_path(v: str) -> Path:
+    """Ruta escrita por la persona; acepta rutas de Windows si corre en WSL (C:\\Users\\...)."""
+    v = v.strip().strip("'\"")
+    if re.match(r"^[A-Za-z]:\\", v) and shutil.which("wslpath"):
+        v = run(["wslpath", "-u", v]).stdout.strip() or v
+    return Path(v).expanduser()
+
+
+def cert_info(cert: Path) -> dict:
+    """Datos del primer certificado del archivo (el del servidor); {} si no es un PEM válido."""
+    from datetime import datetime, timezone
+    r = run(["openssl", "x509", "-in", str(cert), "-noout", "-subject", "-issuer", "-enddate",
+             "-ext", "subjectAltName", "-nameopt", "RFC2253"])
+    if r.returncode != 0:
+        return {}
+    field = lambda k: (re.search(rf"^{k}=(.*)$", r.stdout, re.M) or [None, ""])[1].strip()  # noqa: E731
+    subject, issuer = field("subject"), field("issuer")
+    expires = datetime.strptime(field("notAfter"), "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+    cn = (re.search(r"CN=([^,]+)", subject) or [None, ""])[1]
+    return {
+        "cn": cn, "issuer": issuer, "self_signed": subject == issuer,
+        "sans": [s.lower() for s in re.findall(r"DNS:([^,\s]+)", r.stdout)] or [cn.lower()],
+        "expires": expires.strftime("%Y-%m-%d"), "days": (expires - datetime.now(timezone.utc)).days,
+        "chain": cert.read_text(errors="ignore").count("BEGIN CERTIFICATE"),
+        "cloudflare_origin": "cloudflare origin" in issuer.lower(),
+    }
+
+
+def covers(sans: list[str], name: str) -> bool:
+    return any(s == name or (s.startswith("*.") and name.endswith(s[1:]) and name.count(".") == s.count("."))
+               for s in sans)
+
+
+def cert_problem(v: str) -> str | None:
+    p = local_path(v)
+    if not p.is_file():
+        return f"No existe el archivo {p}."
+    info = cert_info(p)
+    if not info:
+        return ("No es un certificado PEM (texto que empieza con -----BEGIN CERTIFICATE-----). Si es binario "
+                "(.der/.cer): openssl x509 -inform der -in ARCHIVO -out cert.pem")
+    if info["days"] < 0:
+        return f"Ese certificado venció el {info['expires']}."
+    return None
+
+
+def key_problem(cert: Path, v: str) -> str | None:
+    key = local_path(v)
+    if not key.is_file():
+        return f"No existe el archivo {key}."
+    r = run(["openssl", "pkey", "-in", str(key), "-passin", "pass:", "-pubout"])
+    if r.returncode != 0:
+        if "ENCRYPTED" in key.read_text(errors="ignore"):
+            return (f"La llave tiene contraseña. Quítasela (andamio la cifra con sops igual): "
+                    f"openssl pkey -in {key} -out llave-sin-clave.key")
+        return "No es una llave privada PEM (texto que empieza con -----BEGIN ... PRIVATE KEY-----)."
+    if run(["openssl", "x509", "-in", str(cert), "-noout", "-pubkey"]).stdout.strip() != r.stdout.strip():
+        return "Esa llave no corresponde al certificado (¿es la de otra solicitud o de otro dominio?)."
+    return None
+
+
+def cert_warnings(info: dict, domain: str) -> list[str]:
+    """Problemas que no impiden usarlo, pero que la persona tiene que conocer."""
+    out = []
+    # El comodín se prueba con un nombre que nadie pondría en un certificado.
+    missing = [n for n in (domain, f"*.{domain}") if not covers(info["sans"], n.replace("*", "andamio-x7q"))]
+    if missing:
+        out.append(f"No cubre {' ni '.join(missing)} (cubre: {', '.join(info['sans'])}). Las apps con "
+                   "otros nombres mostrarán un error de certificado en el navegador.")
+    if info["cloudflare_origin"]:
+        out.append("Es un Origin Certificate de Cloudflare: solo lo aceptan los navegadores a través del "
+                   "proxy de Cloudflare (nube naranja, SSL/TLS en modo Full (strict)). Tus paneles privados "
+                   "(por la VPN) no pasan por Cloudflare y mostrarán un error de certificado. Si tu dominio "
+                   "ya está en Cloudflare, el modo 'cloudflare' de andamio evita esto (gratis, se renueva solo).")
+    elif info["self_signed"]:
+        out.append("Es autofirmado: ningún navegador lo acepta.")
+    elif info["chain"] < 2:
+        out.append("Trae solo tu certificado, sin los intermedios de tu CA: algunos clientes lo rechazarán. "
+                   "Usa el archivo 'fullchain' o 'bundle', o pega los intermedios debajo del tuyo.")
+    if info["days"] < CERT_WARN_DAYS:
+        out.append(f"Vence en {info['days']} días ({info['expires']}).")
+    return out
+
+
+def show_cert(info: dict) -> None:
+    ok(f"{info['cn']}: cubre {', '.join(info['sans'])}")
+    note(f"Emitido por: {info['issuer']}\nVence: {info['expires']} (en {info['days']} días)")
+
+
+def ask_cert(domain: str) -> tuple[Path, Path]:
+    """Pide certificado y llave, los valida y muestra lo que hay que saber antes de usarlos."""
+    if not shutil.which("openssl"):
+        die("Falta openssl para revisar tu certificado: sudo apt install openssl  |  brew install openssl")
+    note("""
+Necesitas dos archivos PEM (texto que empieza con -----BEGIN):
+  certificado: el tuyo seguido de los intermedios de tu CA (fullchain o bundle)
+  llave privada: la que generaste con la solicitud (CSR), o la que te dio Cloudflare
+En WSL, tu carpeta Descargas de Windows está en /mnt/c/Users/<tu usuario>/Downloads
+(también puedes pegar la ruta de Windows tal cual).""")
+    while True:
+        cert = local_path(ask("Ruta del certificado", check=cert_problem))
+        key = local_path(ask("Ruta de la llave privada", check=lambda v: key_problem(cert, v)))
+        info = cert_info(cert)
+        show_cert(info)
+        problems = cert_warnings(info, domain)
+        for p in problems:
+            warn(p)
+        if not problems or ask_yes("¿Usarlo igual?", False):
+            return cert, key
+
+
+def install_cert(cert: Path, key: Path) -> None:
+    """Copia el certificado al repo y cifra la llave con sops (sin copias en claro)."""
+    TLS_CERT.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cert, TLS_CERT)
+    TLS_CERT.chmod(0o644)
+    ok(f"{TLS_CERT.relative_to(ROOT)}")
+    rel = TLS_KEY.relative_to(ROOT)
+    r = run(["sops", "encrypt", "--input-type", "binary", "--output-type", "json",
+             "--filename-override", str(rel), str(key)], cwd=ROOT)
+    if r.returncode != 0:
+        die(f"sops no pudo cifrar la llave: {r.stderr.strip()}")
+    TLS_KEY.parent.mkdir(parents=True, exist_ok=True)
+    TLS_KEY.write_text(r.stdout)
+    ok(f"{rel} (cifrada)")
+    warn(f"Ya está cifrada en el repo: borra la copia sin cifrar ({key}), también de tu carpeta Descargas.")
+
+
 # ---------- pasos ----------
 
 def check_tools() -> None:
@@ -221,7 +358,6 @@ registros A apuntando a la IP del VPS: uno para el dominio y otro para *.dominio
         note(f"""
 Crea en tu DNS:  A  {a['domain']}  ->  {a['ip']}   y   A  *.{a['domain']}  ->  {a['ip']}
 Sin eso no habrá certificados HTTPS. Puedes seguir y corregirlo antes de preparar el servidor.""")
-    a["email"] = ask("Email para Let's Encrypt (avisos de certificados)", check=check_email)
 
     title("4. Acceso seguro")
     note("""
@@ -246,12 +382,19 @@ http (recomendado para empezar): un certificado de Let's Encrypt por app; funcio
   cualquier DNS. Los nombres de tus apps (también las privadas) quedan en los registros
   públicos de certificados.
 cloudflare: un solo certificado comodín; no publica los nombres. Necesita el DNS del
-  dominio en Cloudflare y un token con permiso Zone:DNS:Edit para esa zona.""")
-    a["tls"] = ask("Modo (http/cloudflare)", "http", lambda v: None if v in ("http", "cloudflare") else "http o cloudflare.")
+  dominio en Cloudflare y un token con permiso Zone:DNS:Edit para esa zona.
+custom: tu propio certificado (de una CA comercial, o un Origin Certificate de Cloudflare).
+  Nadie lo renueva solo: Grafana avisa antes de que venza y lo reemplazas con
+  bin/andamio certificado.""")
+    a["tls"] = ask("Modo (http/cloudflare/custom)", "http",
+                   lambda v: None if v in ("http", "cloudflare", "custom") else "http, cloudflare o custom.")
     a["cf_token"] = (ask_secret("Token de Cloudflare (no se ve al escribir)", cloudflare_token_problem)
                      if a["tls"] == "cloudflare" else "")
     if a["cf_token"]:
         ok("Token de Cloudflare activo")
+    a["cert"], a["key"] = ask_cert(a["domain"]) if a["tls"] == "custom" else (None, None)
+    a["email"] = ("" if a["tls"] == "custom" else
+                  ask("Email para Let's Encrypt (avisos de certificados)", check=check_email))
 
     title("7. Módulos")
     note("""
@@ -312,7 +455,7 @@ homelab_server_ip: {a['ip']}
 homelab_hostname: {a['domain'].split('.')[0]}
 homelab_domain: {a['domain']}
 homelab_tls: {a['tls']}
-homelab_acme_email: {a['email']}
+homelab_acme_email: "{a['email']}"
 homelab_github_owner: {a['owner']}
 homelab_repo: git@github-homelab-infra:{a['repo']}.git
 homelab_monitoring: {a['monitoring']}
@@ -368,6 +511,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     recipient = age_recipient()
     write_config(a, recipient)
     write_secrets(a)
+    if a["tls"] == "custom":
+        title("11. Tu certificado")
+        install_cert(a["cert"], a["key"])
     title("Listo. Próximos pasos")
     note(f"""
 1. Sube tu configuración (va cifrada):
@@ -748,6 +894,55 @@ Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('homelab_domain'
 Primera app:  bin/homelab app create <nombre> --repo <dueño/repo> --port <puerto> --health /ruta""")
 
 
+def cmd_certificado(args: argparse.Namespace) -> None:
+    cfg = load_config()
+    if not args.cert:
+        title("Tu certificado (homelab_tls: custom)")
+        if not TLS_CERT.exists():
+            die(f"No hay certificado propio en {TLS_CERT.relative_to(ROOT)}. Agrega uno con: "
+                "bin/andamio certificado <certificado> <llave>")
+        info = cert_info(TLS_CERT)
+        show_cert(info)
+        for p in cert_warnings(info, cfg.get("homelab_domain", "")):
+            warn(p)
+        if cfg.get("homelab_tls") != "custom":
+            warn(f"Tu configuración usa homelab_tls: {cfg.get('homelab_tls')}: este certificado no se está usando.")
+        return
+    if not args.key:
+        die("Falta la llave: bin/andamio certificado <certificado> <llave>")
+    if not shutil.which("openssl"):
+        die("Falta openssl: sudo apt install openssl  |  brew install openssl")
+
+    title("1. Revisar el certificado nuevo")
+    error = cert_problem(args.cert) or key_problem(local_path(args.cert), args.key)
+    if error:
+        die(error)
+    cert, key = local_path(args.cert), local_path(args.key)
+    info = cert_info(cert)
+    show_cert(info)
+    problems = cert_warnings(info, cfg.get("homelab_domain", ""))
+    for p in problems:
+        warn(p)
+    if problems and not ask_yes("¿Usarlo igual?", False):
+        die("Cancelado: no cambié nada.")
+
+    title("2. Guardarlo en tu configuración")
+    if cfg.get("homelab_tls") != "custom":
+        warn(f"Hoy usas homelab_tls: {cfg.get('homelab_tls')} (Let's Encrypt).")
+        if not ask_yes("¿Cambiar a tu certificado (homelab_tls: custom)?", False):
+            die("Cancelado: no cambié nada.")
+        set_config("homelab_tls", "custom")
+        ok("homelab_tls: custom")
+    install_cert(cert, key)
+
+    title("Listo. Para usarlo en el servidor")
+    note(f"""
+git add {TLS_CERT.relative_to(ROOT)} {TLS_KEY.relative_to(ROOT)} {CONFIG.relative_to(ROOT)}
+git commit -m "andamio: certificado nuevo (vence {info['expires']})" && git push
+ansible/hl aplicar homelab
+Traefik se reinicia solo para cargarlo (unos segundos sin servicio).""")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="andamio", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -756,6 +951,11 @@ def main() -> None:
     p_init.set_defaults(func=cmd_init)
     p_srv = sub.add_parser("servidor", aliases=["server"], help="prepara el VPS (parte 2; se puede repetir)")
     p_srv.set_defaults(func=cmd_servidor)
+    p_cert = sub.add_parser("certificado", aliases=["certificate"],
+                            help="tu propio certificado HTTPS: ver el actual o reemplazarlo")
+    p_cert.add_argument("cert", nargs="?", help="certificado PEM (con los intermedios de tu CA)")
+    p_cert.add_argument("key", nargs="?", help="su llave privada PEM")
+    p_cert.set_defaults(func=cmd_certificado)
     args = parser.parse_args()
     args.func(args)
 

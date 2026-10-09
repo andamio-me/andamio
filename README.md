@@ -161,10 +161,29 @@ All in `ansible/group_vars/all.yml`:
 
 | Setting | Values |
 |---|---|
-| `homelab_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider) or `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) |
+| `homelab_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider), `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) or `custom` (your own certificate, see below) |
 | `homelab_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma) |
 | `homelab_backups` | `false` (default) or `true` with a restic repository in `host/sops/restic-env.sops` |
 | `homelab_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
+
+### Your own certificate
+
+With a certificate from a commercial CA, or a Cloudflare Origin Certificate, choose
+`custom` in `andamio init`, or switch later:
+
+```bash
+bin/andamio certificado fullchain.pem private.key   # validates, then stores it (key encrypted with sops)
+bin/andamio certificado                             # shows the current one and its expiry
+```
+
+It checks that the key matches, that the certificate covers `yourdomain` and `*.yourdomain`,
+that it includes the intermediate chain, and how long it has left. Nobody renews it for
+you: Grafana alerts 20 days before any certificate expires (Let's Encrypt ones too, in
+case renewal breaks). Renewing is the same command with the new files.
+
+A Cloudflare Origin Certificate is only trusted through Cloudflare's proxy. Your VPN-only
+panels don't go through it, so browsers will reject it there. If your domain is already on
+Cloudflare, `cloudflare` mode is free, renews itself and works for both.
 
 ## Security model, honestly
 
@@ -204,7 +223,9 @@ gates (0021), and apps in any language (0022).
 
 ## Roadmap
 
-- [ ] End-to-end test of `andamio server` on fresh VPSes from several providers
+- [x] End-to-end test on a fresh VPS (Azure, 1 vCPU and 1 GB)
+- [ ] The same test on more providers (Hetzner, DigitalOcean, Oracle, AWS)
+- [ ] GitLab as well as GitHub (repos, image registry and pipeline)
 - [ ] CLI in English
 - [ ] Guided setup for backups and Telegram (`andamio backups`, `andamio telegram`)
 - [ ] Preview environments per pull request
