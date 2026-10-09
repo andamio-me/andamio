@@ -1098,8 +1098,12 @@ go on: the risk is low, but real."""))
         r = run(["ssh-keyscan", "-t", "ed25519", "-p", str(port), ip])
         lines = [x for x in r.stdout.splitlines() if x and not x.startswith("#")]
     if not lines:
-        die(L(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). ¿El VPS está encendido?",
-              f"No SSH answer at {ip} (neither on 22 nor on {port}). Is the VPS running?"))
+        die(L(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). Lo más probable: el firewall de tu "
+              f"proveedor (Azure, AWS, Oracle, Google Cloud...). Ábrele la entrada TCP 22 (la primera conexión) "
+              f"y {port} (tu SSH nuevo). Si ya están abiertos, revisa que el VPS esté encendido.",
+              f"No SSH answer at {ip} (neither on 22 nor on {port}). Most likely your provider's firewall "
+              f"(Azure, AWS, Oracle, Google Cloud...): allow inbound TCP 22 (the first connection) and {port} "
+              f"(your new SSH). If they're already open, check that the VPS is running."))
     host_key = " ".join(lines[0].split()[1:3])
     fp = run(["ssh-keygen", "-lf", "-"], input=f"{ip} {host_key}\n").stdout.split()[1]
     print(L(f"\n    Huella del servidor:  {fp}\n", f"\n    Server fingerprint:  {fp}\n"))
@@ -1160,23 +1164,55 @@ def step_bootstrap(cfg: dict, alias: str, pub: str) -> None:
              f"You already log in as {user} on port {port}: bootstrap done"))
         return
     ip = cfg["homelab_server_ip"]
-    note(L("""
-Con qué usuario te deja entrar tu proveedor: root en Hetzner, DigitalOcean, Vultr o
-Contabo; azureuser en Azure; ubuntu en AWS y Oracle (o el que elegiste al crear el VPS).""", """
-The user your provider lets you in with: root on Hetzner, DigitalOcean, Vultr or Contabo;
-azureuser on Azure; ubuntu on AWS and Oracle (or the one you chose when creating the VPS)."""))
-    initial = ask(L("Usuario que te dio el proveedor para entrar", "User your provider gave you to log in"),
-                  "root", check_user_initial)
+    # El usuario con el que cada proveedor deja entrar a un VPS nuevo.
+    provider = choose(L("¿Dónde está tu VPS?", "Where is your VPS?"), [
+        ("azure", "Azure (azureuser)"), ("aws", "AWS (ubuntu)"), ("oracle", "Oracle Cloud (ubuntu)"),
+        ("gcp", L("Google Cloud (tu usuario de Google)", "Google Cloud (your Google user)")),
+        ("hetzner", "Hetzner (root)"), ("digitalocean", "DigitalOcean (root)"),
+        ("other", L("otro (Vultr, Linode, Contabo...: root)", "other (Vultr, Linode, Contabo...: root)")),
+    ], "azure")
+    default_user = {"azure": "azureuser", "aws": "ubuntu", "oracle": "ubuntu"}.get(provider, "root")
+    note(L("(si al crear el VPS elegiste otro nombre de usuario, escríbelo)",
+           "(if you picked another user name when creating the VPS, type it)"))
+    initial = ask(L("Usuario con el que te deja entrar el proveedor", "User your provider lets you in with"),
+                  default_user, check_user_initial)
     target = ["-p", "22", f"{initial}@{ip}"]
     if not ssh_ok(target):
-        note(L(f"""
-Tu llave todavía no entra como {initial}: tu proveedor te dio una contraseña. La instalo
-con ssh-copy-id (escribes la contraseña UNA vez); desde ahí, solo llave.""", f"""
-Your key can't log in as {initial} yet: your provider gave you a password. Installing the
-key with ssh-copy-id (you type the password ONCE); keys only from then on."""))
-        if interactive(["ssh-copy-id", "-i", pub, *target]) != 0 or not ssh_ok(target):
-            die(L(f"No pude instalar tu llave en {initial}@{ip}. Revisa la contraseña o el usuario.",
-                  f"Couldn't install your key for {initial}@{ip}. Check the password or the user."))
+        how = choose(L(f"Tu llave todavía no entra como {initial}. ¿Cómo te dio acceso el proveedor?",
+                       f"Your key can't log in as {initial} yet. How did your provider give you access?"), [
+            ("pem", L("un archivo de llave (.pem): lo normal en Azure, AWS y Oracle",
+                      "a key file (.pem): the usual on Azure, AWS and Oracle")),
+            ("password", L("una contraseña", "a password")),
+        ], "pem" if provider in ("azure", "aws", "oracle") else "password")
+        if how == "pem":
+            note(L("En WSL, tu carpeta Descargas está en /mnt/c/Users/<tu usuario>/Downloads (o pega la ruta de Windows).",
+                   "In WSL, your Downloads folder is /mnt/c/Users/<your user>/Downloads (or paste the Windows path)."))
+            pem_src = local_path(ask(L("Ruta del archivo .pem", "Path to the .pem file"),
+                                     check=lambda v: None if local_path(v).is_file()
+                                     else L(f"No existe {local_path(v)}.", f"{local_path(v)} doesn't exist.")))
+            # ssh rechaza llaves con permisos abiertos (las de /mnt/c lo son): una copia 0600, temporal.
+            tmp = Path(tempfile.mkdtemp(prefix="andamio-pem-"))
+            pem = tmp / "key.pem"
+            try:
+                pem.write_bytes(pem_src.read_bytes())
+                pem.chmod(0o600)
+                if run(["ssh", "-i", str(pem), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+                        "-o", "ConnectTimeout=10", *target, "true"]).returncode != 0:
+                    die(L(f"Ese archivo no entra como {initial}@{ip}: ¿es la llave de este VPS y el usuario correcto?",
+                          f"That file can't log in as {initial}@{ip}: is it this VPS's key and the right user?"))
+                ok(L("El archivo .pem entra: con él instalo tu llave (y no se vuelve a usar)",
+                     "The .pem file gets in: installing your key with it (it isn't used again)"))
+                done = interactive(["ssh-copy-id", "-i", pub, "-o", f"IdentityFile={pem}", "-o", "IdentitiesOnly=yes",
+                                    *target]) == 0
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            note(L(f"Escribes la contraseña de {initial} UNA vez; desde ahí, solo llave.",
+                   f"You type {initial}'s password ONCE; keys only from then on."))
+            done = interactive(["ssh-copy-id", "-i", pub, *target]) == 0
+        if not done or not ssh_ok(target):
+            die(L(f"No pude instalar tu llave en {initial}@{ip}. Revisa el usuario y la llave o contraseña.",
+                  f"Couldn't install your key for {initial}@{ip}. Check the user and the key or password."))
     ok(L(f"Entras como {initial} con tu llave", f"You log in as {initial} with your key"))
     extra = ["-e", f"ansible_user={initial}", "-e", "ansible_port=22"]
     become_file: Path | None = None
