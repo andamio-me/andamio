@@ -23,7 +23,7 @@ DOMAIN=$(cfg andamio_domain)
 INSTANCE_REPO=$(cfg andamio_repo | sed -E 's#^[^:]+:##; s#\.git$##')
 # Plantilla para apps nuevas sin --repo (opcional: andamio_app_template en la config).
 # El servidor: alias SSH = primer host de ansible/inventory.yml (~/.ssh/config lo resuelve).
-SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["andamio"]["hosts"])))'   "$INFRA/ansible/inventory.yml")
+SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["servers"]["hosts"])))'   "$INFRA/ansible/inventory.yml")
 TEMPLATE=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("andamio_app_template") or "")' \
   "$INFRA/ansible/group_vars/all.yml")
 PROJECTS=$HOME/projects

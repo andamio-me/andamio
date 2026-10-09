@@ -3,7 +3,7 @@
 #   Aplicar:                 ansible-playbook site.yml -K
 #   Un solo rol:             ... --tags firewall
 - name: Servidor de andamio
-  hosts: andamio
+  hosts: servers
   become: true
   roles:
     - { role: base, tags: base }

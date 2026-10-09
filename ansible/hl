@@ -29,7 +29,7 @@ esac
 tags=(); [ -n "$rol" ] && tags=(--tags "$rol")
 
 user=$(python3 -c 'import yaml; print(yaml.safe_load(open("group_vars/all.yml"))["andamio_user"])')
-server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory.yml"))["all"]["children"]["andamio"]["hosts"])))')
+server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory.yml"))["all"]["children"]["servers"]["hosts"])))')
 # La contraseña se verifica contra el servidor antes de lanzar Ansible (3 intentos).
 # Si ya viene verificada (bin/andamio), no se vuelve a pedir.
 if [ -z "${ANSIBLE_BECOME_PASSWORD_FILE:-}" ]; then

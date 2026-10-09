@@ -1234,13 +1234,13 @@ def step_ssh_alias(cfg: dict) -> str:
     alias = DEFAULT_ALIAS
     if INVENTORY.exists():
         inv = yaml.safe_load(INVENTORY.read_text()) or {}
-        hosts = (((inv.get("all") or {}).get("children") or {}).get("andamio") or {}).get("hosts") or {}
+        hosts = (((inv.get("all") or {}).get("children") or {}).get("servers") or {}).get("hosts") or {}
         alias = next(iter(hosts), alias)
     else:
         INVENTORY.write_text(L(f'# Host, usuario, puerto y llave salen de ~/.ssh/config (alias "{alias}").\n',
                                f'# Host, user, port and key come from ~/.ssh/config (alias "{alias}").\n') + f"""all:
   children:
-    andamio:
+    servers:
       hosts:
         {alias}:
 """)
@@ -1557,7 +1557,7 @@ def server_alias() -> str:
     if not INVENTORY.exists():
         die(L("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.",
               "ansible/inventory.yml is missing: run `bin/andamio server` first."))
-    hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["andamio"]["hosts"]
+    hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["servers"]["hosts"]
     return next(iter(hosts))
 
 

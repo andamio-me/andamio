@@ -3,7 +3,7 @@
 # Crea el usuario de operación y mueve SSH a su puerto (group_vars/all.yml). La conexión se corta al final: es lo esperado.
 # Después todo va con site.yml (ver docs/runbooks/reconstruir-servidor.md).
 - name: Bootstrap de un VPS nuevo
-  hosts: andamio
+  hosts: servers
   gather_facts: false
   vars_prompt:
     - name: bootstrap_password

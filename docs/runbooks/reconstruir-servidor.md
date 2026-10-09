@@ -14,7 +14,7 @@ gestor de contraseñas). Todos los demás secretos salen del repo cifrado o de r
 ## 2. Bootstrap (crea andamio y mueve SSH al 2222)
 ~~~bash
 ansible-playbook bootstrap.yml -e ansible_user=root -e ansible_port=22
-ansible andamio -m ping      # ya por el 2222 como andamio
+ansible servers -m ping      # ya por el 2222 como andamio
 ~~~
 La última tarea corta la conexión: es lo esperado. La contraseña de sudo que pide
 es la nueva de andamio; guárdala en el gestor.

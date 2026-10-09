@@ -4,7 +4,7 @@
 # Idempotente. Se borra de andamio cuando los servidores existentes estén migrados.
 
 - name: Nombres viejos (homelab) a andamio
-  hosts: andamio
+  hosts: servers
   become: true
   tasks:
     - name: Servicios, archivos del sistema y carpetas con el nombre nuevo
@@ -59,7 +59,7 @@
   ansible.builtin.import_playbook: site.yml
 
 - name: Enlaces de los nombres viejos
-  hosts: andamio
+  hosts: servers
   become: true
   tasks:
     # Un contenedor que montó una ruta vieja y no se recreó la necesita al reiniciarse.
