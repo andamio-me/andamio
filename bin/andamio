@@ -1789,13 +1789,79 @@ ansible/hl apply homelab
 Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 
+def overview() -> None:
+    """`andamio`, `andamio help`: todos los comandos, en el orden en que se usan."""
+    b = lambda t: f"\033[1m{t}\033[0m"   # noqa: E731
+    d = lambda t: f"\033[2m{t}\033[0m"   # noqa: E731
+    print(L(f"""{b('andamio')}: tu VPS seguro y tus apps desplegadas, desde este repo.
+
+{b('Empezar')} {d('(una vez, en este orden)')}
+  init                         preguntas guiadas: configuración, llave de cifrado, secretos (solo local)
+  servidor                     prepara el VPS: usuario propio, SSH, firewall, VPN, Traefik, monitoreo
+  backups                      backups diarios cifrados fuera del servidor (B2 o S3), con prueba
+
+{b('Tus apps')}
+  app create <app> --repo <dueño/repo> --port <p> [--health /ruta] [--public] [--db] [--redis]
+  app secret set <app> <CLAVE> secreto de ejecución (el valor se pide oculto)
+  app secret list|rm <app> ...
+  app list                     todas, con su URL y estado
+  app logs <app>               logs en vivo
+  app rollback <app>           volver al deploy anterior
+  app destroy <app>            borrarla (respalda su base antes)
+
+{b('Día a día')}
+  estado                       chequeo de seguridad y salud, desde el servidor y desde Internet
+  update [--check]             trae mejoras y parches de andamio sin tocar lo tuyo
+  certificado [cert llave]     tu propio certificado HTTPS: ver o reemplazar
+  servidor                     también sirve para reaplicar todo (se puede repetir)
+
+{d('Detalle de un comando: andamio help <comando>     Idioma: ANDAMIO_LANG=es|en')}
+{d('Los nombres en inglés también funcionan: server, status, certificate.')}""",
+            f"""{b('andamio')}: your secure VPS and your deployed apps, from this repo.
+
+{b('Getting started')} {d('(once, in this order)')}
+  init                         guided questions: configuration, encryption key, secrets (local only)
+  server                       sets up the VPS: own user, SSH, firewall, VPN, Traefik, monitoring
+  backups                      daily encrypted off-server backups (B2 or S3), tested
+
+{b('Your apps')}
+  app create <app> --repo <owner/repo> --port <p> [--health /path] [--public] [--db] [--redis]
+  app secret set <app> <KEY>   runtime secret (the value is asked hidden)
+  app secret list|rm <app> ...
+  app list                     all of them, with URL and status
+  app logs <app>               live logs
+  app rollback <app>           back to the previous deploy
+  app destroy <app>            delete it (backs up its database first)
+
+{b('Day to day')}
+  status                       security and health check, from the server and from the internet
+  update [--check]             brings in andamio's improvements and patches, never touching yours
+  certificate [cert key]       your own HTTPS certificate: show or replace
+  server                       also re-applies everything (safe to repeat)
+
+{d('Details of a command: andamio help <command>     Language: ANDAMIO_LANG=en|es')}
+{d('Spanish names work too: servidor, estado, certificado.')}"""))
+
+
 def main() -> None:
+    args = sys.argv[1:]
+    if not args or args[0] in ("help", "ayuda", "-h", "--help"):
+        if len(args) < 2:
+            overview()
+            return
+        args = [args[1], "--help"]   # andamio help <comando>
     # `andamio app ...`: el mini-PaaS de apps vive en bin/homelab (bash); se le pasa tal cual.
-    if sys.argv[1:2] == ["app"]:
-        os.execv(str(ROOT / "bin" / "homelab"), [str(ROOT / "bin" / "homelab"), *sys.argv[1:]])
+    if args[0] == "app":
+        os.execv(str(ROOT / "bin" / "homelab"), [str(ROOT / "bin" / "homelab"), *args])
+    known = {"init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
+             "certificado", "certificate"}
+    if args[0] not in known:
+        die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
         "andamio: prepara tu configuración y tu VPS.", "andamio: sets up your configuration and your VPS."))
     sub = parser.add_subparsers(dest="cmd", required=True)
+    _add = sub.add_parser
+    sub.add_parser = lambda *a, **kw: _add(*a, description=kw.get("help"), **kw)  # type: ignore[method-assign]
     p_init = sub.add_parser("init", help=L("configuración guiada (parte 1, local)", "guided configuration (part 1, local)"))
     p_init.add_argument("--force", action="store_true",
                         help=L("completar una configuración existente", "fill in an existing configuration"))
@@ -1826,8 +1892,8 @@ def main() -> None:
                                                   "PEM certificate (with your CA's intermediates)"))
     p_cert.add_argument("key", nargs="?", help=L("su llave privada PEM", "its PEM private key"))
     p_cert.set_defaults(func=cmd_certificado)
-    args = parser.parse_args()
-    args.func(args)
+    ns = parser.parse_args(args)
+    ns.func(ns)
 
 
 if __name__ == "__main__":

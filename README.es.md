@@ -118,6 +118,8 @@ bin/andamio servidor
 Después importa `~/andamio-vpn/mi-pc.conf` en la app de WireGuard (o muéstralo como QR
 para el celular con `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 
+`bin/andamio help` muestra todos los comandos, en el orden en que se usan.
+
 ## Despliega tu primera app
 
 Tu app, en cualquier lenguaje, necesita un `Dockerfile`. Opcionalmente:
