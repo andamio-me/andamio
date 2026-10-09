@@ -167,6 +167,20 @@ All in `ansible/group_vars/all.yml`:
 | `homelab_backups` | `false` (default). `bin/andamio backups` turns it on: see below |
 | `homelab_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
 
+### Security check
+
+```bash
+bin/andamio status
+```
+
+Read-only. On the server: SSH (keys only, no root, your port), firewall, automatic security
+patches and pending reboots, disk, clock, last backup, certificates, unhealthy containers,
+isolation (privileged containers, the Docker socket, ports published past the firewall) and
+the VPN. **From the internet**, from your machine: whether any port answers that shouldn't
+(Docker can bypass UFW, so only an outside test tells the truth), that port 22 is closed,
+and the certificate and HTTP→HTTPS redirect as a visitor sees them. Every problem comes
+with its fix; exit code 1 if there are problems.
+
 ### Backups
 
 ```bash

@@ -5,6 +5,8 @@
                     (parte 1: solo en tu máquina; no toca ningún servidor)
   andamio servidor  prepara el VPS: acceso SSH verificado, usuario propio, endurecimiento,
                     VPN, llave del repo, registro de imágenes y los stacks (parte 2; se puede repetir)
+  andamio estado    chequeo de seguridad y salud: desde el servidor y desde Internet,
+                    con el arreglo de cada problema (no cambia nada)
   andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
                     configura, hace el primero y prueba que se puede restaurar
   andamio certificado [cert llave]
@@ -1179,6 +1181,112 @@ resultado; si no, revísalo de vez en cuando:  ssh {alias} systemctl status home
 Para reconstruir todo en otro servidor: docs/runbooks/reconstruir-servidor.md""")
 
 
+# ================= estado =================
+
+def port_open(ip: str, port: int, timeout: float = 3) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def tls_seen_from_internet(host: str) -> tuple[bool, str]:
+    """El certificado como lo ve un navegador: cadena válida, nombre correcto y vigencia."""
+    import ssl
+    from datetime import datetime, timezone
+    try:
+        with socket.create_connection((host, 443), timeout=8) as s:
+            with ssl.create_default_context().wrap_socket(s, server_hostname=host) as t:
+                cert = t.getpeercert()
+    except ssl.SSLCertVerificationError as e:
+        return False, f"un navegador lo rechaza: {e.verify_message}"
+    except OSError as e:
+        return False, f"no responde ({e})"
+    expires = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+    issuer = dict(x[0] for x in cert["issuer"]).get("organizationName", "?")
+    return True, f"válido para un navegador ({issuer}, {(expires - datetime.now(timezone.utc)).days} días)"
+
+
+def redirects_to_https(host: str) -> bool:
+    import http.client
+    try:
+        c = http.client.HTTPConnection(host, 80, timeout=8)
+        c.request("HEAD", "/")
+        r = c.getresponse()
+        return r.status in (301, 302, 307, 308) and (r.getheader("Location") or "").startswith("https://")
+    except OSError:
+        return False
+
+
+def cmd_estado(args: argparse.Namespace) -> None:
+    print("\033[1mandamio estado\033[0m: chequeo de seguridad y salud de tu servidor (no cambia nada).")
+    cfg = load_config()
+    alias = server_alias()
+    if not ssh_ok([alias]):
+        die(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.")
+    ip, ssh_port, domain = cfg["homelab_server_ip"], int(cfg["homelab_ssh_port"]), cfg["homelab_domain"]
+    backups = str(cfg.get("homelab_backups", False)).lower() == "true"
+
+    title("Desde el servidor")
+    script = f"SSH_PORT={ssh_port} BACKUPS={'true' if backups else 'false'}\n" + \
+        (ROOT / "scripts" / "security-check.sh").read_text()
+    try:
+        pw = sudo_password_file(cfg, alias).read_text()
+        # sudo lee la primera línea (la contraseña); bash, el resto (el script). Nada en argv.
+        r = run(["ssh", "-o", "BatchMode=yes", alias, "sudo -S -p '' bash -s"], input=pw + "\n" + script)
+    finally:
+        wipe_sudo()
+    results, listening = [], []
+    for line in r.stdout.splitlines():
+        parts = line.split("|")
+        if parts[0] == "LISTEN":
+            listening.append(int(parts[2]))
+        elif parts[0] in ("OK", "WARN", "FAIL"):
+            results.append((parts + ["", ""])[:4])
+    if not results:
+        die(f"El chequeo no corrió en el servidor: {r.stderr.strip()[-300:]}")
+
+    # Desde Internet: lo que de verdad ve cualquiera (Docker puede saltarse UFW). Con la VPN
+    # activa, tus conexiones entran por ella y el firewall las trata distinto: no valdrían.
+    seen_as = remote(alias, 'echo "${SSH_CLIENT%% *}"').stdout.strip()
+    if seen_as.startswith("10.8.0."):
+        warn("Tu PC está conectada a la VPN del servidor: las pruebas desde Internet no serían "
+             "reales. Desconéctala y vuelve a correr `andamio estado` para hacerlas.")
+        listening, ssh_port_probe = [], False
+    else:
+        ssh_port_probe = True
+    net = []
+    for port in sorted(set(listening) - {ssh_port, 80, 443}):
+        if port_open(ip, port):
+            net.append(["FAIL", "Internet", f"El puerto {port} responde desde Internet y andamio no lo usa",
+                        f"ciérralo: quita el servicio o su ports: en compose; ssh al servidor: sudo ss -tlnp 'sport = :{port}'"])
+        else:
+            net.append(["OK", "Internet", f"El puerto {port} escucha, pero el firewall lo bloquea desde Internet", ""])
+    if ssh_port != 22 and ssh_port_probe:
+        net.append(["FAIL", "Internet", "El puerto 22 responde desde Internet",
+                    "ciérralo en el firewall de tu proveedor (y revisa sudo ufw status)"]
+                   if port_open(ip, 22) else ["OK", "Internet", "El puerto 22 está cerrado (SSH solo en el tuyo)", ""])
+    host = f"whoami.{domain}"
+    good, msg = tls_seen_from_internet(host)
+    net.append(["OK", "Internet", f"HTTPS de {host}: {msg}", ""] if good else
+               ["FAIL", "Internet", f"HTTPS de {host}: {msg}", "revisa el DNS (A y *.dominio) y docker logs traefik"])
+    net.append(["OK", "Internet", "HTTP redirige a HTTPS", ""] if redirects_to_https(host) else
+               ["WARN", "Internet", "HTTP no redirige a HTTPS", "revisa stacks/proxy/traefik.yml (entryPoint web)"])
+
+    icon = {"OK": "\033[32m✓\033[0m", "WARN": "\033[33m!\033[0m", "FAIL": "\033[31m✗\033[0m"}
+    for i, (status, area, what, fix) in enumerate(results + net):
+        if i == len(results):
+            title("Desde Internet")
+        print(f"  {icon[status]} {area:<13} {what}")
+        if fix and status != "OK":
+            print(f"    \033[2m→ {fix}\033[0m")
+    every = [x[0] for x in results + net]
+    title(f"{every.count('OK')} bien · {every.count('WARN')} avisos · {every.count('FAIL')} problemas")
+    if "FAIL" in every:
+        sys.exit(1)
+
+
 def cmd_certificado(args: argparse.Namespace) -> None:
     cfg = load_config()
     if not args.cert:
@@ -1236,6 +1344,8 @@ def main() -> None:
     p_init.set_defaults(func=cmd_init)
     p_srv = sub.add_parser("servidor", aliases=["server"], help="prepara el VPS (parte 2; se puede repetir)")
     p_srv.set_defaults(func=cmd_servidor)
+    p_st = sub.add_parser("estado", aliases=["status"], help="chequeo de seguridad y salud del servidor")
+    p_st.set_defaults(func=cmd_estado)
     p_bk = sub.add_parser("backups", help="backups diarios cifrados fuera del servidor (B2 o S3), con prueba")
     p_bk.set_defaults(func=cmd_backups)
     p_cert = sub.add_parser("certificado", aliases=["certificate"],

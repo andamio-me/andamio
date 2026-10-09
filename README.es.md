@@ -172,6 +172,21 @@ Todo en `ansible/group_vars/all.yml`:
 | `homelab_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
 | `homelab_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
 
+### Chequeo de seguridad
+
+```bash
+bin/andamio estado
+```
+
+No cambia nada. En el servidor: SSH (solo llave, sin root, tu puerto), firewall, parches de
+seguridad automáticos y reinicios pendientes, disco, reloj, último backup, certificados,
+contenedores con problemas, aislamiento (contenedores privilegiados, el socket de Docker,
+puertos publicados saltándose el firewall) y la VPN. **Desde Internet**, desde tu máquina:
+si responde algún puerto que no debería (Docker puede saltarse UFW: solo una prueba desde
+afuera dice la verdad), que el 22 esté cerrado, y el certificado y la redirección
+HTTP→HTTPS como los ve un visitante. Cada problema trae su arreglo; código de salida 1 si
+hay problemas.
+
 ### Backups
 
 ```bash
