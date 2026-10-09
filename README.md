@@ -152,6 +152,23 @@ bin/andamio app destroy myapp   # gone for good: asks you to type its name, back
 A stopped app stays stopped when you re-apply the server, and a `git push` won't deploy it
 until you `start` it.
 
+### Backend only (frontend on Vercel or elsewhere)
+
+```bash
+bin/andamio app create api --repo <you>/backend --db --redis --public --host api \
+  --cors https://myapp.vercel.app --domain api.mycompany.com
+```
+
+- `--public`: browsers and Vercel's servers must reach it (without it, it's VPN-only).
+- PostgreSQL and Redis are the app's own and **never exposed to the internet**: only your
+  backend reaches them. Your frontend talks to the backend, not to the database.
+- `--cors`: Traefik answers CORS for exactly those origins (never `*`); other sites get no
+  `Access-Control-Allow-Origin`, so browsers block them. Repeat it for several origins.
+- `--domain`: your own domain on top of `api.yourdomain`, with its own Let's Encrypt
+  certificate (point its DNS A record to the server first). Repeatable.
+
+Later: `bin/andamio app cors add|rm|list api <origin>` and `bin/andamio app domain add|rm|list api <domain>`.
+
 ### Secrets
 
 Two kinds, two places:

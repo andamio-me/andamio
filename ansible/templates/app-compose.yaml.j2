@@ -3,6 +3,10 @@
 {% set apex = app.host == '@' -%}
 {# Dominio raíz (host "@"): sirve DOMAIN y www.DOMAIN; el router toma el nombre de la app. #}
 {% set router = app.name if apex else app.host -%}
+{# Middlewares del router: solo VPN (access: vpn) y CORS (cors: [orígenes]). #}
+{% set mws = (['vpn-only@file'] if app.access | default('vpn') == 'vpn' else [])
+             + ([router ~ '-cors@docker'] if app.cors | default([]) else []) -%}
+{% set domains = app.domains | default([]) -%}
 # {{ app.name }}: GENERADO desde app.yml por ansible/apps.yml. No editar a mano.
 # TAG (hash del commit) y los secretos vienen de .env (solo en el servidor).
 services:
@@ -26,10 +30,31 @@ services:
       - traefik.http.routers.{{ router }}.rule=Host(`{{ app.host }}.${DOMAIN}`)
 {% endif %}
       - traefik.http.routers.{{ router }}.entrypoints=websecure
-{% if app.access | default('vpn') == 'vpn' %}
-      - traefik.http.routers.{{ router }}.middlewares=vpn-only@file
+{% if mws %}
+      - traefik.http.routers.{{ router }}.middlewares={{ mws | join(',') }}
 {% endif %}
       - traefik.http.services.{{ router }}.loadbalancer.server.port={{ app.port }}
+{% if domains %}
+      # Dominios propios (domains: en app.yml): otro router, con su certificado de Let's
+      # Encrypt por HTTP-01 (el comodín del servidor no los cubre). Mismas protecciones.
+      - traefik.http.routers.{{ router }}.service={{ router }}
+      - traefik.http.routers.{{ router }}-own.rule={% for d in domains %}Host(`{{ d }}`){{ ' || ' if not loop.last }}{% endfor %}
+
+      - traefik.http.routers.{{ router }}-own.entrypoints=websecure
+      - traefik.http.routers.{{ router }}-own.tls.certresolver=le
+      - traefik.http.routers.{{ router }}-own.service={{ router }}
+{% if mws %}
+      - traefik.http.routers.{{ router }}-own.middlewares={{ mws | join(',') }}
+{% endif %}
+{% endif %}
+{% if app.cors | default([]) %}
+      # CORS (cors: en app.yml): solo estos orígenes pueden llamar a la app desde un navegador.
+      - traefik.http.middlewares.{{ router }}-cors.headers.accesscontrolalloworiginlist={{ app.cors | join(',') }}
+      - traefik.http.middlewares.{{ router }}-cors.headers.accesscontrolallowmethods=GET,POST,PUT,PATCH,DELETE,OPTIONS
+      - traefik.http.middlewares.{{ router }}-cors.headers.accesscontrolallowheaders=Authorization,Content-Type
+      - traefik.http.middlewares.{{ router }}-cors.headers.accesscontrolmaxage=600
+      - traefik.http.middlewares.{{ router }}-cors.headers.addvaryheader=true
+{% endif %}
 {% if app.health is defined %}
       # deploy-app.sh consulta esta ruta (HTTP, desde el host) antes de dar la versión por sana.
       - andamio.health={{ app.health }}

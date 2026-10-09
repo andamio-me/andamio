@@ -1947,6 +1947,8 @@ def overview() -> None:
 {b('Tus apps')}
   app create <app> --repo <dueño/repo> --port <p> [--health /ruta] [--public] [--db] [--redis]
   app secret set <app> <CLAVE> secreto de ejecución (el valor se pide oculto)
+  app domain|cors add <app> ...  dominio propio / frontend en otro lado (CORS)
+  app stop|start <app>         apagarla sin borrar nada / volver
   app secret list|rm <app> ...
   app list                     todas, con su URL y estado
   app logs <app>               logs en vivo
@@ -1971,6 +1973,8 @@ def overview() -> None:
 {b('Your apps')}
   app create <app> --repo <owner/repo> --port <p> [--health /path] [--public] [--db] [--redis]
   app secret set <app> <KEY>   runtime secret (the value is asked hidden)
+  app domain|cors add <app> ...  own domain / frontend hosted elsewhere (CORS)
+  app stop|start <app>         turn it off without deleting anything / back on
   app secret list|rm <app> ...
   app list                     all of them, with URL and status
   app logs <app>               live logs

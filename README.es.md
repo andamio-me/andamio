@@ -156,6 +156,24 @@ bin/andamio app destroy miapp   # borrarla del todo: pide escribir su nombre y r
 Una app detenida sigue detenida aunque vuelvas a aplicar el servidor, y un `git push` no la
 despliega hasta que hagas `start`.
 
+### Solo el backend (frontend en Vercel u otro lado)
+
+```bash
+bin/andamio app create api --repo <tú>/backend --db --redis --public --host api \
+  --cors https://miapp.vercel.app --domain api.suempresa.com
+```
+
+- `--public`: los navegadores y los servidores de Vercel tienen que poder llegar (sin él,
+  solo por la VPN).
+- PostgreSQL y Redis son propios de la app y **nunca se exponen a Internet**: solo tu backend
+  llega a ellos. Tu frontend habla con el backend, no con la base.
+- `--cors`: Traefik responde CORS solo para esos orígenes (nunca `*`); los demás sitios no
+  reciben `Access-Control-Allow-Origin` y el navegador los bloquea. Repítelo para varios.
+- `--domain`: un dominio propio además de `api.tudominio`, con su certificado de Let's
+  Encrypt (apunta antes su registro A al servidor). Se puede repetir.
+
+Después: `bin/andamio app cors add|rm|list api <origen>` y `bin/andamio app domain add|rm|list api <dominio>`.
+
 ### Secretos
 
 Dos tipos, dos lugares:

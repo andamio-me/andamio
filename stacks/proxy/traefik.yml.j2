@@ -56,9 +56,7 @@ providers:
     exposedByDefault: false   # solo se publica lo que tenga traefik.enable=true
     network: proxy
 
-{% if homelab_tls != 'custom' %}
 certificatesResolvers:
-{% endif %}
 {% if homelab_tls == 'cloudflare' %}
   # {{ homelab_domain }}: DNS-01 con un token de Cloudflare limitado a esa zona (CF_DNS_API_TOKEN,
   # cifrado en stacks/proxy/secrets.sops.env). Permite el comodín *.{{ homelab_domain }}.
@@ -73,15 +71,15 @@ certificatesResolvers:
 {% elif homelab_tls == 'http' %}
   # Let's Encrypt por HTTP-01: Traefik responde el desafío en el puerto 80 (por eso el
   # firewall lo deja abierto aunque todo redirija a HTTPS).
+{% else %}
+  # Con certificado propio, le solo atiende los dominios propios de las apps (domains:).
 {% endif %}
-{% if homelab_tls != 'custom' %}
   le:
     acme:
       email: {{ homelab_acme_email }}
       storage: /acme/acme.json
       httpChallenge:
         entryPoint: web
-{% endif %}
 
 metrics:
   prometheus:
