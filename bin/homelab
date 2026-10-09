@@ -121,8 +121,18 @@ EOF
   step "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)"
   "$INFRA/ansible/hl" aplicar homelab
 
+  # El ci.yml de la app usa app-build.yml de ESTE repo: si es privado, GitHub exige
+  # permitirlo explícitamente (Settings → Actions → Access) para tus otros repos.
+  if [ "$(gh repo view "$INSTANCE_REPO" --json visibility -q .visibility)" != PUBLIC ] \
+     && [ "$(gh api "repos/$INSTANCE_REPO/actions/permissions/access" -q .access_level)" = none ]; then
+    step "Permitir que tus repos usen el pipeline de $INSTANCE_REPO (Actions → Access)"
+    gh api -X PUT "repos/$INSTANCE_REPO/actions/permissions/access" -f access_level=user
+  fi
+
   if [ -n "$repo" ]; then
-    local sha; sha=$(git -C "$INFRA" rev-parse "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*')")
+    # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
+    local sha; sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
+      || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
     cat <<EOF
 
 ✓ $name registrada. Falta que $repo use el pipeline: agrega .github/workflows/ci.yml

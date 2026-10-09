@@ -4,7 +4,7 @@
   ansible.builtin.set_fact:
     homelab_monitoring_level: >-
       {{ homelab_monitoring if homelab_monitoring != 'auto'
-         else ('completo' if ansible_memtotal_mb >= 2900 else 'minimo') }}
+         else ('completo' if ansible_facts['memtotal_mb'] >= 2900 else 'minimo') }}
 
 - name: Stacks activos (Uptime Kuma solo en el nivel completo)
   ansible.builtin.set_fact:
@@ -98,7 +98,8 @@
     # Al final, lo no secreto que necesitan los stacks (group_vars/all.yml).
     content: "{{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item ~ '/secrets.sops.env',
       input_type='dotenv', output_type='dotenv') ~ '\nHOMELAB_HOSTNAME=' ~ homelab_hostname ~ '\n'
-      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and homelab_monitoring_level == 'completo' else '') }}"
+      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and homelab_monitoring_level == 'completo' else '')
+      ~ ('POSTGRES_CPUS=' ~ ([1.5, ansible_facts['processor_vcpus']] | min) ~ '\n' if item == 'stacks/data' else '') }}"
     dest: "{{ homelab_infra }}/{{ item }}/.env"
     owner: "{{ homelab_user }}"
     group: "{{ homelab_user }}"
@@ -340,6 +341,16 @@
     group: root
     mode: "0711"
 
+# La carpeta de la config dinámica puede no venir en el repo (git no guarda carpetas
+# vacías: su contenido se genera aquí).
+- name: Carpeta de la configuración dinámica de Traefik
+  ansible.builtin.file:
+    path: "{{ homelab_infra }}/stacks/proxy/dynamic"
+    state: directory
+    owner: "{{ homelab_user }}"
+    group: "{{ homelab_user }}"
+    mode: "0755"
+
 # Config de Traefik con el dominio, el email y la IP de este servidor. El estático se lee
 # al arrancar (cambio = reinicio); el dinámico se recarga solo.
 - name: Configuración de Traefik
@@ -383,12 +394,36 @@
 - name: Stacks levantados
   become: true
   become_user: "{{ homelab_user }}"
-  ansible.builtin.command: docker compose up -d
+  ansible.builtin.command: docker compose up -d --quiet-pull
   args:
     chdir: "{{ homelab_infra }}/{{ item }}"
   loop: "{{ homelab_stacks_active }}"
   register: homelab_up
   changed_when: homelab_up.stderr is search('Creat|Recreat|Start')
+
+# Traefik corre sin root (65532): en un volumen nuevo, /acme pertenece a root y no puede
+# guardar los certificados ("permission denied" -> el resolver se descarta y no hay HTTPS).
+- name: Ubicación del volumen de certificados de Traefik
+  ansible.builtin.command: docker volume inspect proxy_traefik_acme --format '{{ '{{' }} .Mountpoint {{ '}}' }}'
+  register: homelab_acme_volume
+  changed_when: false
+  check_mode: false
+
+- name: Volumen de certificados de Traefik, del usuario de Traefik
+  ansible.builtin.file:
+    path: "{{ homelab_acme_volume.stdout }}"
+    state: directory
+    owner: "65532"
+    group: "65532"
+    mode: "0700"
+  register: homelab_acme_perms
+
+- name: Reiniciar Traefik para que pida los certificados
+  become: true
+  become_user: "{{ homelab_user }}"
+  ansible.builtin.command: docker restart traefik
+  when: homelab_acme_perms.changed and not ansible_check_mode
+  changed_when: true
 
 # Seafile (stack propio, no de la plataforma): crea su seafile.conf en el primer
 # arranque; la cuota va después.

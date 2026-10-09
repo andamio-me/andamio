@@ -1,6 +1,6 @@
 # GENERADO por Ansible (rol homelab). Solo hashes SHA-256, nunca contraseñas.
 # Cada app: solo claves y canales "<app>:*", sin comandos de administración.
 user default on #{{ homelab_redis_default_hash }} ~* &* +@all
-{% for u in homelab_redis_users %}
+{% for u in homelab_redis_users | default([]) %}
 user {{ u.name }} on #{{ u.hash }} ~{{ u.name }}:* &{{ u.name }}:* +@all -@admin -@dangerous +info
 {% endfor %}

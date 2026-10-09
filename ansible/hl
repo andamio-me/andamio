@@ -19,7 +19,23 @@ esac
 tags=(); [ -n "$rol" ] && tags=(--tags "$rol")
 
 user=$(python3 -c 'import yaml; print(yaml.safe_load(open("group_vars/all.yml"))["homelab_user"])')
-echo "Contraseña de sudo de $user en el SERVIDOR. Log completo: /tmp/hl.log"
-ansible-playbook site.yml -K "${extra[@]}" "${tags[@]}" 2>&1 | tee /tmp/hl.log \
+server=$(python3 -c 'import yaml; print(next(iter(yaml.safe_load(open("inventory.yml"))["all"]["children"]["homelab"]["hosts"])))')
+# La contraseña se verifica contra el servidor antes de lanzar Ansible (3 intentos).
+# Si ya viene verificada (bin/andamio), no se vuelve a pedir.
+if [ -z "${ANSIBLE_BECOME_PASSWORD_FILE:-}" ]; then
+  pwfile=$(mktemp); trap 'rm -f "$pwfile"' EXIT
+  for i in 1 2 3; do
+    read -rsp "Contraseña de sudo de '$user' en el servidor ($server): " pw; echo
+    if printf '%s\n' "$pw" | ssh "$server" "sudo -S -p '' -v" 2> /dev/null; then
+      printf '%s' "$pw" > "$pwfile"; break
+    fi
+    [ "$i" = 3 ] && { echo "✗ Contraseña incorrecta 3 veces" >&2; exit 1; }
+    echo "✗ Incorrecta, intenta de nuevo"
+  done
+  unset pw
+  export ANSIBLE_BECOME_PASSWORD_FILE=$pwfile
+fi
+echo "Log completo: /tmp/hl.log"
+ansible-playbook site.yml "${extra[@]}" "${tags[@]}" 2>&1 | tee /tmp/hl.log \
   | grep --line-buffered -E "^(TASK|changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok=" \
   | grep --line-buffered -E -B1 "^(changed|fatal|failed)|PLAY RECAP|^[A-Za-z0-9._-]+ +: ok="

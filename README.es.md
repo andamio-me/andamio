@@ -102,6 +102,19 @@ git add -A && git commit -m "andamio: mi servidor" && git push
 bin/andamio servidor
 ```
 
+### Antes de `andamio servidor`: dos comprobaciones en tu proveedor
+
+1. **Su firewall.** Azure, AWS, Oracle y Google Cloud (y algunos Hetzner o DigitalOcean)
+   filtran el tráfico antes de que llegue a tu VPS. Abre la entrada **TCP**
+   `<tu puerto SSH>`, `80` y `443`, y **UDP** `51820`, y deja el `22` abierto hasta que
+   termine `andamio servidor`. Si no, al mover SSH a tu puerto quedas fuera.
+   `andamio init` te muestra los puertos exactos al final.
+2. **La huella del servidor.** `andamio servidor` te la muestra antes de la primera
+   conexión. Compruébala desde *dentro* del servidor por un camino que no sea la red: la
+   consola web de tu VPS (Hetzner, DigitalOcean, Vultr, Linode, Contabo), *Ejecutar
+   comando* en Azure o *Session Manager* en AWS. Corre ahí
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`: tiene que coincidir.
+
 Después importa `~/andamio-vpn/mi-pc.conf` en la app de WireGuard (o muéstralo como QR
 para el celular con `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 

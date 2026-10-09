@@ -98,6 +98,19 @@ git add -A && git commit -m "andamio: my server" && git push
 bin/andamio server
 ```
 
+### Before `andamio server`: two checks at your provider
+
+1. **Its firewall.** Azure, AWS, Oracle and Google Cloud (and some Hetzner or
+   DigitalOcean setups) filter traffic before it reaches your VPS. Allow inbound
+   **TCP** `<your SSH port>`, `80`, `443` and **UDP** `51820`, and keep `22` open until
+   `andamio server` finishes. Otherwise, when SSH moves to your port, you're locked out.
+   `andamio init` prints the exact ports at the end.
+2. **The server's fingerprint.** `andamio server` shows it before the first connection.
+   Check it from *inside* the server through a path that isn't the network: the web
+   console of your VPS (Hetzner, DigitalOcean, Vultr, Linode, Contabo), *Run command* in
+   Azure, or *Session Manager* in AWS. Run
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there; it must match.
+
 Then import `~/andamio-vpn/mi-pc.conf` into the WireGuard app (or show it as a QR code for
 your phone with `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 

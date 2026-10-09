@@ -1,5 +1,5 @@
 # GENERADO por Ansible desde apps/*/deploy_key.pub. No editar a mano.
 # Cada llave solo puede ejecutar el deploy de su app (comando forzado + restrict).
-{% for k in homelab_deploy_keys %}
+{% for k in homelab_deploy_keys | default([]) %}
 command="{{ homelab_infra }}/scripts/deploy-app.sh {{ k.app }}",restrict {{ k.key }}
 {% endfor %}
