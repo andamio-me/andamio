@@ -123,6 +123,53 @@ def ask(question: str, default: str | None = None, check=None, hint: str = "") -
         warn(error + (f" {hint}" if hint else ""))
 
 
+def choose(question: str, options: list[tuple[str, str]], default: str) -> str:
+    """Elegir entre opciones fijas con ↑/↓ y Enter. Sin terminal interactiva (pipes, pruebas),
+    vuelve a la pregunta escrita, con las mismas opciones."""
+    values = [v for v, _ in options]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return ask(f"{question} ({'/'.join(values)})", default,
+                   lambda v: None if v in values else L(f"Opciones: {', '.join(values)}.", f"Options: {', '.join(values)}."))
+    import termios
+    import tty
+    i, width = values.index(default), max(len(v) for v in values)
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+
+    def draw(first: bool) -> None:
+        if not first:
+            sys.stdout.write(f"\033[{len(options) + 1}A")
+        for n, (v, label) in enumerate(options):
+            mark = "\033[36m❯\033[0m" if n == i else " "
+            text = f"\033[1m{v:<{width}}\033[0m" if n == i else f"{v:<{width}}"
+            sys.stdout.write(f"\r\033[K    {mark} {text}  \033[2m{label}\033[0m\n")
+        sys.stdout.write("\r\033[K    \033[2m" + L("↑/↓ para moverte, Enter para elegir", "↑/↓ to move, Enter to choose") + "\033[0m\n")
+        sys.stdout.flush()
+    print(f"  {question}:")
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write("\033[?25l")   # sin cursor mientras se elige
+        draw(True)
+        while True:
+            key = os.read(fd, 3)
+            if key in (b"\r", b"\n"):
+                break
+            if key in (b"\x1b[A", b"k"):
+                i = (i - 1) % len(options)
+            elif key in (b"\x1b[B", b"j"):
+                i = (i + 1) % len(options)
+            elif key == b"\x03":
+                raise KeyboardInterrupt
+            draw(False)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\033[?25h")
+    # Deja una sola línea con lo elegido, como las demás preguntas.
+    sys.stdout.write(f"\033[{len(options) + 2}A\r\033[J  {question}: \033[36m{values[i]}\033[0m\n")
+    sys.stdout.flush()
+    return values[i]
+
+
 def ask_yes(question: str, default: bool) -> bool:
     yes, no = L("s", "y"), "n"
     answer = ask(question, yes if default else no,
@@ -647,7 +694,9 @@ andamio crea un usuario propio (root deja de poder entrar), SSH solo con llave y
 puerto distinto del 22 (menos ruido de bots que prueban contraseñas).""", """
 andamio creates your own user (root can no longer log in), SSH with keys only, on a port
 other than 22 (less noise from bots guessing passwords)."""))
-    a["user"] = ask(L("Usuario de operación", "Operator user"), "andamio", check_user)
+    a["user"] = ask(L("Nombre del usuario de Linux que andamio crea para ti en el servidor (entras con él)",
+                      "Name of the Linux user andamio creates for you on the server (you log in with it)"),
+                    "andamio", check_user)
     a["port"] = ask(L("Puerto SSH", "SSH port"), str(secrets.choice(range(20000, 30000))), check_port)
 
     name, host = forge_out("name"), forge_out("ssh-host")
@@ -681,9 +730,13 @@ cloudflare: a single wildcard certificate; names stay unpublished. Needs the dom
 custom: your own certificate (from a commercial CA, or a Cloudflare Origin Certificate).
   Nobody renews it for you: Grafana warns before it expires and you replace it with
   bin/andamio certificate."""))
-    a["tls"] = ask(L("Modo (http/cloudflare/custom)", "Mode (http/cloudflare/custom)"), "http",
-                   lambda v: None if v in ("http", "cloudflare", "custom")
-                   else L("http, cloudflare o custom.", "http, cloudflare or custom."))
+    a["tls"] = choose(L("Modo de HTTPS", "HTTPS mode"), [
+        ("http", L("Let's Encrypt, un certificado por app (recomendado para empezar)",
+                   "Let's Encrypt, one certificate per app (recommended to start)")),
+        ("cloudflare", L("Let's Encrypt comodín (necesita un token de Cloudflare)",
+                         "Let's Encrypt wildcard (needs a Cloudflare token)")),
+        ("custom", L("tu propio certificado (te pide los archivos)", "your own certificate (asks for the files)")),
+    ], "http")
     a["cf_token"] = (ask_secret(L("Token de Cloudflare (no se ve al escribir)", "Cloudflare token (hidden while typing)"),
                                 cloudflare_token_problem)
                      if a["tls"] == "cloudflare" else "")
@@ -704,9 +757,12 @@ Monitoring: "auto" picks by the VPS's RAM (completo with 3 GB or more: metrics, 
   Grafana with alerts and Uptime Kuma; minimo: metrics only, ~115 MiB).
 Backups: after setting up the server, with bin/andamio backups (B2 or S3, guided).
   Without backups, your data only lives on the VPS. Telegram alerts: turned on later."""))
-    a["monitoring"] = ask(L("Monitoreo (auto/minimo/completo)", "Monitoring (auto/minimo/completo)"), "auto",
-                          lambda v: None if v in ("auto", "minimo", "completo")
-                          else L("auto, minimo o completo.", "auto, minimo or completo."))
+    a["monitoring"] = choose(L("Monitoreo", "Monitoring"), [
+        ("auto", L("según la RAM del VPS (recomendado)", "depending on the VPS's RAM (recommended)")),
+        ("minimo", L("solo métricas, ~115 MiB", "metrics only, ~115 MiB")),
+        ("completo", L("métricas, logs, Grafana con alertas, Uptime Kuma (3 GB+)",
+                       "metrics, logs, Grafana with alerts, Uptime Kuma (3 GB+)")),
+    ], "auto")
     return a
 
 
@@ -823,9 +879,29 @@ La contraseña de Grafana (usuario admin):  sops decrypt stacks/monitoring/secre
 Grafana's password (user admin):  sops decrypt stacks/monitoring/secrets.sops.env"""))
 
 
+def in_public_template() -> bool:
+    """¿Este repo es un clon del andamio público (no tu copia privada)?"""
+    if UPSTREAM_DEFAULT.startswith("@"):
+        return False
+    origin = run(["git", "-C", str(ROOT), "remote", "get-url", "origin"]).stdout.strip()
+    upstream = re.sub(r"\.git$", "", UPSTREAM_DEFAULT.split("github.com/")[-1])
+    return bool(re.search(rf"[:/]{re.escape(upstream)}(\.git)?$", origin))
+
+
+def refuse_public_template() -> None:
+    """Tu configuración nunca va en el template público (lo verían todos)."""
+    if in_public_template():
+        die(L("Este es el andamio público (el template): tu configuración no va aquí, iría a un repo "
+              "que ve todo el mundo. Corre `bin/andamio setup`: crea tu copia privada y te dice a dónde ir.",
+              "This is the public andamio (the template): your configuration doesn't go here, it would "
+              "end up in a repo everyone sees. Run `bin/andamio setup`: it creates your private copy "
+              "and tells you where to go."))
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     print(L("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).",
             "\033[1mandamio init\033[0m: prepares your VPS's configuration (part 1, only on your machine)."))
+    refuse_public_template()
     if CONFIG.exists() and "homelab_server_ip:" in CONFIG.read_text() and not args.force:
         die(L(f"Ya hay una configuración en {CONFIG.relative_to(ROOT)}. No la sobreescribo (usa --force para "
               "completar lo que falte; lo existente se respeta igual).",
@@ -869,6 +945,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def load_config() -> dict:
     import yaml
+    refuse_public_template()
     if not CONFIG.exists():
         die(L("Falta la configuración: corre primero `andamio init`.", "No configuration yet: run `andamio init` first."))
     cfg = yaml.safe_load(CONFIG.read_text()) or {}
@@ -1538,8 +1615,11 @@ destination never sees your data. 7 daily, 4 weekly and 6 monthly are kept."""))
         ok(L(f"Ya configurado ({RESTIC_ENV.relative_to(ROOT)})", f"Already configured ({RESTIC_ENV.relative_to(ROOT)})"))
     else:
         title(L("1. ¿Dónde se guardan?", "1. Where are they stored?"))
-        kind = ask(L("Destino (b2/s3)", "Destination (b2/s3)"), "b2",
-                   lambda v: None if v in ("b2", "s3") else L("b2 o s3.", "b2 or s3."))
+        kind = choose(L("Destino", "Destination"), [
+            ("b2", L("Backblaze B2: 10 GB gratis; andamio crea una llave que no puede borrar",
+                     "Backblaze B2: 10 GB free; andamio creates a key that can't delete")),
+            ("s3", L("cualquier S3: AWS, Cloudflare R2, Wasabi, MinIO", "any S3: AWS, Cloudflare R2, Wasabi, MinIO")),
+        ], "b2")
         repo, env = ask_b2(cfg) if kind == "b2" else ask_s3(cfg)
 
         title(L("2. Contraseña del repositorio", "2. Repository password"))
