@@ -2340,4 +2340,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:   # Ctrl+C: sin traza de Python
+        sys.stdout.write("\033[?25h")   # por si se cortó dentro de un menú
+        print(L("\n\n✗ Cancelado. Lo que ya estaba hecho se queda; vuelve a correr el comando cuando quieras: retoma donde quedó.",
+                "\n\n✗ Cancelled. What was already done stays; run the command again whenever you want: it resumes where it stopped."),
+              file=sys.stderr)
+        sys.exit(130)
