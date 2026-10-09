@@ -85,6 +85,32 @@ TOOLS = {
 
 # ---------- salida ----------
 
+# "ANDAMIO" en bloques con sombra (estilo ANSI Shadow), en el azul de la marca.
+BANNER = r"""
+ █████╗ ███╗   ██╗██████╗  █████╗ ███╗   ███╗██╗ ██████╗
+██╔══██╗████╗  ██║██╔══██╗██╔══██╗████╗ ████║██║██╔═══██╗
+███████║██╔██╗ ██║██║  ██║███████║██╔████╔██║██║██║   ██║
+██╔══██║██║╚██╗██║██║  ██║██╔══██║██║╚██╔╝██║██║██║   ██║
+██║  ██║██║ ╚████║██████╔╝██║  ██║██║ ╚═╝ ██║██║╚██████╔╝
+╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝
+"""
+
+
+def banner() -> None:
+    """Solo en terminales (no en logs ni pipes) y con espacio; NO_COLOR: sin colores."""
+    if not sys.stdout.isatty() or shutil.get_terminal_size((80, 24)).columns < 60:
+        return
+    color = not os.environ.get("NO_COLOR")
+    truecolor = os.environ.get("COLORTERM", "") in ("truecolor", "24bit")
+    blue = ("\033[38;2;36;95;212m" if truecolor else "\033[38;5;26m") if color else ""
+    shadow = ("\033[38;2;120;150;210m" if truecolor else "\033[38;5;67m") if color else ""
+    reset = "\033[0m" if color else ""
+    for line in BANNER.strip("\n").splitlines():
+        out = "".join(f"{blue}{c}{reset}" if c == "█" else f"{shadow}{c}{reset}" if c != " " else c for c in line)
+        print("  " + out)
+    print("  " + (f"\033[2m" if color else "") + L("el PaaS de un solo VPS, seguro por defecto",
+                                                   "the single-VPS PaaS, secure by default") + reset + "\n")
+
 def title(t: str) -> None:
     print(f"\n\033[1m{t}\033[0m")
 
@@ -512,6 +538,7 @@ def install_sops() -> None:
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
+    banner()
     print(L("\033[1mandamio setup\033[0m: deja tu máquina lista para usar andamio (una vez). Pregunta antes de instalar.",
             "\033[1mandamio setup\033[0m: gets your machine ready for andamio (once). Asks before installing."))
     title(L("1. Qué falta", "1. What's missing"))
@@ -899,6 +926,7 @@ def refuse_public_template() -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
+    banner()
     print(L("\033[1mandamio init\033[0m: prepara la configuración de tu VPS (parte 1, solo en tu máquina).",
             "\033[1mandamio init\033[0m: prepares your VPS's configuration (part 1, only on your machine)."))
     refuse_public_template()
@@ -1479,6 +1507,7 @@ def step_platform(cfg: dict, alias: str) -> None:
 
 
 def cmd_servidor(args: argparse.Namespace) -> None:
+    banner()
     print(L("\033[1mandamio servidor\033[0m: prepara tu VPS (parte 2). Se puede volver a correr: retoma donde quedó.",
             "\033[1mandamio server\033[0m: sets up your VPS (part 2). Safe to run again: it resumes where it stopped."))
     check_tools()
@@ -2356,6 +2385,7 @@ Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 def overview() -> None:
     """`andamio`, `andamio help`: todos los comandos, en el orden en que se usan."""
+    banner()
     b = lambda t: f"\033[1m{t}\033[0m"   # noqa: E731
     d = lambda t: f"\033[2m{t}\033[0m"   # noqa: E731
     print(L(f"""{b('andamio')}: tu VPS seguro y tus apps desplegadas, desde este repo.
