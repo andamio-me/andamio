@@ -2511,7 +2511,8 @@ def overview() -> None:
                                {d('     otro dominio o más niveles (v2.api.tudominio): app domain add')}
   app list                     todas, con su URL y estado
   app logs <app>               logs en vivo
-  app secret set|rm|list <app> [CLAVE]      secretos de ejecución (el valor se pide oculto)
+  app secret set|rm|list <app> [CLAVE]      variables y secretos (el valor se pide oculto)
+                               {d('--later: guarda sin aplicar; después, una vez: app apply <app>')}
   app domain add|rm|list <app> [dominio]    un dominio propio además de <app>.tudominio
   app cors add|rm|list <app> [origen]       frontend en otro lado (Vercel...)
   app stop|start <app>         apagarla sin borrar nada / volver
@@ -2543,7 +2544,8 @@ def overview() -> None:
                                {d('     another domain or deeper (v2.api.yourdomain): app domain add')}
   app list                     all of them, with URL and status
   app logs <app>               live logs
-  app secret set|rm|list <app> [KEY]        runtime secrets (the value is asked hidden)
+  app secret set|rm|list <app> [KEY]        variables and secrets (the value is asked hidden)
+                               {d('--later: save without applying; then, once: app apply <app>')}
   app domain add|rm|list <app> [domain]     an own domain besides <app>.yourdomain
   app cors add|rm|list <app> [origin]       frontend hosted elsewhere (Vercel...)
   app stop|start <app>         turn it off without deleting anything / back on

@@ -46,9 +46,11 @@ usage() {
   L "  andamio app create <nombre> [--repo dueño/repo] [--port 3000] [--health /ruta]
                              [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
                              [--domain api.suempresa.com] [--cors https://miapp.vercel.app]
-  andamio app secret set <nombre> <CLAVE>    (el valor se pide oculto, o por un pipe)
+  andamio app secret set <nombre> <CLAVE> [--later]   (el valor se pide oculto, o por un pipe;
+                                             --later: guarda sin aplicar, para juntar varios)
   andamio app secret rm <nombre> <CLAVE>
   andamio app secret list <nombre>           (solo los nombres)
+  andamio app apply [<nombre>]               (aplica lo pendiente en el servidor: un reinicio)
   andamio app list
   andamio app stop|start <nombre>            (apagarla sin borrar nada / volver)
   andamio app domain add|rm|list <nombre> [api.suempresa.com]   (dominio propio, además del tuyo)
@@ -59,9 +61,11 @@ usage() {
 " "  andamio app create <name> [--repo owner/repo] [--port 3000] [--health /path]
                            [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
                            [--domain api.mycompany.com] [--cors https://myapp.vercel.app]
-  andamio app secret set <name> <KEY>        (the value is asked hidden, or read from a pipe)
+  andamio app secret set <name> <KEY> [--later]   (the value is asked hidden, or read from a pipe;
+                                             --later: save without applying, to batch several)
   andamio app secret rm <name> <KEY>
   andamio app secret list <name>             (names only)
+  andamio app apply [<name>]                 (applies what's pending on the server: one restart)
   andamio app list
   andamio app stop|start <name>              (turn it off without deleting anything / back on)
   andamio app domain add|rm|list <name> [api.mycompany.com]   (your own domain, besides the server's)
@@ -404,7 +408,8 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
 # El valor nunca va en la línea de comandos: se escribe oculto o llega por un pipe.
 RESERVED="DOMAIN DATABASE_URL REDIS_URL TAG"   # los pone andamio
 app_secret() {
-  local sub=${1:-} name=${2:-} key=${3:-}
+  local sub=${1:-} name=${2:-} key=${3:-} later=false
+  [ "${4:-}" = --later ] && later=true
   [ -n "$sub" ] && [ -n "$name" ] || usage
   valid_name "$name"
   local rel=apps/$name/secrets.sops.env
@@ -460,18 +465,36 @@ app_secret() {
   git -C "$INFRA" commit -qm "secret($name): $sub $key"
   git -C "$INFRA" push -q
 
-  step "$(L "Servidor: .env de $name y reinicio de la app (pide tu contraseña de sudo)" \
-            "Server: $name's .env and app restart (asks for your sudo password)")"
+  if [ "$later" = true ]; then
+    L "  Guardado, sin aplicar. Cuando termines con los cambios: andamio app apply $name" \
+      "  Saved, not applied. When you're done with your changes: andamio app apply $name"; echo
+    return 0
+  fi
+  app_apply "$name"
+}
+
+# Aplica en el servidor lo pendiente (secretos, dominios, CORS...): una contraseña, un reinicio.
+# Con <app>: si su último deploy falló (típico: le faltaba una variable), ofrece reintentarlo.
+app_apply() {
+  local name=${1:-} repo run ans
+  if [ -n "$name" ]; then
+    valid_name "$name"
+    [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+  fi
+  no_uncommitted
+  # El servidor baja la configuración del repo: lo que esté sin subir, se sube antes.
+  [ -z "$(git -C "$INFRA" log --oneline '@{u}..' 2> /dev/null)" ] || git -C "$INFRA" push -q
+  step "$(L "Servidor: aplicar los cambios${name:+ de $name} (pide tu contraseña de sudo)" \
+            "Server: apply the changes${name:+ to $name} (asks for your sudo password)")"
   "$INFRA/bin/andamio" _apply
 
-  # Si el último deploy falló (típico: le faltaba justo esta variable), ofrecer reintentarlo.
-  local repo run
+  [ -n "$name" ] || return 0
   repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$name/app.yml")
-  [ "$sub" = set ] && [ -n "$repo" ] || return 0
+  [ -n "$repo" ] || return 0
   run=$(forge ci-last-failed "$repo" 2> /dev/null || true)
   [ -n "$run" ] || return 0
-  read -rp "$(L "El último deploy de $name falló. ¿Lo reintento ahora, con $key? [S/n] " \
-                "$name's last deploy failed. Retry it now, with $key? [Y/n] ")" ans
+  read -rp "$(L "El último deploy de $name falló. ¿Lo reintento ahora, con los cambios? [S/n] " \
+                "$name's last deploy failed. Retry it now, with the changes? [Y/n] ")" ans
   [[ ${ans:-s} =~ ^[sSyY] ]] || return 0
   step "$(L "Reintentando el deploy" "Retrying the deploy")"
   forge ci-rerun "$repo" "$run" || { L "! Volvió a fallar (la causa, arriba)." "! It failed again (cause above)."; echo; }
@@ -592,6 +615,7 @@ case ${1:-} in
   rollback) shift; app_rollback "$@" ;;
   destroy) shift; app_destroy "$@" ;;
   secret) shift; app_secret "$@" ;;
+  apply | aplicar) shift; app_apply "$@" ;;
   stop|start) app_state "$@" ;;
   domain) shift; app_list_edit domains "$@" ;;
   cors) shift; app_list_edit cors "$@" ;;
