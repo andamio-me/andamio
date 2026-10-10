@@ -35,6 +35,10 @@ andamio_host_secrets:
 # `andamio app destroy` no borra. Vacío: ninguna.
 andamio_dashboard_app: ""
 
+# Alertas sin Grafana (scripts/alerts.sh): contenedor caído o disco casi lleno. Llegan por
+# Telegram (si está activado) y por ntfy si aquí hay una URL (la deja andamio alertas).
+andamio_alerts_ntfy: ""
+
 # Monitoreo: "minimo" (métricas, ~115 MiB), "completo" (+ logs, Grafana con alertas y
 # Uptime Kuma, ~670 MiB) o "auto": completo si el servidor tiene 3 GB o más.
 andamio_monitoring: auto

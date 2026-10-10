@@ -50,14 +50,31 @@ as the port. It's yours: change it as needed afterwards.
 ## What `app create` does
 
 1. Checks your app's repo and, if needed, generates the Dockerfile.
-2. Creates `apps/myapp/app.yml` in your copy, its encrypted secrets and a **deploy key**
+2. **Pre-check:** looks for what would make the first deploy fail or lose data (see below).
+3. Creates `apps/myapp/app.yml` in your copy, its encrypted secrets and a **deploy key**
    that can only deploy that app.
-3. If you asked for `--db` or `--redis`, prepares its user and database.
-4. Pushes your copy and applies it on the server (asks for your sudo password).
-5. Offers to push to your app's repo what it's missing: the Dockerfile and
+4. If you asked for `--db` or `--redis`, prepares its user and database.
+5. Pushes your copy and applies it on the server (asks for your sudo password).
+6. Offers to push to your app's repo what it's missing: the Dockerfile and
    `.github/workflows/andamio.yml`.
-6. That push is the **first deploy**, and it follows it in your terminal: secrets, tests,
+7. That push is the **first deploy**, and it follows it in your terminal: secrets, tests,
    scan, image and deploy. If it fails, it shows the step, its last log lines and a hint.
+
+## Pre-check
+
+Before registering anything, andamio reads your app's code and warns you, with the file and
+the line:
+
+| It finds | Why it matters |
+|---|---|
+| A committed `.env` | **Serious:** your secrets stay in git history. Remove it, rotate those keys and set them with `andamio app secret set` |
+| Listens on `localhost` | **Serious:** inside the container nobody else reaches it. Make it listen on `0.0.0.0` |
+| A fixed port different from the one that will be used | Read the port from `PORT`, or create the app with `--port` |
+| Stores files or a SQLite database | In a container they're lost on every deploy: use `--volume /data` or `--db` |
+
+If something is serious, it asks whether to go on anyway. What only runs on your machine (the
+`if __name__ == "__main__":` block when the container starts with uvicorn or gunicorn)
+doesn't count.
 
 ## Options
 
@@ -72,6 +89,7 @@ as the port. It's yours: change it as needed afterwards.
 | `--host api` | Another subdomain: `api.yourdomain.com`. `--host @` is the root domain |
 | `--domain app.yourcompany.com` | A domain of your own, besides yours |
 | `--cors https://myapp.vercel.app` | Lets that frontend call your app |
+| `--volume /data` | A folder that persists across deploys and is backed up. Repeatable. See [Manage an app](/en/docs/apps/manage/#persistent-folders) |
 | `--mem 512m` | Memory limit (default 256m) |
 
 See [Domains and URLs](/en/docs/apps/domains/) and [Backend only](/en/docs/apps/backend-only/).
@@ -89,4 +107,5 @@ with `andamio app apply myapp`.
 | `db`, `redis` | Its own PostgreSQL database and user, and its Redis user |
 | `migrate` | `{ command: "python manage.py migrate" }`: runs with your app's image before each deploy |
 | `worker` | `{ command: "..." }`: a second process with the same image |
+| `volumes` | `[/data]`: folders that persist across deploys |
 | `resources` | `mem`, `cpus` and `pids` limits |

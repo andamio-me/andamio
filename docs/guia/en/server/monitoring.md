@@ -24,6 +24,27 @@ andamio server
 Going down to `minimo` stops what's left over. Its data (logs, dashboards, monitors) stays:
 if you go back to `completo`, it returns with its history.
 
+## Phone alerts
+
+```bash
+andamio alerts
+```
+
+With any monitoring level, the minimal one too, andamio tells you if:
+
+- a container goes down, keeps restarting, or its health check fails, for over a minute (a
+  deploy doesn't trigger anything);
+- the disk goes over 85%.
+
+And another notice when it's resolved. Apps you stopped with `andamio app stop` don't count.
+
+Notices arrive through **ntfy**: a free app (Android, iOS or the browser) that receives
+notifications from a "topic" **without an account**. `andamio alerts` makes up a long random
+topic, tells you how to subscribe (with a QR code) and sends a test one from the server. If
+you prefer, use your own ntfy server. With Telegram on, they arrive there too.
+
+`andamio status` warns you if nobody is alerting you.
+
 ## Where to see it
 
 With the `completo` level, through the VPN:

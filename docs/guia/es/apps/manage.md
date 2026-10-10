@@ -49,14 +49,37 @@ Aplica en el servidor lo que esté pendiente de esa app (variables guardadas con
 cambios a mano en `app.yml`), con un solo reinicio. Corre solo las tareas de esa app: tarda
 segundos.
 
+## Carpetas persistentes
+
+Un contenedor nuevo arranca vacío en cada deploy: lo que tu app guarde en disco (subidas,
+una base SQLite) se pierde. Para lo que debe durar, una carpeta persistente:
+
+```bash
+andamio app volume add miapp /data       # o al crearla: --volume /data
+andamio app volume list miapp
+andamio app volume rm miapp /data        # deja de montarla; los archivos quedan en el servidor
+```
+
+- Vive en el servidor en `/srv/andamio/data/apps/miapp/`, y **entra al backup diario**.
+- andamio se la da al usuario con el que corre tu imagen: tu app puede escribir aunque corra
+  sin root.
+- La web y el worker de la app ven la misma carpeta.
+- `app destroy` la archiva (en `/srv/andamio/archive/`) antes de borrarla.
+
+:::tip
+Para datos con muchas escrituras o varios procesos a la vez, mejor `--db` (PostgreSQL): una
+base SQLite en una carpeta persistente funciona, pero el backup copia el archivo tal cual.
+:::
+
 ## Borrarla
 
 ```bash
 andamio app destroy miapp
 ```
 
-Te pide escribir su nombre para confirmar, y antes de borrar respalda su base. Quita su
-contenedor, su configuración, su llave de deploy, su base y su usuario de Redis.
+Te pide escribir su nombre para confirmar, y antes de borrar respalda su base y archiva sus
+carpetas persistentes. Quita su contenedor, su configuración, su llave de deploy, su base,
+su usuario de Redis y sus carpetas.
 
 El repo de la app y sus imágenes en GHCR quedan en GitHub: bórralos tú si ya no los quieres.
 

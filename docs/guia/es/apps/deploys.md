@@ -71,6 +71,21 @@ RUN rm -rf /usr/local/lib/node_modules/npm
 Si los hallazgos están en tus dependencias, actualízalas. Los Dockerfiles que genera
 andamio ya vienen así.
 
+## Poner al día el pipeline de tus apps
+
+El pipeline de cada app está fijado a una versión de andamio (un SHA en su
+`.github/workflows/andamio.yml`): así una actualización de andamio nunca cambia cómo se
+despliega una app sin aviso. Para traer las mejoras del pipeline (por ejemplo, las pistas de
+error) a tus apps ya creadas:
+
+```bash
+andamio app ci-update          # todas
+andamio app ci-update miapp    # una
+```
+
+Por defecto no despliega: las mejoras se usan en el próximo `git push` de cada app. Si
+respondes que sí, despliega cada una en el momento.
+
 ## Ver los logs
 
 ```bash

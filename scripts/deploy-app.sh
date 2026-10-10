@@ -148,6 +148,9 @@ for intento in 1 2 3; do
   sleep $((intento * 10))
 done
 
+# Carpetas persistentes (volumes: en app.yml): del usuario de la imagen nueva.
+"$INFRA/scripts/app-volumes.sh" "$APP" || fail "$(L "no pude preparar sus carpetas persistentes" "couldn't prepare its persistent folders")"
+
 if docker compose config --profiles | grep -qx migrate; then
   echo "==> Migraciones"
   docker compose run --rm migrate || fail "las migraciones fallaron"

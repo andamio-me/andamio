@@ -21,6 +21,8 @@ repo.
 | Keep the frontend on Vercel and the backend here | [Backend only](/en/docs/apps/backend-only/) |
 | Find out why a deploy failed | [When something fails](/en/docs/apps/failures/) |
 | Stop, roll back or delete an app | [Manage an app](/en/docs/apps/manage/) |
+| Keep files that last (uploads, SQLite) | [Persistent folders](/en/docs/apps/manage/#persistent-folders) |
+| Get notified if something goes down | [Phone alerts](/en/docs/server/monitoring/#phone-alerts) |
 | Check that my server is secure | [Security](/en/docs/server/security/) |
 | Back up my data off the server | [Backups](/en/docs/server/backups/) |
 | Get andamio's improvements | [Update](/en/docs/server/update/) |

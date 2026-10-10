@@ -23,3 +23,7 @@ trap 'rm -f "$tmp"' EXIT
 chmod 644 "$tmp"
 mv "$tmp" "$dir/containers.prom"   # atómico: node-exporter nunca lee un archivo a medias
 trap - EXIT
+
+# Alertas (contenedor caído, disco casi lleno): no dependen de Grafana. Si fallan, la métrica
+# de arriba ya quedó publicada.
+"$(dirname "$0")/alerts.sh" || true

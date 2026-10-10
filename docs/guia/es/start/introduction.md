@@ -21,6 +21,8 @@ repo.
 | Tener el frontend en Vercel y el backend aquí | [Solo el backend](/es/docs/apps/backend-only/) |
 | Saber por qué falló un deploy | [Cuando algo falla](/es/docs/apps/failures/) |
 | Apagar, volver atrás o borrar una app | [Administrar una app](/es/docs/apps/manage/) |
+| Guardar archivos que duren (subidas, SQLite) | [Carpetas persistentes](/es/docs/apps/manage/#carpetas-persistentes) |
+| Que me avise si algo se cae | [Alertas al celular](/es/docs/server/monitoring/#alertas-al-celular) |
 | Revisar que mi servidor esté seguro | [Seguridad](/es/docs/server/security/) |
 | Respaldar mis datos fuera del servidor | [Backups](/es/docs/server/backups/) |
 | Traer las mejoras de andamio | [Actualizar](/es/docs/server/update/) |

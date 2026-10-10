@@ -51,14 +51,30 @@ puerto. Es tuyo: después cámbialo lo que necesites.
 ## Qué hace `app create`
 
 1. Revisa el repo de tu app y, si hace falta, genera el Dockerfile.
-2. Crea `apps/miapp/app.yml` en tu copia, sus secretos cifrados y una **llave de deploy**
+2. **Revisión previa:** busca lo que haría fallar el primer deploy o perder datos (ver abajo).
+3. Crea `apps/miapp/app.yml` en tu copia, sus secretos cifrados y una **llave de deploy**
    que solo puede desplegar esa app.
-3. Si pediste `--db` o `--redis`, prepara su usuario y su base.
-4. Sube tu copia y la aplica en el servidor (te pide tu contraseña de sudo).
-5. Te ofrece subir al repo de tu app lo que le falta: el Dockerfile y
+4. Si pediste `--db` o `--redis`, prepara su usuario y su base.
+5. Sube tu copia y la aplica en el servidor (te pide tu contraseña de sudo).
+6. Te ofrece subir al repo de tu app lo que le falta: el Dockerfile y
    `.github/workflows/andamio.yml`.
-6. Ese push es el **primer deploy**, y lo sigue en tu terminal: secretos, tests, escaneo,
+7. Ese push es el **primer deploy**, y lo sigue en tu terminal: secretos, tests, escaneo,
    imagen y deploy. Si falla, te muestra el paso, sus últimas líneas de log y una pista.
+
+## Revisión previa
+
+Antes de registrar nada, andamio lee el código de tu app y te avisa, con el archivo y la
+línea:
+
+| Encuentra | Por qué importa |
+|---|---|
+| Un `.env` subido al repo | **Grave:** tus secretos quedan en el historial de git. Sácalo, cambia esas claves y ponlas con `andamio app secret set` |
+| Escucha en `localhost` | **Grave:** dentro del contenedor nadie más llega. Haz que escuche en `0.0.0.0` |
+| Un puerto fijo distinto del que se va a usar | Lee el puerto de `PORT`, o crea la app con `--port` |
+| Guarda archivos o una base SQLite | En un contenedor se pierden en cada deploy: usa `--volume /data` o `--db` |
+
+Si hay algo grave, te pregunta si seguir igual. Lo que solo corre en tu máquina (el bloque
+`if __name__ == "__main__":` cuando el contenedor arranca con uvicorn o gunicorn) no cuenta.
 
 ## Opciones
 
@@ -73,6 +89,7 @@ puerto. Es tuyo: después cámbialo lo que necesites.
 | `--host api` | Otro subdominio: `api.tudominio.com`. `--host @` es el dominio raíz |
 | `--domain app.suempresa.com` | Un dominio propio además del tuyo |
 | `--cors https://miapp.vercel.app` | Permite que ese frontend llame a tu app |
+| `--volume /data` | Una carpeta que persiste entre deploys y entra al backup. Se puede repetir. Ver [Administrar una app](/es/docs/apps/manage/#carpetas-persistentes) |
 | `--mem 512m` | Límite de memoria (por defecto 256m) |
 
 Ver [Dominios y URLs](/es/docs/apps/domains/) y [Solo el backend](/es/docs/apps/backend-only/).
@@ -90,4 +107,5 @@ La definición de tu app, en tu copia. La genera `app create`; puedes editarla y
 | `db`, `redis` | Su propia base y usuario de PostgreSQL, y su usuario de Redis |
 | `migrate` | `{ command: "python manage.py migrate" }`: corre con la imagen de tu app antes de cada deploy |
 | `worker` | `{ command: "..." }`: un segundo proceso con la misma imagen |
+| `volumes` | `[/data]`: carpetas que persisten entre deploys |
 | `resources` | Límites de `mem`, `cpus` y `pids` |

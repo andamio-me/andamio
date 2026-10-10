@@ -137,6 +137,18 @@ done < <(docker ps -q | xargs -r docker inspect --format \
 [ "$iso" = 0 ] && ok "$A_ISO" "$(L "Ningún contenedor privilegiado, con el socket de Docker o con puertos fuera de Traefik" \
                                    "No privileged containers, none with the Docker socket or ports outside Traefik")"
 
+# --- Alertas (scripts/alerts.sh: contenedor caído, disco casi lleno) ---
+A_AL=$(L Alertas Alerts)
+ntfy=$(sed -n 's/^ANDAMIO_NTFY_URL=//p' /etc/andamio/andamio.env 2> /dev/null)
+ch=""; [ -n "$ntfy" ] && ch=ntfy
+[ -r /etc/andamio/telegram.env ] && ch="${ch:+$ch + }Telegram"
+if [ -n "$ch" ]; then
+  ok "$A_AL" "$(L "Te avisan si algo se cae o el disco se llena ($ch)" "You're notified if something goes down or the disk fills up ($ch)")"
+else
+  warn "$A_AL" "$(L "Nadie te avisa si algo se cae o el disco se llena" "Nobody tells you if something goes down or the disk fills up")" \
+    "bin/andamio $(L alertas alerts)"
+fi
+
 # --- VPN ---
 if wg show wg0 > /dev/null 2>&1; then
   ok VPN "$(L "WireGuard activo ($(wg show wg0 peers | wc -l) dispositivos)" "WireGuard active ($(wg show wg0 peers | wc -l) devices)")"

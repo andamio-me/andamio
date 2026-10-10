@@ -14,6 +14,7 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 | `andamio init` | Preguntas guiadas: configuración, llave de cifrado y secretos. Solo local |
 | `andamio servidor` | Prepara el VPS: usuario, SSH, firewall, VPN y la plataforma. Se puede repetir |
 | `andamio backups` | Backups diarios, cifrados y fuera del servidor (B2 o S3), con prueba |
+| `andamio alertas` | Aviso al celular (ntfy, sin cuenta) si un contenedor se cae o el disco se llena |
 
 ## Tus apps
 
@@ -28,9 +29,11 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 | `andamio app apply [<app>]` | Aplica lo pendiente en el servidor; reintenta un deploy fallido |
 | `andamio app domain add\|rm\|list <app> [dominio]` | Un dominio propio, además del tuyo |
 | `andamio app cors add\|rm\|list <app> [origen]` | Frontend en otro lado (Vercel…) |
+| `andamio app volume add\|rm\|list <app> [/data]` | Carpeta que persiste entre deploys (entra al backup) |
 | `andamio app stop\|start <app>` | Apagarla sin borrar nada / volver |
 | `andamio app rollback <app>` | Volver al deploy anterior |
-| `andamio app destroy <app>` | Borrarla (respalda su base antes) |
+| `andamio app destroy <app>` | Borrarla (respalda su base y sus carpetas antes) |
+| `andamio app ci-update [<app>]` | El pipeline de tus apps, a la versión actual de andamio |
 
 ## Día a día
 

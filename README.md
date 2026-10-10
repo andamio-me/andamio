@@ -178,7 +178,11 @@ use `--domain` (or later `app domain add`).
 
 Useful flags: `--port` (default: the Dockerfile's `EXPOSE`), `--public` (reachable from the
 internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root domain),
-`--mem 512m`.
+`--mem 512m`, `--volume /data` (a folder that persists across deploys and is backed up).
+
+Before registering anything, `app create` checks your code: it warns about a committed
+`.env`, listening on `localhost`, a different fixed port or files that would be lost on
+every deploy.
 
 ```bash
 andamio app stop myapp      # off, without deleting anything (data, database, secrets, domain)
@@ -264,6 +268,7 @@ BuildKit mounts each one only for that `RUN`: it never ends up in an image layer
 | `db`, `redis` | Your own PostgreSQL database/user and Redis user |
 | `migrate` | `{ command: "python manage.py migrate" }` runs with your app image before each deploy |
 | `worker` | `{ command: "...", heartbeat: false }`: a second process from the same image |
+| `volumes` | `[/data]`: folders that persist across deploys (`app volume add`), backed up |
 | `resources` | `mem`, `cpus`, `pids` limits |
 
 ### When Trivy blocks your image
@@ -282,7 +287,7 @@ All in `ansible/group_vars/all.yml`:
 |---|---|
 | `andamio_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider), `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) or `custom` (your own certificate, see below) |
 | `andamio_forge` | `github` (default). Everything andamio needs from it goes through `bin/forge`; adding GitLab means implementing that one file plus its pipeline |
-| `andamio_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma). Going down to `minimo` stops what's left over; its data stays in case you go back |
+| `andamio_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma). Going down to `minimo` stops what's left over; its data stays in case you go back. At any level, `andamio alerts` notifies your phone (ntfy, no account) if a container goes down or the disk fills up |
 | `andamio_backups` | `false` (default). `andamio backups` turns it on: see below |
 | `andamio_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
 

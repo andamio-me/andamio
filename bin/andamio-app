@@ -45,7 +45,7 @@ step() { printf '\n==> %s\n' "$*"; }
 usage() {
   L "  andamio app create <nombre> [--repo dueño/repo] [--port 3000] [--health /ruta]
                              [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
-                             [--domain api.suempresa.com] [--cors https://miapp.vercel.app]
+                             [--domain api.suempresa.com] [--cors https://miapp.vercel.app] [--volume /data]
   andamio app secret set <nombre> <CLAVE> [--later]   (el valor se pide oculto, o por un pipe;
                                              --later: guarda sin aplicar, para juntar varios)
   andamio app secret rm <nombre> <CLAVE>
@@ -55,12 +55,14 @@ usage() {
   andamio app stop|start <nombre>            (apagarla sin borrar nada / volver)
   andamio app domain add|rm|list <nombre> [api.suempresa.com]   (dominio propio, además del tuyo)
   andamio app cors add|rm|list <nombre> [https://miapp.vercel.app]   (frontend en otro lado)
+  andamio app volume add|rm|list <nombre> [/data]   (carpeta que persiste entre deploys, con backup)
+  andamio app ci-update [<nombre>]           (el pipeline de tus apps, a la versión de andamio actual)
   andamio app logs <nombre>
   andamio app rollback <nombre>
   andamio app destroy <nombre>
 " "  andamio app create <name> [--repo owner/repo] [--port 3000] [--health /path]
                            [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
-                           [--domain api.mycompany.com] [--cors https://myapp.vercel.app]
+                           [--domain api.mycompany.com] [--cors https://myapp.vercel.app] [--volume /data]
   andamio app secret set <name> <KEY> [--later]   (the value is asked hidden, or read from a pipe;
                                              --later: save without applying, to batch several)
   andamio app secret rm <name> <KEY>
@@ -70,6 +72,8 @@ usage() {
   andamio app stop|start <name>              (turn it off without deleting anything / back on)
   andamio app domain add|rm|list <name> [api.mycompany.com]   (your own domain, besides the server's)
   andamio app cors add|rm|list <name> [https://myapp.vercel.app]   (frontend hosted elsewhere)
+  andamio app volume add|rm|list <name> [/data]   (folder that persists across deploys, backed up)
+  andamio app ci-update [<name>]             (your apps' pipeline, to the current andamio version)
   andamio app logs <name>
   andamio app rollback <name>
   andamio app destroy <name>
@@ -93,7 +97,7 @@ app_create() {
   [ -n "$name" ] || usage
   valid_name "$name"
   local access=vpn db=false redis=false host=$name mem=256m repo="" port=3000 port_set="" health=""
-  local domains=() origins=()
+  local domains=() origins=() volumes=()
   local missing; missing=$(L "falta el valor de" "missing value for")
   while [ $# -gt 0 ]; do
     case $1 in
@@ -107,6 +111,7 @@ app_create() {
       --health) health=${2:?$missing --health}; shift ;;
       --domain) domains+=("$(valid_domain "${2:?$missing --domain}")"); shift ;;
       --cors) origins+=("$(valid_origin "${2:?$missing --cors}")"); shift ;;
+      --volume) volumes+=("$(valid_volume "${2:?$missing --volume}")"); shift ;;
       *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
     esac
     shift
@@ -157,12 +162,21 @@ app_create() {
       p=$(grep -m1 -oiE '^EXPOSE +[0-9]+' "$work/repo/Dockerfile" | grep -oE '[0-9]+' || true)
     fi
     port=${p:-$port}
+    # Lo que haría fallar el primer deploy o perder datos, antes de registrar nada.
+    local pre=0
+    "$INFRA/bin/andamio" _precheck "$work/repo" "$port" "$([ ${#volumes[@]} -gt 0 ] && echo 1 || echo 0)" || pre=$?
+    [ "$pre" -le 2 ] || exit "$pre"
+    if [ "$pre" = 2 ]; then
+      confirm "$(L "Hay algo grave arriba. ¿Seguir igual? (mejor corrígelo, haz push y vuelve a correr)" \
+                   "There's something serious above. Go on anyway? (better fix it, push and run again)")"
+    fi
   fi
 
   echo "App:      $name"
   echo "Repo:     ${repo:-$OWNER/$name ($(L "nuevo, desde" "new, from") $TEMPLATE)}"
   echo "URL:      $(app_url "$host")  ($access)"
   echo "$(L Recursos Resources): PostgreSQL=$db Redis=$redis RAM=$mem  $(L puerto port)=$port${health:+  $(L salud health)=$health}"
+  [ ${#volumes[@]} -eq 0 ] || echo "$(L "Carpetas persistentes" "Persistent folders"): ${volumes[*]}"
   confirm "$(L "¿Crear?" "Create?")"
 
   if [ -z "$repo" ]; then
@@ -197,6 +211,7 @@ resources:
 EOF
   [ ${#domains[@]} -gt 0 ] && yaml_list "$dir/app.yml" domains "${domains[@]}"
   [ ${#origins[@]} -gt 0 ] && yaml_list "$dir/app.yml" cors "${origins[@]}"
+  [ ${#volumes[@]} -gt 0 ] && yaml_list "$dir/app.yml" volumes "${volumes[@]}"
   for d in "${domains[@]}"; do dns_check "$d"; done
 
   step "$(L "Secretos, llave de deploy y compose" "Secrets, deploy key and compose") (ansible/apps.yml)"
@@ -334,6 +349,16 @@ valid_origin() {
     || die "$(L "Origen inválido: $1 (ej. https://miapp.vercel.app, sin ruta)" "Invalid origin: $1 (e.g. https://myapp.vercel.app, no path)")"
   echo "$o"
 }
+# Una carpeta persistente: ruta absoluta dentro del contenedor, nunca una del sistema.
+valid_volume() {
+  local v=${1%/}
+  [[ $v =~ ^(/[A-Za-z0-9._-]+)+$ && $v != *..* ]] \
+    || die "$(L "Carpeta inválida: $1 (ruta absoluta dentro del contenedor, ej. /data o /app/uploads)" \
+               "Invalid folder: $1 (absolute path inside the container, e.g. /data or /app/uploads)")"
+  [[ $v =~ ^/(bin|boot|dev|etc|lib|lib64|proc|root|run|sbin|sys|usr|var/run)(/|$) ]] \
+    && die "$(L "$v es una carpeta del sistema: usa una propia (ej. /data)" "$v is a system folder: use your own (e.g. /data)")"
+  echo "$v"
+}
 # Avisa si el DNS del dominio no apunta a este servidor (Let's Encrypt fallaría).
 dns_check() {
   local ip; ip=$(cfg andamio_server_ip)
@@ -363,7 +388,7 @@ PY
 yaml_get() {  # yaml_get <app.yml> <clave>: un valor por línea
   python3 -c 'import sys, yaml; print("\n".join(yaml.safe_load(open(sys.argv[1])).get(sys.argv[2]) or []))' "$1" "$2"
 }
-app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
+app_list_edit() {  # app_list_edit <domains|cors|volumes> <add|rm|list> <app> [valor]
   local key=$1 sub=${2:-} name=${3:-} value=${4:-}
   [ -n "$sub" ] && [ -n "$name" ] || usage
   valid_name "$name"
@@ -375,7 +400,11 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
     return
   fi
   [[ $sub == add || $sub == rm ]] && [ -n "$value" ] || usage
-  if [ "$key" = domains ]; then value=$(valid_domain "$value"); else value=$(valid_origin "$value"); fi
+  case $key in
+    domains) value=$(valid_domain "$value") ;;
+    volumes) value=$(valid_volume "$value") ;;
+    *) value=$(valid_origin "$value") ;;
+  esac
   no_uncommitted
   local items=(); [ -n "$current" ] && mapfile -t items <<< "$current"
   if [ "$sub" = add ]; then
@@ -398,6 +427,12 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
   if [ "$key" = domains ] && [ "$sub" = add ]; then
     L "✓ https://$value → $name (su certificado de Let's Encrypt se pide en el primer acceso)" \
       "✓ https://$value → $name (its Let's Encrypt certificate is requested on first access)"
+  elif [ "$key" = volumes ] && [ "$sub" = add ]; then
+    L "✓ $value de $name persiste entre deploys y entra en el backup diario" \
+      "✓ $name's $value persists across deploys and is in the daily backup"
+  elif [ "$key" = volumes ]; then
+    L "✓ $name ya no monta $value. Sus archivos siguen en el servidor (los borra app destroy)" \
+      "✓ $name no longer mounts $value. Its files stay on the server (app destroy removes them)"
   else
     L "✓ $name: $key $sub $value" "✓ $name: $key $sub $value"
   fi
@@ -518,6 +553,45 @@ app_apply() {
   forge ci-rerun "$repo" "$run" || { L "! Volvió a fallar (la causa, arriba)." "! It failed again (cause above)."; echo; }
 }
 
+# El pipeline de cada app está fijado a una versión (SHA) de app-build.yml de esta copia: así
+# un cambio aquí no rompe apps sin aviso. Esto lo pone al día en el repo de cada app.
+app_ci_update() {
+  local name=${1:-} names=() n repo sha change tmp skip=" [skip ci]" ans
+  if [ -n "$name" ]; then
+    valid_name "$name"
+    [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+    names=("$name")
+  else
+    for n in "$INFRA"/apps/*/app.yml; do [ -f "$n" ] && names+=("$(basename "$(dirname "$n")")"); done
+  fi
+  [ ${#names[@]} -gt 0 ] || die "$(L "No hay apps" "No apps")"
+  # La versión que ya está en GitHub (la que el pipeline de las apps puede usar).
+  git -C "$INFRA" fetch -q origin main
+  sha=$(git -C "$INFRA" rev-parse origin/main)
+  L "Pipeline: $INSTANCE_REPO @ ${sha:0:8}" "Pipeline: $INSTANCE_REPO @ ${sha:0:8}"; echo
+  read -rp "$(L "¿Desplegar cada app ahora con el pipeline nuevo? Si no, lo usa en su próximo push [s/N] " \
+                "Deploy each app now with the new pipeline? Otherwise it's used on its next push [y/N] ")" ans
+  [[ $ans =~ ^[sSyY] ]] && skip=""
+  for n in "${names[@]}"; do
+    repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$n/app.yml")
+    repo=${repo:-$OWNER/$n}
+    tmp=$(mktemp -d)
+    if ! git clone -q --depth 1 "$(forge clone-url "$repo")" "$tmp/r" 2> /dev/null; then
+      L "  ! $n: no pude clonar $repo" "  ! $n: couldn't clone $repo"; echo; rm -rf "$tmp"; continue
+    fi
+    change=$(forge ci-repin "$tmp/r" "$INSTANCE_REPO" "$sha")
+    if [ -z "$change" ]; then
+      L "  ✓ $n: ya está al día" "  ✓ $n: already up to date"; echo
+    else
+      git -C "$tmp/r" add -A .github/workflows
+      git -C "$tmp/r" commit -qm "andamio: pipeline ${change%% *} -> ${sha:0:8}$skip"
+      git -C "$tmp/r" push -q
+      L "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (sin desplegar)}" "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (not deployed)}"; echo
+    fi
+    rm -rf "$tmp"
+  done
+}
+
 app_list() {
   printf '%-22s %-40s %-7s %s\n' APP URL "$(L ACCESO ACCESS)" "$(L ESTADO STATUS)"
   local status; status=$(ssh -n "$SERVER" "docker ps --format '{{.Names}} {{.Status}}'")
@@ -563,12 +637,14 @@ app_destroy() {
   - sus contenedores (web y worker) en el servidor
   - su base y su usuario de PostgreSQL (antes: respaldo en /srv/andamio/archive/, que entra en restic)
   - sus claves y su usuario de Redis
+  - sus carpetas persistentes (antes: archivadas en /srv/andamio/archive/)
   - apps/$name en este repo (revoca su llave de deploy y la quita del registro)
 No toca: el repo de la app, sus imágenes en el registro ni $PROJECTS/$name.
 " "This DESTROYS the app $name:
   - its containers (web and worker) on the server
   - its PostgreSQL database and user (first backed up to /srv/andamio/archive/, which restic includes)
   - its Redis keys and user
+  - its persistent folders (first archived to /srv/andamio/archive/)
   - apps/$name in this repo (revokes its deploy key and removes it from the registry)
 Left alone: the app's repo, its images in the registry and $PROJECTS/$name.
 "
@@ -605,6 +681,15 @@ if grep -q '^REDIS_URL=' .env 2>/dev/null; then
   n=$(docker exec redis sh -c "redis-cli --no-auth-warning --scan --pattern '$name:*' | xargs -r redis-cli --no-auth-warning DEL | awk '{s += \$1} END {print s + 0}'")
   L "Redis: $n claves borradas (el usuario se quita al aplicar andamio)" "Redis: $n keys deleted (the user is removed when andamio is applied)"
 fi
+data=/srv/andamio/data/apps/$name
+if [ -d "$data" ]; then
+  # Son del usuario de la imagen: archivar y borrar con root, en un contenedor de un instante.
+  install -d -m 700 /srv/andamio/archive
+  out=$name-$(L archivos files)-$(date +%Y%m%d-%H%M%S).tar.gz
+  docker run --rm -u 0 -v "$data:/d:ro" -v /srv/andamio/archive:/out --entrypoint tar postgres:18.6-alpine czf "/out/$out" -C /d .
+  docker run --rm -u 0 -v /srv/andamio/data/apps:/apps --entrypoint rm postgres:18.6-alpine -rf "/apps/$name"
+  L "Carpetas persistentes archivadas: /srv/andamio/archive/$out" "Persistent folders archived: /srv/andamio/archive/$out"
+fi
 rm -f .env
 REMOTE
 
@@ -637,5 +722,7 @@ case ${1:-} in
   stop|start) app_state "$@" ;;
   domain) shift; app_list_edit domains "$@" ;;
   cors) shift; app_list_edit cors "$@" ;;
+  volume | volumen) shift; app_list_edit volumes "$@" ;;
+  ci-update) shift; app_ci_update "$@" ;;
   *) usage ;;
 esac

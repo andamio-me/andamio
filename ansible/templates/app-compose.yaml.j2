@@ -7,6 +7,9 @@
 {% set mws = (['vpn-only@file'] if app.access | default('vpn') == 'vpn' else [])
              + ([router ~ '-cors@docker'] if app.cors | default([]) else []) -%}
 {% set domains = app.domains | default([]) -%}
+{# Carpetas persistentes (volumes: en app.yml): /srv/andamio/data/apps/<app>/<nombre>, dentro
+   del backup. scripts/app-volumes.sh las crea y se las da al usuario de la imagen. #}
+{% set volumes = app.volumes | default([]) -%}
 # {{ app.name }}: GENERADO desde app.yml por ansible/apps.yml. No editar a mano.
 # TAG (hash del commit) y los secretos vienen de .env (solo en el servidor).
 services:
@@ -16,6 +19,12 @@ services:
     env_file: .env
     environment:
       APP_VERSION: ${TAG}
+{% if volumes %}
+    volumes:
+{% for v in volumes %}
+      - /srv/andamio/data/apps/{{ app.name }}/{{ v.strip('/') | replace('/', '-') }}:{{ v }}
+{% endfor %}
+{% endif %}
     networks:
       - proxy
 {% for net in app.networks | default([]) %}
@@ -76,6 +85,12 @@ services:
     env_file: .env
     environment:
       APP_VERSION: ${TAG}
+{% if volumes %}
+    volumes:
+{% for v in volumes %}
+      - /srv/andamio/data/apps/{{ app.name }}/{{ v.strip('/') | replace('/', '-') }}:{{ v }}
+{% endfor %}
+{% endif %}
 {% if app.networks | default([]) %}
     networks: [{{ app.networks | join(', ') }}]
 {% endif %}

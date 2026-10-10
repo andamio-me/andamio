@@ -5,6 +5,7 @@
     andamio_monitoring_level: >-
       {{ andamio_monitoring if andamio_monitoring != 'auto'
          else ('completo' if ansible_facts['memtotal_mb'] >= 2900 else 'minimo') }}
+  tags: always   # andamio.env lo usa también con --tags secretos (andamio alertas)
 
 - name: Stacks activos (Uptime Kuma solo en el nivel completo)
   ansible.builtin.set_fact:
@@ -77,6 +78,24 @@
   loop:
     - { path: "{{ andamio_root }}", mode: "0750" }
     - { path: "{{ andamio_root }}/apps", mode: "0755" }
+
+# Datos en disco: de root (Seafile y los de cada app viven aquí); tu usuario solo la atraviesa
+# para llegar a data/apps, que sí es suya (scripts/app-volumes.sh crea ahí las carpetas).
+- name: Carpeta de datos
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+- name: Carpetas persistentes de las apps
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/apps"
+    state: directory
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
+    mode: "0750"
 
 - name: Repo de andamio al día
   ansible.builtin.include_tasks: repo.yml

@@ -10,8 +10,9 @@
                     con el arreglo de cada problema (no cambia nada)
   andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
                     configura, hace el primero y prueba que se puede restaurar
-  andamio app ...   tus apps: create, secret (set/rm/list), apply, list, logs, stop/start,
-                    rollback, destroy
+  andamio app ...   tus apps: create, secret (set/rm/list), apply, volume, list, logs,
+                    stop/start, rollback, destroy, ci-update
+  andamio alertas   aviso al celular (ntfy, sin cuenta) si un contenedor se cae o el disco se llena
   andamio update    trae las mejoras y parches de andamio (fusión de tres vías por
                     archivo) sin tocar tu configuración, tus apps ni tus secretos
   andamio certificado [cert llave]
@@ -41,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1930,6 +1932,88 @@ check it now and then:  ssh {alias} systemctl status andamio-backup
 To rebuild everything on another server: docs/runbooks/reconstruir-servidor.md"""))
 
 
+# ================= alertas =================
+
+def cmd_alertas(args: argparse.Namespace) -> None:
+    print(L("\033[1mandamio alertas\033[0m: que te avise al celular si un contenedor se cae o el disco se llena.",
+            "\033[1mandamio alerts\033[0m: get a phone notification if a container goes down or the disk fills up."))
+    cfg = load_config()
+    alias = server_alias()
+    current = str(cfg.get("andamio_alerts_ntfy") or "")
+    note(L("""
+Las manda ntfy: una app gratuita (Android, iOS o el navegador) que recibe notificaciones
+de un "tema" sin crear cuenta. andamio inventa un tema largo y aleatorio: quien no lo
+conozca no puede leerlo. Los avisos pasan por ntfy.sh; si prefieres, usa tu propio
+servidor ntfy. (Con Telegram activado, también llegan ahí.)""", """
+ntfy sends them: a free app (Android, iOS or the browser) that receives notifications from
+a "topic" without an account. andamio makes up a long random topic: whoever doesn't know it
+can't read it. Notices go through ntfy.sh; if you prefer, use your own ntfy server.
+(With Telegram on, they go there too.)"""))
+    options = [("ntfy.sh", L("tema nuevo en ntfy.sh, gratis y sin cuenta (recomendado)",
+                             "new topic on ntfy.sh, free and no account (recommended)")),
+               ("propio", L("mi propio servidor ntfy (te pido la URL del tema)", "my own ntfy server (asks for the topic URL)"))]
+    if current:
+        ok(L(f"Hoy: {current}", f"Now: {current}"))
+        options = [("probar", L("mandar una de prueba al tema actual", "send a test one to the current topic"))] + options + \
+                  [("quitar", L("dejar de usar ntfy", "stop using ntfy"))]
+    how = choose(L("¿Qué hago?", "What should I do?"), options, options[0][0])
+    url = current
+    if how == "ntfy.sh":
+        url = f"https://ntfy.sh/andamio-{secrets.token_hex(12)}"
+    elif how == "propio":
+        url = ask(L("URL del tema (ej. https://ntfy.tudominio.com/alertas)", "Topic URL (e.g. https://ntfy.yourdomain.com/alerts)"),
+                  check=lambda v: None if re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9_-]{1,64}", v)
+                  else L("Una URL https con el tema al final.", "An https URL with the topic at the end."))
+    elif how == "quitar":
+        url = ""
+    if url != current:
+        set_config("andamio_alerts_ntfy", url)
+        ok(f"andamio_alerts_ntfy: {url or L('(sin ntfy)', '(no ntfy)')}")
+        git = ["git", "-C", str(ROOT)]
+        if (run([*git, "add", str(CONFIG)]).returncode != 0
+                or run([*git, "commit", "-qm", f"andamio: alertas {'por ntfy' if url else 'sin ntfy'}"]).returncode != 0
+                or interactive([*git, "push", "-q"]) != 0):
+            die(L("No pude subir el cambio de configuración: súbelo a mano y vuelve a correr `andamio alertas`.",
+                  "Couldn't push the configuration change: push it by hand and run `andamio alerts` again."))
+        title(L("Servidor: aplicar (pide tu contraseña de sudo)", "Server: applying (asks for your sudo password)"))
+        try:
+            if ansible(["site.yml", "--tags", "secretos"], cfg, alias) != 0:
+                die(L("No se pudo aplicar (el detalle está arriba).", "Couldn't apply it (details above)."))
+        finally:
+            wipe_sudo()
+    if not url:
+        ok(L("Sin ntfy. Telegram, si está activado, sigue avisando.", "No ntfy. Telegram, if it's on, keeps notifying."))
+        return
+    if how != "probar":
+        topic = url.rsplit("/", 1)[-1]
+        title(L("Suscríbete en tu celular", "Subscribe on your phone"))
+        note(L(f"""
+1. Instala ntfy (Play Store, App Store o F-Droid), o abre {url} en el navegador.
+2. En la app: + (suscribirse a un tema) y escribe:  {topic}""" + ("" if url.startswith("https://ntfy.sh/") else
+               f"\n   (servidor: {url.rsplit('/', 1)[0]})"), f"""
+1. Install ntfy (Play Store, App Store or F-Droid), or open {url} in the browser.
+2. In the app: + (subscribe to a topic) and type:  {topic}""" + ("" if url.startswith("https://ntfy.sh/") else
+               f"\n   (server: {url.rsplit('/', 1)[0]})")))
+        if shutil.which("qrencode"):
+            run_qr = subprocess.run(["qrencode", "-t", "ansiutf8", url], check=False)
+            if run_qr.returncode == 0:
+                note(L("(o escanea el código con la cámara)", "(or scan the code with the camera)"))
+        ask(L("Cuando estés suscrito, presiona Enter para mandar una de prueba", "Once subscribed, press Enter to send a test one"),
+            "ok", check=lambda v: None)
+    # La prueba sale DESDE el servidor: así se comprueba también que llega a ntfy.
+    msg = L("Así se verán: un contenedor caído o el disco casi lleno. Todo bien por ahora.",
+            "This is how they'll look: a container down or the disk almost full. All good for now.")
+    title_q = urllib.parse.quote(L(f"✓ Prueba de alertas · {cfg['andamio_domain']}", f"✓ Alerts test · {cfg['andamio_domain']}"))
+    r = remote(alias, f"curl -fsS -m 15 --data-binary @- '{url}?title={title_q}' > /dev/null", stdin=msg)
+    if r.returncode != 0:
+        die(L(f"El servidor no pudo mandarla: {r.stderr.strip()}", f"The server couldn't send it: {r.stderr.strip()}"))
+    ok(L("Enviada desde el servidor. ¿Te llegó al celular?", "Sent from the server. Did it reach your phone?"))
+    note(L("Desde ahora: aviso si un contenedor se cae, se reinicia en bucle o queda enfermo más de un minuto, "
+           "si el disco pasa del 85 %, y otro cuando se resuelve.",
+           "From now on: a notice if a container goes down, crash-loops or stays unhealthy for over a minute, "
+           "if the disk goes over 85%, and another one when it's resolved."))
+
+
 # ================= app: Dockerfile para el repo de una app =================
 # Lo llama bin/andamio-app (andamio app create) con el repo de la app ya clonado.
 
@@ -2086,6 +2170,101 @@ def cmd_scaffold(args: argparse.Namespace) -> None:
     if not (d / ".dockerignore").exists():
         (d / ".dockerignore").write_text(DOCKERIGNORE[kind])
     out.write_text(f"status=generated\nport={port}\n")
+
+
+# ================= revisión previa =================
+
+SOURCE_EXT = {".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".jsx", ".tsx", ".go", ".rb", ".php"}
+SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", ".next", "venv", ".venv", "__pycache__", "test", "tests"}
+LOCALHOST = re.compile(
+    r"""(listen\s*\([^)]*['"](127\.0\.0\.1|localhost)['"]"""          # Node: listen(3000, "localhost")
+    r"""|host\s*=\s*['"](127\.0\.0\.1|localhost)['"]"""                # Python: host="127.0.0.1"
+    r"""|--host[= ](127\.0\.0\.1|localhost)\b"""                       # uvicorn/gunicorn en la línea de comandos
+    r"""|\bapp\.run\(\s*\)"""                                          # Flask: app.run() escucha en 127.0.0.1
+    r"""|ListenAndServe\(\s*"(127\.0\.0\.1|localhost):)""")            # Go
+FIXED_PORT = re.compile(r"""(?:listen\s*\(\s*|port\s*[=:]\s*|ListenAndServe\(\s*":)(\d{2,5})\b""", re.I)
+DISK = re.compile(
+    r"""(sqlite3?|better-sqlite3|\.sqlite\b|\.db['"]|provider\s*=\s*"sqlite"|multer\(|UPLOAD_FOLDER|MEDIA_ROOT"""
+    r"""|writeFile(Sync)?\(|open\([^)]*['"][wa]b?['"])""")
+
+
+def precheck_findings(d: Path, port: str, has_volume: bool) -> list[tuple[bool, str]]:
+    """(grave, mensaje) de lo que haría fallar o perder datos en un servidor."""
+    out: list[tuple[bool, str]] = []
+    tracked = run(["git", "-C", str(d), "ls-files"]).stdout.split()
+    envs = [f for f in tracked if re.fullmatch(r"(.*/)?\.env(\.(local|production|prod))?", f)]
+    if envs:
+        out.append((True, L(f"{', '.join(envs)} está subido al repo: tus secretos quedan en el historial de git. "
+                            f"Sácalo (git rm --cached {envs[0]}, y agrégalo a .gitignore), cambia esas claves y "
+                            "ponlas con andamio app secret set.",
+                            f"{', '.join(envs)} is committed to the repo: your secrets stay in git history. "
+                            f"Remove it (git rm --cached {envs[0]}, and add it to .gitignore), rotate those keys and "
+                            "set them with andamio app secret set.")))
+    local, ports, disk = [], set(), []
+    # El bloque `if __name__ == "__main__":` de Python solo corre si el contenedor arranca el
+    # archivo (python main.py), no con uvicorn/gunicorn/flask: entonces no cuenta.
+    dockerfile = d / "Dockerfile"
+    cmd = " ".join(re.findall(r"(?m)^\s*(?:CMD|ENTRYPOINT)\s+(.+)$", dockerfile.read_text(errors="ignore"))) \
+        if dockerfile.is_file() else ""
+    runs_py_file = bool(re.search(r"python[0-9.]*\W+[\w./-]+\.py", cmd))
+    files = [d / f for f in tracked if Path(f).suffix in SOURCE_EXT or Path(f).name in ("Dockerfile", "Procfile", "package.json")]
+    for f in files:
+        rel = str(f.relative_to(d))
+        if set(Path(rel).parts) & SKIP_DIRS or not f.is_file() or f.stat().st_size > 200_000:
+            continue
+        main_indent = None
+        for n, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
+            if line.lstrip().startswith(("#", "//")):
+                continue
+            if f.suffix == ".py":
+                indent = len(line) - len(line.lstrip())
+                if re.match(r"\s*if\s+__name__\s*==\s*['\"]__main__['\"]", line):
+                    main_indent = indent
+                    continue
+                if main_indent is not None and line.strip() and indent <= main_indent:
+                    main_indent = None
+                if main_indent is not None and not runs_py_file:
+                    continue   # solo corre en tu máquina
+            if LOCALHOST.search(line) and "0.0.0.0" not in line:
+                local.append(f"{rel}:{n}")
+            if (m := FIXED_PORT.search(line)) and "PORT" not in line:
+                ports.add((m.group(1), f"{rel}:{n}"))
+            if DISK.search(line):
+                disk.append(f"{rel}:{n}")
+    if local:
+        out.append((True, L(f"Escucha en localhost ({', '.join(local[:3])}): dentro del contenedor nadie más llega. "
+                            "Haz que escuche en 0.0.0.0.",
+                            f"Listens on localhost ({', '.join(local[:3])}): inside the container nobody else reaches it. "
+                            "Make it listen on 0.0.0.0.")))
+    other = sorted({p for p, _ in ports if p != port})
+    if other and port:
+        where = next(w for p, w in sorted(ports) if p == other[0])
+        out.append((False, L(f"Puerto fijo {other[0]} en el código ({where}), y andamio va a usar el {port}. "
+                             f"Lee el puerto de la variable PORT, o crea la app con --port {other[0]}.",
+                             f"Fixed port {other[0]} in the code ({where}), and andamio will use {port}. "
+                             f"Read the port from the PORT variable, or create the app with --port {other[0]}.")))
+    if disk and not has_volume:
+        out.append((False, L(f"Parece guardar archivos o una base SQLite ({', '.join(disk[:3])}). En un contenedor se "
+                             "pierden en cada deploy: usa --volume /data (y guarda ahí) o --db para PostgreSQL.",
+                             f"It seems to store files or a SQLite database ({', '.join(disk[:3])}). In a container they're "
+                             "lost on every deploy: use --volume /data (and store there) or --db for PostgreSQL.")))
+    return out
+
+
+def cmd_precheck(args: argparse.Namespace) -> None:
+    """Interno (andamio app create): revisa el repo clonado antes de registrar la app.
+    Sale con 2 si hay algo grave (andamio-app pregunta si seguir), 0 si no."""
+    findings = precheck_findings(Path(args.dir), args.port, args.volume == "1")
+    if not findings:
+        ok(L("Revisión previa: nada que corregir", "Pre-check: nothing to fix"))
+        return
+    title(L("Revisión previa: antes del primer deploy", "Pre-check: before the first deploy"))
+    for serious, msg in findings:
+        if serious:
+            warn(msg)
+        else:
+            note(L("Aviso: ", "Note: ") + msg)
+    sys.exit(2 if any(s for s, _ in findings) else 0)
 
 
 # ================= update =================
@@ -2608,6 +2787,7 @@ def overview() -> None:
   init                         preguntas guiadas: configuración, llave de cifrado, secretos (solo local)
   servidor                     prepara el VPS: usuario propio, SSH, firewall, VPN, Traefik, monitoreo
   backups                      backups diarios cifrados fuera del servidor (B2 o S3), con prueba
+  alertas                      aviso al celular si algo se cae o el disco se llena (ntfy, sin cuenta)
 
 {b('Tus apps')} {d('(cada una queda en https://<app>.tudominio)')}
   app create <app> --repo <dueño/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /ruta]
@@ -2621,9 +2801,11 @@ def overview() -> None:
   app apply [<app>]            aplica lo pendiente en el servidor (y reintenta un deploy fallido)
   app domain add|rm|list <app> [dominio]    un dominio propio además de <app>.tudominio
   app cors add|rm|list <app> [origen]       frontend en otro lado (Vercel...)
+  app volume add|rm|list <app> [/data]      carpeta que persiste entre deploys (entra al backup)
   app stop|start <app>         apagarla sin borrar nada / volver
   app rollback <app>           volver al deploy anterior
-  app destroy <app>            borrarla (respalda su base antes)
+  app destroy <app>            borrarla (respalda su base y sus carpetas antes)
+  app ci-update [<app>]        el pipeline de tus apps, a la versión actual de andamio
 
 {b('Día a día')}
   estado                       chequeo de seguridad y salud, desde el servidor y desde Internet
@@ -2643,6 +2825,7 @@ def overview() -> None:
   init                         guided questions: configuration, encryption key, secrets (local only)
   server                       sets up the VPS: own user, SSH, firewall, VPN, Traefik, monitoring
   backups                      daily encrypted off-server backups (B2 or S3), tested
+  alerts                       phone notice if something goes down or the disk fills up (ntfy, no account)
 
 {b('Your apps')} {d('(each one lives at https://<app>.yourdomain)')}
   app create <app> --repo <owner/repo> [--public] [--db] [--redis] [--host <sub>|@] [--health /path]
@@ -2656,9 +2839,11 @@ def overview() -> None:
   app apply [<app>]            applies what's pending on the server (and retries a failed deploy)
   app domain add|rm|list <app> [domain]     an own domain besides <app>.yourdomain
   app cors add|rm|list <app> [origin]       frontend hosted elsewhere (Vercel...)
+  app volume add|rm|list <app> [/data]      folder that persists across deploys (backed up)
   app stop|start <app>         turn it off without deleting anything / back on
   app rollback <app>           back to the previous deploy
-  app destroy <app>            delete it (backs up its database first)
+  app destroy <app>            delete it (backs up its database and folders first)
+  app ci-update [<app>]        your apps' pipeline, to the current andamio version
 
 {b('Day to day')}
   status                       security and health check, from the server and from the internet
@@ -2688,6 +2873,9 @@ def main() -> None:
     if args[0] == "_scaffold":   # interno (andamio app create): _scaffold <dir> <puerto|""> <salida>
         cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
         return
+    if args[0] == "_precheck":   # interno (andamio app create): _precheck <dir> <puerto> <hay --volume: 0|1>
+        cmd_precheck(argparse.Namespace(dir=args[1], port=args[2], volume=args[3]))
+        return
     if args[0] == "_apply":      # interno (andamio app ...): aplica la plataforma en el servidor
         # Con una app: solo esa (segundos); sin ella, la plataforma entera.
         app = args[1] if len(args) > 1 else ""
@@ -2701,7 +2889,7 @@ def main() -> None:
             wipe_sudo()
         sys.exit(rc)
     known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
-             "certificado", "certificate", "use", "usar", "olvidar", "forget"}
+             "certificado", "certificate", "use", "usar", "olvidar", "forget", "alertas", "alerts"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
@@ -2748,6 +2936,10 @@ def main() -> None:
     p_use.add_argument("copia", nargs="?", metavar=L("carpeta|dominio", "folder|domain"),
                        help=L("la copia a usar; sin nada, la lista", "the copy to use; with nothing, the list"))
     p_use.set_defaults(func=cmd_use)
+    p_al = sub.add_parser("alertas", aliases=["alerts"],
+                          help=L("aviso al celular si un contenedor se cae o el disco se llena (ntfy, sin cuenta)",
+                                 "phone notice if a container goes down or the disk fills up (ntfy, no account)"))
+    p_al.set_defaults(func=cmd_alertas)
     p_forget = sub.add_parser("olvidar", aliases=["forget"],
                               help=L("borra ya la contraseña de sudo recordada", "wipes the remembered sudo password now"))
     p_forget.set_defaults(func=lambda _: (forget_sudo(), ok(L("Contraseña de sudo olvidada.", "Sudo password forgotten."))))

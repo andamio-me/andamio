@@ -183,7 +183,10 @@ otro lado. Para un dominio fuera del de tu servidor (`api.suempresa.com`) o un n
 
 Opciones útiles: `--port` (por defecto, el `EXPOSE` del Dockerfile), `--public` (accesible
 desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (dominio raíz),
-`--mem 512m`.
+`--mem 512m`, `--volume /data` (una carpeta que persiste entre deploys y entra al backup).
+
+Antes de registrar nada, `app create` revisa tu código: avisa si hay un `.env` subido, si
+escucha en `localhost`, un puerto fijo distinto o archivos que se perderían en cada deploy.
 
 ```bash
 andamio app stop miapp      # apagarla sin borrar nada (datos, base, secretos, dominio)
@@ -271,6 +274,7 @@ BuildKit monta cada uno solo durante ese `RUN`: nunca queda en una capa de la im
 | `db`, `redis` | Tu propia base y usuario de PostgreSQL, y tu usuario de Redis |
 | `migrate` | `{ command: "python manage.py migrate" }` corre con la imagen de tu app antes de cada deploy |
 | `worker` | `{ command: "...", heartbeat: false }`: un segundo proceso con la misma imagen |
+| `volumes` | `[/data]`: carpetas que persisten entre deploys (`app volume add`), en el backup |
 | `resources` | Límites de `mem`, `cpus` y `pids` |
 
 ### Si Trivy frena tu imagen
@@ -289,7 +293,7 @@ Todo en `ansible/group_vars/all.yml`:
 |---|---|
 | `andamio_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
 | `andamio_forge` | `github` (por defecto). Todo lo que andamio necesita de ella pasa por `bin/forge`; agregar GitLab es implementar ese archivo y su pipeline |
-| `andamio_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma). Bajar a `minimo` apaga lo que sobra; sus datos quedan por si vuelves |
+| `andamio_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma). Bajar a `minimo` apaga lo que sobra; sus datos quedan por si vuelves. En cualquier nivel, `andamio alertas` te avisa al celular (ntfy, sin cuenta) si un contenedor se cae o el disco se llena |
 | `andamio_backups` | `false` (por defecto). Lo activa `andamio backups`: ver abajo |
 | `andamio_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
 

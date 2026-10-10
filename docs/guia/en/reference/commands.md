@@ -14,6 +14,7 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 | `andamio init` | Guided questions: configuration, encryption key and secrets. Local only |
 | `andamio server` | Sets up the VPS: user, SSH, firewall, VPN and the platform. Safe to repeat |
 | `andamio backups` | Daily, encrypted, off-server backups (B2 or S3), tested |
+| `andamio alerts` | Phone notice (ntfy, no account) if a container goes down or the disk fills up |
 
 ## Your apps
 
@@ -28,9 +29,11 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 | `andamio app apply [<app>]` | Applies what's pending on the server; retries a failed deploy |
 | `andamio app domain add\|rm\|list <app> [domain]` | A domain of your own, besides yours |
 | `andamio app cors add\|rm\|list <app> [origin]` | Frontend hosted elsewhere (Vercel…) |
+| `andamio app volume add\|rm\|list <app> [/data]` | Folder that persists across deploys (backed up) |
 | `andamio app stop\|start <app>` | Turn it off without deleting anything / back on |
 | `andamio app rollback <app>` | Back to the previous deploy |
-| `andamio app destroy <app>` | Delete it (backs up its database first) |
+| `andamio app destroy <app>` | Delete it (backs up its database and folders first) |
+| `andamio app ci-update [<app>]` | Your apps' pipeline, to the current andamio version |
 
 ## Day to day
 

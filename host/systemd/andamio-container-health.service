@@ -1,11 +1,11 @@
 [Unit]
-Description=Salud de contenedores para node-exporter (textfile)
+Description=Salud de contenedores (métrica para node-exporter) y alertas
 After=docker.service
 
 [Service]
 Type=oneshot
 ExecStart=/srv/andamio/infra/scripts/container-health.sh
-StateDirectory=node_exporter/textfile
+StateDirectory=node_exporter/textfile andamio-alerts
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

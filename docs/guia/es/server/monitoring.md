@@ -24,6 +24,28 @@ andamio servidor
 Bajar a `minimo` apaga lo que sobra. Sus datos (logs, paneles, monitores) quedan: si vuelves
 a `completo`, regresan con su historial.
 
+## Alertas al celular
+
+```bash
+andamio alertas
+```
+
+Con cualquier nivel de monitoreo, también el mínimo, andamio te avisa si:
+
+- un contenedor se cae, se reinicia una y otra vez, o su chequeo de salud falla, por más de
+  un minuto (un deploy no dispara nada);
+- el disco pasa del 85 %.
+
+Y otro aviso cuando se resuelve. Las apps que detuviste con `andamio app stop` no cuentan.
+
+Los avisos llegan por **ntfy**: una app gratuita (Android, iOS o el navegador) que recibe
+notificaciones de un "tema" **sin crear cuenta**. `andamio alertas` inventa un tema largo y
+aleatorio, te dice cómo suscribirte (con un código QR) y manda una de prueba desde el
+servidor. Si prefieres, usa tu propio servidor ntfy. Con Telegram activado, llegan también
+ahí.
+
+`andamio estado` te avisa si nadie te está alertando.
+
 ## Dónde verlo
 
 Con el nivel `completo`, por la VPN:

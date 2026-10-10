@@ -89,6 +89,15 @@
 # --- Arranque ---
 # Una app que nunca se desplegó no tiene TAG: la levanta su primer deploy.
 
+# volumes: en app.yml: que existan y sean del usuario de su imagen (antes de arrancar).
+- name: "{{ andamio_app_name }}: carpetas persistentes"
+  when: andamio_app.volumes | default([]) and andamio_app_tag.stdout | length > 4
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: "{{ andamio_infra }}/scripts/app-volumes.sh {{ andamio_app_name }}"
+  register: andamio_app_volumes
+  changed_when: "'✓' in andamio_app_volumes.stdout"
+
 - name: "{{ andamio_app_name }}: levantada"
   when: andamio_app_tag.stdout | length > 4 and not (andamio_app.stopped | default(false))
   become: true
