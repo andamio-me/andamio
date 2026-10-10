@@ -290,7 +290,7 @@ All in `ansible/group_vars/all.yml`:
 
 ```bash
 andamio update --check   # what would change
-andamio update           # apply (offers commit and push at the end); then: andamio server
+andamio update           # apply: at the end it offers to push and tells you if the server needs it
 ```
 
 Brings in andamio's improvements and security fixes without touching what's yours: your
@@ -298,8 +298,10 @@ configuration, apps, secrets, certificate and inventory. Repos created from a te
 no history with it, so it works file by file with a three-way merge (yours, the version you
 came from, the new one): files you never touched are updated, files only you changed are
 kept, and when both changed it merges them, leaving git-style conflict markers where your
-change and andamio's touch the same lines. It requires a clean working tree, so the whole
-update shows up in `git diff` and can be undone.
+change and andamio's touch the same lines. It requires a clean working tree and, if there
+were no conflicts, offers to push it as a single commit (`git show` shows all of it, `git
+revert HEAD` undoes it). At the end it tells you whether something that runs on the server
+changed (then, `andamio server`) or only andamio on your machine (nothing to apply).
 
 ### Security check
 

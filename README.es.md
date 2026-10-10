@@ -297,7 +297,7 @@ Todo en `ansible/group_vars/all.yml`:
 
 ```bash
 andamio update --check   # qué cambiaría
-andamio update           # aplicar (al final ofrece commit y push); luego: andamio servidor
+andamio update           # aplicar: al final ofrece subirlo y te dice si hay que aplicarlo en el servidor
 ```
 
 Trae las mejoras y los parches de seguridad de andamio sin tocar lo tuyo: tu configuración,
@@ -306,7 +306,9 @@ comparte historial con él, así que trabaja archivo por archivo con una fusión
 (lo tuyo, la versión de la que vienes, la nueva): lo que nunca tocaste se actualiza, lo que
 solo cambiaste tú se respeta, y si cambiaron los dos lo combina, con marcas de conflicto
 como las de git donde tu cambio y el de andamio tocan las mismas líneas. Exige el árbol
-limpio, así que toda la actualización se ve en `git diff` y se puede deshacer.
+limpio y, si no hubo conflictos, ofrece subirla en un solo commit (`git show` la muestra
+entera, `git revert HEAD` la deshace). Al final te dice si cambió algo que corre en el
+servidor (entonces, `andamio servidor`) o solo andamio en tu máquina (nada que aplicar).
 
 ### Chequeo de seguridad
 
