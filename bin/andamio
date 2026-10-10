@@ -2099,6 +2099,11 @@ OWN = ["ansible/group_vars/*", "ansible/inventory.yml", "apps/*", "host/sops/*",
        "host/tls/*", ".sops.yaml", "*.sops", "*.sops.*", ".andamio/*"]
 
 
+# Lo que corre en el servidor: si una actualización lo cambia, hay que aplicarla (andamio
+# servidor). El resto (bin/, docs, plantillas de Dockerfile) es de tu máquina o del CI.
+SERVER_SIDE = ("ansible/", "scripts/", "stacks/", "host/")
+
+
 def git_bytes(*args: str, cwd: Path | None = None) -> bytes:
     r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
     if r.returncode != 0:
@@ -2288,8 +2293,15 @@ def cmd_update(args: argparse.Namespace) -> None:
                 and run([*git, "commit", "-qm", msg]).returncode == 0
                 and interactive([*git, "push", "-q"]) == 0):
             ok(L("Subido.", "Pushed."))
-            note(L("Aplícalo en el servidor cuando quieras:  andamio servidor",
-                   "Apply it on the server whenever you want:  andamio server"))
+            server_side = [p for p in writes if p.startswith(SERVER_SIDE)]
+            if server_side:
+                note(L(f"Cambió lo que corre en el servidor ({len(server_side)} archivos, p. ej. {server_side[0]}): "
+                       "aplícalo cuando quieras:  andamio servidor",
+                       f"What runs on the server changed ({len(server_side)} files, e.g. {server_side[0]}): "
+                       "apply it whenever you want:  andamio server"))
+            else:
+                note(L("Solo cambió andamio en tu máquina: no hay nada que aplicar en el servidor.",
+                       "Only andamio on your machine changed: nothing to apply on the server."))
             return
         warn(L("No pude subirlo: hazlo a mano (abajo).", "Couldn't push it: do it by hand (below)."))
     note(L("""
