@@ -59,8 +59,10 @@ worker:
 
 ## Cambiar algo de una app
 - Dominio propio o CORS: `andamio app domain|cors add|rm|list <nombre> [valor]`.
-- Recursos, acceso, host: editar `apps/<nombre>/app.yml`, `cd ansible && ansible-playbook apps.yml`,
-  commit + push y `andamio app apply <nombre>`.
+- RAM, CPU, puerto, salud, acceso: `andamio app set <nombre> --mem 512m` (`--cpus`, `--port`,
+  `--health`, `--public`, `--vpn`). Un reinicio, sin deploy. Ver cómo está: `andamio app info <nombre>`.
+- Lo demás (host, worker...): editar `apps/<nombre>/app.yml` y `andamio app apply <nombre>`
+  (regenera el compose, commitea, sube y aplica).
 - Rotar la llave de deploy: borrar `apps/<nombre>/deploy_key.pub` y seguir como arriba.
 
 ## Quitar una app

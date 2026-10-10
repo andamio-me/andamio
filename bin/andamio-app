@@ -3,7 +3,7 @@
 #
 #   andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
 #   andamio app secret set|rm <nombre> <CLAVE>      andamio app secret list <nombre>
-#   andamio app list | logs <nombre> | rollback <nombre> | destroy <nombre>
+#   andamio app list | info <nombre> | set <nombre> --mem 512m | logs <nombre> | rollback <nombre> | destroy <nombre>
 #
 # create: repo propio (--repo) o desde andamio_app_template, apps/<nombre>/app.yml, secretos y llave de
 # deploy (apps.yml), commit + push de andamio y configuración del servidor.
@@ -58,6 +58,9 @@ usage() {
   andamio app secret list <nombre>           (solo los nombres)
   andamio app apply [<nombre>]               (aplica lo pendiente en el servidor: un reinicio)
   andamio app list
+  andamio app info <nombre>                  (su configuración y cómo está ahora: estado, RAM, versión)
+  andamio app set <nombre> [--mem 512m] [--cpus 1] [--port 8080] [--health /ruta] [--public|--vpn]
+                                             (cambiarla sin editar app.yml: un reinicio, sin deploy)
   andamio app stop|start <nombre>            (apagarla sin borrar nada / volver)
   andamio app domain add|rm|list <nombre> [api.suempresa.com]   (dominio propio, además del tuyo)
   andamio app cors add|rm|list <nombre> [https://miapp.vercel.app]   (frontend en otro lado)
@@ -75,6 +78,9 @@ usage() {
   andamio app secret list <name>             (names only)
   andamio app apply [<name>]                 (applies what's pending on the server: one restart)
   andamio app list
+  andamio app info <name>                    (its configuration and how it's doing now: status, RAM, version)
+  andamio app set <name> [--mem 512m] [--cpus 1] [--port 8080] [--health /path] [--public|--vpn]
+                                             (change it without editing app.yml: a restart, no deploy)
   andamio app stop|start <name>              (turn it off without deleting anything / back on)
   andamio app domain add|rm|list <name> [api.mycompany.com]   (your own domain, besides the server's)
   andamio app cors add|rm|list <name> [https://myapp.vercel.app]   (frontend hosted elsewhere)
@@ -86,7 +92,19 @@ usage() {
 "
   exit 1
 }
-confirm() { local ok; read -rp "$1 [$(L s y)/N] " ok; [[ $ok =~ ^[sSyY]$ ]] || die "$(L Cancelado Cancelled)"; }
+# ask <pregunta> <s|n>: sí o no con flechas (el mismo menú que `andamio`); 0 = sí. Lee de la
+# terminal aunque la entrada venga de un pipe. Ctrl+C corta el comando entero, no solo la pregunta.
+ask() {
+  local rc=0
+  if (: < /dev/tty) 2> /dev/null; then
+    "$INFRA/bin/andamio" _ask "$1" "$2" < /dev/tty || rc=$?
+  else
+    "$INFRA/bin/andamio" _ask "$1" "$2" || rc=$?
+  fi
+  [ "$rc" = 130 ] && exit 130
+  return "$rc"
+}
+confirm() { ask "$1" n || die "$(L Cancelado Cancelled)"; }
 # URL pública de un host: "@" es el dominio raíz.
 app_url() { if [ "$1" = "@" ]; then echo "https://$DOMAIN"; else echo "https://$1.$DOMAIN"; fi; }
 valid_name() {
@@ -286,9 +304,8 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   fi
   echo
   L "Para desplegarse, $repo necesita:" "To deploy, $repo needs:"; echo; echo "$changes"
-  local ok; read -rp "$(L "¿Los subo a $repo? (commit en main y push: arranca el primer deploy) [S/n] " \
-                           "Push them to $repo? (commit on main and push: starts the first deploy) [Y/n] ")" ok < /dev/tty
-  if [[ $ok =~ ^[nN] ]]; then
+  if ! ask "$(L "¿Los subo a $repo? (commit en main y push: arranca el primer deploy)" \
+                "Push them to $repo? (commit on main and push: starts the first deploy)")" s; then
     local keep=$HOME/andamio-$name; rm -rf "$keep"; mkdir -p "$keep"
     (cd "$dir" && git status --porcelain --untracked-files=all | awk '{print $2}' | xargs -I{} cp --parents {} "$keep/")
     L "No subí nada. Los archivos quedaron en $keep: cópialos a tu repo y haz push." \
@@ -517,7 +534,7 @@ app_secret() {
 # Aplica en el servidor lo pendiente (secretos, dominios, CORS...): una contraseña, un reinicio.
 # Con <app>: si su último deploy falló (típico: le faltaba una variable), ofrece reintentarlo.
 app_apply() {
-  local name=${1:-} repo run ans
+  local name=${1:-} repo run
   if [ -n "$name" ]; then
     valid_name "$name"
     [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
@@ -552,9 +569,8 @@ app_apply() {
   [ -n "$repo" ] || return 0
   run=$(forge ci-last-failed "$repo" 2> /dev/null || true)
   [ -n "$run" ] || return 0
-  read -rp "$(L "El último deploy de $name falló. ¿Lo reintento ahora, con los cambios? [S/n] " \
-                "$name's last deploy failed. Retry it now, with the changes? [Y/n] ")" ans
-  [[ ${ans:-s} =~ ^[sSyY] ]] || return 0
+  ask "$(L "El último deploy de $name falló. ¿Lo reintento ahora, con los cambios?" \
+           "$name's last deploy failed. Retry it now, with the changes?")" s || return 0
   step "$(L "Reintentando el deploy" "Retrying the deploy")"
   forge ci-rerun "$repo" "$run" || { L "! Volvió a fallar (la causa, arriba)." "! It failed again (cause above)."; echo; }
 }
@@ -562,7 +578,7 @@ app_apply() {
 # El pipeline de cada app está fijado a una versión (SHA) de app-build.yml de esta copia: así
 # un cambio aquí no rompe apps sin aviso. Esto lo pone al día en el repo de cada app.
 app_ci_update() {
-  local name=${1:-} names=() n repo sha change tmp skip=" [skip ci]" ans
+  local name=${1:-} names=() n repo sha change tmp skip=" [skip ci]"
   if [ -n "$name" ]; then
     valid_name "$name"
     [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
@@ -575,9 +591,8 @@ app_ci_update() {
   git -C "$INFRA" fetch -q origin main
   sha=$(git -C "$INFRA" rev-parse origin/main)
   L "Pipeline: $INSTANCE_REPO @ ${sha:0:8}" "Pipeline: $INSTANCE_REPO @ ${sha:0:8}"; echo
-  read -rp "$(L "¿Desplegar cada app ahora con el pipeline nuevo? Si no, lo usa en su próximo push [s/N] " \
-                "Deploy each app now with the new pipeline? Otherwise it's used on its next push [y/N] ")" ans
-  [[ $ans =~ ^[sSyY] ]] && skip=""
+  ask "$(L "¿Desplegar cada app ahora con el pipeline nuevo? Si no, lo usa en su próximo push" \
+           "Deploy each app now with the new pipeline? Otherwise it's used on its next push")" n && skip=""
   for n in "${names[@]}"; do
     repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$n/app.yml")
     repo=${repo:-$OWNER/$n}
@@ -609,6 +624,143 @@ app_list() {
     grep -qx 'stopped: true' "$f" && st="⏸ $(L detenida stopped)"
     printf '%-22s %-40s %-7s %s\n' "$name" "$(app_url "$host")" "${access:-vpn}" "${st:-$(L "sin desplegar" "not deployed")}"
   done
+}
+
+# andamio app info: lo que dice su app.yml y cómo está ahora en el servidor, en una pantalla.
+app_info() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  # Del servidor, solo estado y consumo: nunca el entorno del contenedor (tiene los secretos).
+  local live; live=$(ssh "$SERVER" bash -s -- "$name" <<'REMOTE' 2> /dev/null || true
+c=$(docker ps -aq --filter label=com.docker.compose.project=$1 --filter label=com.docker.compose.service=app | head -n 1)
+[ -n "$c" ] || exit 0
+docker inspect --format 'state={{.State.Status}}
+started={{.State.StartedAt}}
+restarts={{.RestartCount}}
+health={{if .State.Health}}{{.State.Health.Status}}{{end}}
+image={{.Config.Image}}' "$c"
+[ "$(docker inspect --format '{{.State.Running}}' "$c")" = true ] \
+  && docker stats --no-stream --format 'mem={{.MemUsage}}
+cpu={{.CPUPerc}}' "$c"
+REMOTE
+)
+  local secrets=""
+  secrets=$(cd "$INFRA" && sops decrypt --input-type dotenv --output-type dotenv "apps/$name/secrets.sops.env" 2> /dev/null \
+    | grep -oE '^[A-Za-z_][A-Za-z0-9_]*' | grep -vxE "${RESERVED// /|}" | paste -sd' ' || true)
+  LIVE=$live SECRETS=$secrets python3 - "$f" "$DOMAIN" "$LNG" <<'PY'
+import os, re, sys, yaml
+from datetime import datetime, timezone
+f, domain, lng = sys.argv[1:]
+L = lambda es, en: es if lng == "es" else en
+a = yaml.safe_load(open(f))
+live = dict(l.split("=", 1) for l in os.environ["LIVE"].splitlines() if "=" in l)
+if live.get("mem"):   # "4.832MiB / 256MiB" → "5 MiB"
+    n, unit = re.match(r"([\d.]+)\s*([A-Za-z]+)", live["mem"]).groups()
+    live["mem"] = f"{float(n):.0f} {unit}"
+dim = lambda t: f"\033[2m{t}\033[0m"
+host = str(a.get("host", a["name"]))
+url = f"https://{domain}" if host == "@" else f"https://{host}.{domain}"
+
+def ago(ts):
+    try:
+        s = (datetime.now(timezone.utc) - datetime.fromisoformat(ts[:19] + "+00:00")).total_seconds()
+    except ValueError:
+        return ""
+    for n, es, en in ((86400, "d", "d"), (3600, "h", "h"), (60, "min", "min")):
+        if s >= n:
+            return L(f"hace {int(s // n)} {es}", f"{int(s // n)} {en} ago")
+    return L("hace segundos", "seconds ago")
+
+if a.get("stopped"):
+    status = "⏸ " + L("detenida", "stopped")
+elif not live:
+    status = dim(L("sin desplegar (o el servidor no respondió)", "not deployed (or the server didn't answer)"))
+elif live.get("state") == "running":
+    h = live.get("health")
+    mark = "\033[33m●\033[0m" if h in ("starting", "unhealthy") else "\033[32m●\033[0m"
+    status = f"{mark} {L('corriendo', 'running')}" + (f" ({h})" if h and h != "healthy" else "") + f", {L('arrancó', 'started')} {ago(live.get('started', ''))}"
+else:
+    status = f"\033[31m●\033[0m {live.get('state')}"
+if live.get("restarts", "0") not in ("", "0"):
+    status += f" · {live['restarts']} " + L("reinicios", "restarts")
+version = live.get("image", "").rpartition(":")[2][:7]
+print(f"\n  \033[1m{a['name']}\033[0m  {status}" + (f"  {dim('v ' + version)}" if version else ""))
+
+r = a.get("resources", {})
+rows = [
+    ("URL", f"{url}  ({L('pública', 'public') if a.get('access') == 'public' else L('solo VPN', 'VPN only')})"),
+    (L("Dominios", "Domains"), ", ".join(a.get("domains") or [])),
+    ("Repo", a.get("repo") or ""),
+    (L("Puerto", "Port"), f"{a.get('port')}" + (f"   {L('salud', 'health')} {a['health']}" if a.get("health") else "")),
+    ("RAM", f"{r.get('mem')}" + (f"   {dim(L('usa', 'using') + ' ' + live['mem'])}" if live.get("mem") else "")),
+    ("CPU", f"{r.get('cpus')}" + (f"   {dim(L('usa', 'using') + ' ' + live['cpu'])}" if live.get("cpu") else "")),
+    (L("Datos", "Data"), ", ".join(n for n, on in (("PostgreSQL", a.get("db")), ("Redis", a.get("redis"))) if on)),
+    (L("Carpetas", "Folders"), ", ".join(a.get("volumes") or [])),
+    ("CORS", ", ".join(a.get("cors") or [])),
+    ("Worker", (f"{a['worker'].get('command', '')}  ({a['worker'].get('mem', '256m')})" if a.get("worker") else "")),
+    (L("Secretos", "Secrets"), os.environ["SECRETS"]),
+]
+for k, v in rows:
+    if v:
+        print(f"  {k:<9} {v}")
+print("\n  " + dim(L(f"Cambiar: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /ruta | --public | --vpn",
+                    f"Change: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /path | --public | --vpn")))
+PY
+}
+
+# andamio app set: cambiar RAM, CPU, puerto, ruta de salud o acceso sin editar app.yml.
+# Es un reinicio con la misma imagen (como un secreto), no un deploy.
+app_set() {
+  local name=${1:-}; shift || true
+  [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  local missing; missing=$(L "falta el valor de" "missing value for")
+  local changes=()   # clave=valor (resources.mem=512m)
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --mem) [[ ${2:-} =~ ^[0-9]+[mg]$ ]] || die "$(L "Memoria inválida: ${2:-} (ej. 256m, 1g)" "Invalid memory: ${2:-} (e.g. 256m, 1g)")"
+             changes+=("resources.mem=$2"); shift ;;
+      --cpus) [[ ${2:-} =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ ! ${2:-} =~ ^0+(\.0+)?$ ]] \
+                || die "$(L "CPU inválida: ${2:-} (ej. 0.5, 1, 2)" "Invalid CPU: ${2:-} (e.g. 0.5, 1, 2)")"
+              changes+=("resources.cpus=$2"); shift ;;
+      --port) [[ ${2:-} =~ ^[0-9]{2,5}$ ]] && [ "$2" -le 65535 ] || die "$(L "Puerto inválido" "Invalid port"): ${2:-}"
+              changes+=("port=$2"); shift ;;
+      --health) [[ ${2:-} =~ ^/[A-Za-z0-9._/-]*$ ]] \
+                  || die "$(L "Ruta de salud inválida: ${2:-} (ej. /healthz)" "Invalid health path: ${2:-} (e.g. /healthz)")"
+                changes+=("health=$2"); shift ;;
+      --public) changes+=("access=public") ;;
+      --vpn) changes+=("access=vpn") ;;
+      *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
+    esac
+    shift
+  done
+  [ ${#changes[@]} -gt 0 ] || die "$(L "Nada que cambiar. Opciones: --mem 512m, --cpus 1, --port 8080, --health /ruta, --public, --vpn" \
+                                       "Nothing to change. Options: --mem 512m, --cpus 1, --port 8080, --health /path, --public, --vpn")"
+  no_uncommitted
+
+  # Edita solo esas líneas: los comentarios y el orden de app.yml se quedan como estaban.
+  local summary
+  summary=$("$INFRA/bin/andamio" _yaml_set "$f" "${changes[@]}")
+  if [ -z "$summary" ]; then
+    echo "✓ $(L "$name ya tiene esos valores: nada que cambiar" "$name already has those values: nothing to change")"
+    return 0
+  fi
+  echo; sed 's/^/  /' <<< "$summary"; echo
+  grep -q '^port:' <<< "$summary" && L "  ! Tu app tiene que escuchar en el puerto nuevo (si cambiaste el código, haz push: eso despliega)" \
+    "  ! Your app has to listen on the new port (if you changed the code, push: that deploys)" && echo
+  grep -q '^access: vpn → public' <<< "$summary" && L "  ! Pública: cualquiera en internet podrá abrirla" \
+    "  ! Public: anyone on the internet will be able to open it" && echo
+  if ! ask "$(L "¿Aplicar? (reinicia $name con la misma imagen)" "Apply? (restarts $name with the same image)")" s; then
+    git -C "$INFRA" checkout -q -- "apps/$name/app.yml"
+    die "$(L Cancelado Cancelled)"
+  fi
+  step "$(L "Compose de $name (ansible/apps.yml)" "$name's compose (ansible/apps.yml)")"
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'fatal|ok=')
+  git -C "$INFRA" add "apps/$name"
+  git -C "$INFRA" commit -qm "feat(apps): $name: $(paste -sd',' <<< "$summary" | sed 's/: [^,]* → /=/g')"
+  app_apply "$name"
 }
 
 app_logs() {
@@ -726,6 +878,8 @@ shift
 case ${1:-} in
   create) shift; app_create "$@" ;;
   list) app_list ;;
+  info) shift; app_info "$@" ;;
+  set) shift; app_set "$@" ;;
   logs) shift; app_logs "$@" ;;
   rollback) shift; app_rollback "$@" ;;
   destroy) shift; app_destroy "$@" ;;

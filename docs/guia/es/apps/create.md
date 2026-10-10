@@ -96,8 +96,9 @@ Ver [Dominios y URLs](/es/docs/apps/domains/) y [Solo el backend](/es/docs/apps/
 
 ## `apps/miapp/app.yml`
 
-La definición de tu app, en tu copia. La genera `app create`; puedes editarla y aplicar con
-`andamio app apply miapp`.
+La definición de tu app, en tu copia. La genera `app create`. Lo más común se cambia sin
+editarla, con [`andamio app set`](/es/docs/apps/manage/#cambiar-ram-cpu-puerto-o-acceso)
+(RAM, CPU, puerto, salud, acceso); para lo demás, edítala y aplica con `andamio app apply miapp`.
 
 | Clave | Significado |
 |---|---|

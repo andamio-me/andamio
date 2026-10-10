@@ -260,6 +260,10 @@ BuildKit mounts each one only for that `RUN`: it never ends up in an image layer
 
 ### `apps/<app>/app.yml`
 
+The usual changes don't need editing it: `andamio app set <app> --mem 512m` (also `--cpus`,
+`--port`, `--health`, `--public`, `--vpn`); `andamio app info <app>` shows how it's doing. If
+you edit it by hand, `andamio app apply <app>` applies it.
+
 | Key | Meaning |
 |---|---|
 | `port` | Port your app listens on inside the container |
@@ -395,6 +399,18 @@ consequences, in [`docs/decisions/`](docs/decisions/) (in Spanish). A few that s
 project: immutable backups (0014), a declarative mini-PaaS (0015), CI quality and security
 gates (0021), and apps in any language (0022).
 
+## Tests
+
+```bash
+tools/tests.sh              # all of them (the first time it creates a pytest env, leaving your Python alone)
+tools/tests.sh -k update    # only the matching ones
+tests/build-fixtures.sh     # with Docker: builds and starts the Dockerfiles andamio generates
+```
+
+They cover `andamio update` (the three-way merge, against a test upstream), the generated
+Dockerfiles, the `app create` pre-check and what `andamio app` rejects. No server or accounts
+needed: they run on your machine and in CI, on every push.
+
 ## Roadmap
 
 - [x] End-to-end test on a fresh VPS (Azure, 1 vCPU and 1 GB)
@@ -403,6 +419,7 @@ gates (0021), and apps in any language (0022).
 - [x] CLI in English and Spanish (`ANDAMIO_LANG=es` for Spanish; it follows `LANG` otherwise)
 - [ ] Ansible task names in English (today they're in Spanish)
 - [x] Guided backups (`andamio backups`)
+- [x] Automated tests in CI (`tools/tests.sh`)
 - [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request
 

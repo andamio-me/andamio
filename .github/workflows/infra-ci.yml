@@ -21,7 +21,25 @@ jobs:
         run: |
           pipx install shellcheck-py==0.11.0.1
           shellcheck --version
-          shellcheck -S warning scripts/*.sh bin/andamio-app ansible/hl
+          shellcheck -S warning scripts/*.sh bin/andamio-app ansible/hl tools/tests.sh tests/build-fixtures.sh
+
+  # Los tests de andamio (tests/): update, Dockerfiles generados, revisión previa, andamio app.
+  tests:
+    name: Tests (pytest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: pytest
+        run: tools/tests.sh -v
+
+  # Los Dockerfiles que genera andamio, construidos y arrancados de verdad (Node, Python, Go, estático).
+  dockerfiles:
+    name: Dockerfiles generados (build y arranque)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: build y arranque
+        run: tests/build-fixtures.sh
 
   ansible-lint:
     name: Ansible (ansible-lint)

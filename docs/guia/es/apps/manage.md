@@ -1,6 +1,6 @@
 ---
 title: Administrar una app
-description: Listar, ver logs, apagar, volver atrás, aplicar cambios y borrar.
+description: Listar, ver detalles, cambiar recursos, ver logs, apagar, volver atrás, aplicar cambios y borrar.
 ---
 
 ## Ver tus apps
@@ -14,6 +14,37 @@ APP          URL                                ACCESO  ESTADO
 blog         https://blog.tudominio.com         public  Up 3 hours (healthy)
 panel        https://panel.tudominio.com        vpn     Up 2 days (healthy)
 ```
+
+## Ver una app
+
+```bash
+andamio app info miapp
+```
+
+```
+  miapp  ● corriendo, arrancó hace 2 h  v 8e71e29
+  URL       https://miapp.tudominio.com  (pública)
+  Repo      tu-usuario/miapp
+  Puerto    3000   salud /healthz
+  RAM       256m   usa 74 MiB
+  CPU       0.5   usa 0.30%
+  Datos     PostgreSQL
+  Secretos  ANTHROPIC_API_KEY
+```
+
+Lo que dice su `app.yml` y cómo está ahora en el servidor. De los secretos, solo los nombres.
+
+## Cambiar RAM, CPU, puerto o acceso
+
+```bash
+andamio app set miapp --mem 512m             # o varios a la vez: --mem 512m --cpus 1
+andamio app set miapp --port 8080 --health /healthz
+andamio app set miapp --public               # o --vpn: solo desde tu VPN
+```
+
+Te muestra el cambio (`resources.mem: 256m → 512m`), pregunta y lo aplica: un reinicio con la
+misma imagen, sin deploy. Si cambias el puerto, tu app tiene que escuchar en el nuevo; si para
+eso cambiaste el código, haz `git push` (eso despliega).
 
 ## Logs en vivo
 

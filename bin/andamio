@@ -2284,6 +2284,42 @@ def cmd_precheck(args: argparse.Namespace) -> None:
     sys.exit(2 if any(s for s, _ in findings) else 0)
 
 
+# ================= app.yml =================
+
+def yaml_set(text: str, changes: list[str]) -> tuple[str, list[str]]:
+    """Cambia valores de un app.yml línea por línea (`port=8080`, `resources.mem=512m`): los
+    comentarios y el orden quedan como estaban. Devuelve (texto, ["clave: antes → después"])."""
+    lines = text.split("\n")
+    out = []
+    for change in changes:
+        key, value = change.split("=", 1)
+        parent, child = key.split(".", 1) if "." in key else (None, key)
+        block, found = None, None
+        for i, line in enumerate(lines):
+            top = re.match(r"^([A-Za-z_][\w-]*):", line)
+            if top:
+                block = top.group(1)
+            if (parent is None and top and block == child) or \
+               (parent and block == parent and re.match(rf"^\s+{re.escape(child)}:", line)):
+                found = i
+                break
+        if found is None:
+            if parent:
+                die(L(f"{key}: no está en el app.yml", f"{key}: not in the app.yml"))
+            # Una clave que falta (health) va justo después de port.
+            at = next((i + 1 for i, l in enumerate(lines) if l.startswith("port:")), len(lines))
+            lines.insert(at, f"{child}: {value}")
+            out.append(f"{key}: ({L('ninguna', 'none')}) → {value}")
+            continue
+        m = re.match(r"^(\s*[\w-]+:\s*)(.*?)(\s+#.*)?$", lines[found])
+        old = m.group(2).strip('"')
+        if old == value:
+            continue
+        lines[found] = m.group(1) + value + (m.group(3) or "")
+        out.append(f"{key}: {old} → {value}")
+    return "\n".join(lines), out
+
+
 # ================= update =================
 
 # El extractor (tools/extraer-plataforma.py) pone aquí la URL del repo público de andamio.
@@ -2812,6 +2848,9 @@ def overview() -> None:
                                {d('URL: <app>.tudominio · --host api → api.tudominio · --host @ → tudominio')}
                                {d('     otro dominio o más niveles (v2.api.tudominio): app domain add')}
   app list                     todas, con su URL y estado
+  app info <app>               su configuración y cómo está ahora (estado, RAM, versión)
+  app set <app> --mem 512m     cambiar RAM, CPU, puerto, salud o acceso: un reinicio, sin deploy
+                               {d('--cpus 1 · --port 8080 · --health /ruta · --public · --vpn')}
   app logs <app>               logs en vivo
   app secret set|rm|list <app> [CLAVE]      variables y secretos (el valor se pide oculto)
                                {d('--later: guarda sin aplicar; después, una vez: app apply <app>')}
@@ -2850,6 +2889,9 @@ def overview() -> None:
                                {d('URL: <app>.yourdomain · --host api → api.yourdomain · --host @ → yourdomain')}
                                {d('     another domain or deeper (v2.api.yourdomain): app domain add')}
   app list                     all of them, with URL and status
+  app info <app>               its configuration and how it's doing now (status, RAM, version)
+  app set <app> --mem 512m     change RAM, CPU, port, health or access: a restart, no deploy
+                               {d('--cpus 1 · --port 8080 · --health /path · --public · --vpn')}
   app logs <app>               live logs
   app secret set|rm|list <app> [KEY]        variables and secrets (the value is asked hidden)
                                {d('--later: save without applying; then, once: app apply <app>')}
@@ -2893,6 +2935,15 @@ def main() -> None:
     if args[0] == "_precheck":   # interno (andamio app create): _precheck <dir> <puerto> <hay --volume: 0|1>
         cmd_precheck(argparse.Namespace(dir=args[1], port=args[2], volume=args[3]))
         return
+    if args[0] == "_yaml_set":   # interno (andamio app set): _yaml_set <app.yml> clave=valor...; imprime lo que cambió
+        f = Path(args[1])
+        text, changed = yaml_set(f.read_text(), args[2:])
+        if changed:
+            f.write_text(text)
+            print("\n".join(changed))
+        return
+    if args[0] == "_ask":        # interno (andamio app ...): _ask <pregunta> <s|n por defecto>; sale 0 = sí
+        sys.exit(0 if ask_yes(args[1], args[2] in ("s", "y")) else 1)
     if args[0] == "_apply":      # interno (andamio app ...): aplica la plataforma en el servidor
         # Con una app: solo esa (segundos); sin ella, la plataforma entera.
         app = args[1] if len(args) > 1 else ""

@@ -96,8 +96,9 @@ See [Domains and URLs](/en/docs/apps/domains/) and [Backend only](/en/docs/apps/
 
 ## `apps/myapp/app.yml`
 
-Your app's definition, in your copy. `app create` generates it; you can edit it and apply
-with `andamio app apply myapp`.
+Your app's definition, in your copy. `app create` generates it. The usual changes don't need
+editing it: [`andamio app set`](/en/docs/apps/manage/#change-ram-cpu-port-or-access) (RAM, CPU,
+port, health, access); for the rest, edit it and apply with `andamio app apply myapp`.
 
 | Key | Meaning |
 |---|---|

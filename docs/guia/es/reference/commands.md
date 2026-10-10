@@ -22,6 +22,8 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 |---|---|
 | `andamio app create <app> --repo <dueño/repo>` | La registra; desde ahí, cada `git push` a `main` la despliega. Opciones en [Crear una app](/es/docs/apps/create/#opciones) |
 | `andamio app list` | Todas, con su URL, acceso y estado |
+| `andamio app info <app>` | Su configuración y cómo está ahora: estado, RAM y CPU en uso, versión |
+| `andamio app set <app> [--mem 512m] [--cpus 1] [--port 8080] [--health /ruta] [--public\|--vpn]` | Cambiarla sin editar `app.yml`: un reinicio, sin deploy |
 | `andamio app logs <app>` | Logs en vivo |
 | `andamio app secret set <app> <CLAVE> [--later]` | Crea o cambia una variable (el valor se pide oculto) |
 | `andamio app secret rm <app> <CLAVE>` | La quita |
