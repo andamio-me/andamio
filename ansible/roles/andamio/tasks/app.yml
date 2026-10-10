@@ -105,8 +105,10 @@
   when: andamio_app.stopped | default(false)
   become: true
   become_user: "{{ andamio_user }}"
-  ansible.builtin.command: docker compose stop
+  # Solo si algo corre: `compose stop` dice "Stopped" aunque ya estuviera apagada.
+  ansible.builtin.shell: |
+    if [ -n "$(docker compose ps -q --status running)" ]; then docker compose stop && echo detenida; fi
   args:
     chdir: "{{ andamio_app_dir }}"
   register: andamio_app_stop
-  changed_when: andamio_app_stop.stderr is search('Stopped')
+  changed_when: "'detenida' in andamio_app_stop.stdout"
