@@ -10,7 +10,7 @@
   each one isolated, with every change going through git.
 </p>
 
-<p align="center"><a href="README.es.md">Español</a></p>
+<p align="center"><a href="https://andamio.me/en/docs/"><b>Documentation</b></a> · <a href="https://andamio.me/en/">Website</a> · <a href="README.es.md">Español</a></p>
 
 > **Status: alpha.** andamio runs a real server in production (apps, a file-sync service,
 > monitoring, backups) and the guided install was tested end-to-end on a fresh VPS. The

@@ -480,6 +480,13 @@ app_apply() {
   if [ -n "$name" ]; then
     valid_name "$name"
     [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+    # Cambios a mano en su app.yml: regenerar su compose y guardarlos antes de aplicar.
+    if [ -n "$(git -C "$INFRA" status --porcelain -- "apps/$name")" ]; then
+      step "$(L "Compose de $name (cambiaste su app.yml)" "$name's compose (you changed its app.yml)")"
+      (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'fatal|ok=')
+      git -C "$INFRA" add "apps/$name"
+      git -C "$INFRA" commit -qm "feat(apps): $name: cambios en app.yml"
+    fi
   fi
   no_uncommitted
   # El servidor baja la configuración del repo: lo que esté sin subir, se sube antes.

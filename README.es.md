@@ -10,7 +10,7 @@
   cada una aislada, con cada cambio pasando por git.
 </p>
 
-<p align="center"><a href="README.md">English</a></p>
+<p align="center"><a href="https://andamio.me/es/docs/"><b>Documentación</b></a> · <a href="https://andamio.me/es/">Sitio web</a> · <a href="README.md">English</a></p>
 
 > **Estado: alpha.** andamio mueve un servidor real en producción (apps, sincronización de
 > archivos, monitoreo, backups) y la instalación guiada se probó de punta a punta en un VPS
