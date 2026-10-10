@@ -11,7 +11,10 @@ ENV=/etc/andamio/andamio.env
 [ -r "$ENV" ] && set -a && . "$ENV" && set +a
 LNG=${ANDAMIO_LANG:-en}
 L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
-STATE=${STATE_DIRECTORY:-/var/lib/andamio-alerts}/state
+# systemd pasa sus StateDirectory juntas, separadas por ":": la nuestra es la de andamio-alerts.
+STATE=/var/lib/andamio-alerts/state
+IFS=: read -ra dirs <<< "${STATE_DIRECTORY:-}"
+for d in "${dirs[@]}"; do [[ $d == */andamio-alerts || ${#dirs[@]} == 1 ]] && STATE=$d/state; done
 APPS=/srv/andamio/infra/apps
 DISK_ALERT=85   # % para avisar
 DISK_OK=80      # % para dar el aviso por resuelto (sin rebotes cerca del límite)

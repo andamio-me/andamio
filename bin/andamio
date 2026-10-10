@@ -693,7 +693,7 @@ yours, created from this template. Creating and cloning it."""))
         next_dir = target
 
     title(L("Listo: tu máquina está preparada", "Done: your machine is ready"))
-    note((f"cd {next_dir}\n" if next_dir else "") + L("Siguiente:  bin/andamio init", "Next:  bin/andamio init"))
+    note((f"cd {next_dir}\n" if next_dir else "") + L("Siguiente:  andamio init", "Next:  andamio init"))
     if "ansible-playbook" in missing:
         note(L("(abre una terminal nueva para que tu shell vea ~/.local/bin)",
                "(open a new terminal so your shell sees ~/.local/bin)"))
@@ -760,14 +760,14 @@ cloudflare: un solo certificado comodín; no publica los nombres. Necesita el DN
   dominio en Cloudflare y un token con permiso Zone:DNS:Edit para esa zona.
 custom: tu propio certificado (de una CA comercial, o un Origin Certificate de Cloudflare).
   Nadie lo renueva solo: Grafana avisa antes de que venza y lo reemplazas con
-  bin/andamio certificado.""", """
+  andamio certificado.""", """
 http (recommended to start): one Let's Encrypt certificate per app; works with any DNS.
   Your apps' names (private ones too) end up in the public certificate logs.
 cloudflare: a single wildcard certificate; names stay unpublished. Needs the domain's DNS
   on Cloudflare and a token with Zone:DNS:Edit permission for that zone.
 custom: your own certificate (from a commercial CA, or a Cloudflare Origin Certificate).
   Nobody renews it for you: Grafana warns before it expires and you replace it with
-  bin/andamio certificate."""))
+  andamio certificate."""))
     a["tls"] = choose(L("Modo de HTTPS", "HTTPS mode"), [
         ("http", L("Let's Encrypt, un certificado por app (recomendado para empezar)",
                    "Let's Encrypt, one certificate per app (recommended to start)")),
@@ -789,11 +789,11 @@ custom: your own certificate (from a commercial CA, or a Cloudflare Origin Certi
     note(L("""
 Monitoreo: "auto" elige según la RAM del VPS (completo con 3 GB o más: métricas, logs,
   Grafana con alertas y Uptime Kuma; mínimo: solo métricas, ~115 MiB).
-Backups: después de preparar el servidor, con bin/andamio backups (B2 o S3, guiado).
+Backups: después de preparar el servidor, con andamio backups (B2 o S3, guiado).
   Sin backups, tus datos solo viven en el VPS. Alertas por Telegram: se activan después.""", """
 Monitoring: "auto" picks by the VPS's RAM (completo with 3 GB or more: metrics, logs,
   Grafana with alerts and Uptime Kuma; minimo: metrics only, ~115 MiB).
-Backups: after setting up the server, with bin/andamio backups (B2 or S3, guided).
+Backups: after setting up the server, with andamio backups (B2 or S3, guided).
   Without backups, your data only lives on the VPS. Telegram alerts: turned on later."""))
     a["monitoring"] = choose(L("Monitoreo", "Monitoring"), [
         ("auto", L("según la RAM del VPS (recomendado)", "depending on the VPS's RAM (recommended)")),
@@ -855,7 +855,7 @@ def write_config(a: dict, recipient: str) -> None:
                     "filled in by andamio server on first connection"),
         "forge": ("dónde viven tus repos (bin/forge)", "where your repos live (bin/forge)"),
         "registry": ("registro de las imágenes de tus apps", "registry for your apps' images"),
-        "backups": ("se activa con bin/andamio backups", "turned on by bin/andamio backups"),
+        "backups": ("se activa con andamio backups", "turned on by andamio backups"),
         "telegram": ("se activa con su configuración (bot y chat)", "turned on with its configuration (bot and chat)"),
     }.items()}
     write_if_missing(CONFIG, f"""{c['head']}
@@ -966,7 +966,7 @@ def cmd_init(args: argparse.Namespace) -> None:
    Si no lo haces, al mover SSH a tu puerto quedarías fuera del servidor.
 
 3. Prepara el servidor:
-     bin/andamio servidor""", f"""
+     andamio servidor""", f"""
 1. Push your configuration (it's encrypted):
      git add -A && git commit -m "andamio: my server" && git push
 
@@ -977,7 +977,7 @@ def cmd_init(args: argparse.Namespace) -> None:
    Otherwise, once SSH moves to your port, you'd be locked out of the server.
 
 3. Set up the server:
-     bin/andamio server"""))
+     andamio server"""))
 
 
 # ================= parte 2: el servidor =================
@@ -1610,13 +1610,13 @@ def cmd_servidor(args: argparse.Namespace) -> None:
 VPN: importa ~/andamio-vpn/mi-pc.conf en la app de WireGuard (paneles privados solo por VPN);
   celular: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf y escanéalo con la app.
 Grafana (si tu monitoreo es completo): https://grafana.{cfg.get('andamio_domain')} con la VPN.
-Primera app:  bin/andamio app create <nombre> --repo <dueño/repo>   (queda en https://<nombre>.{cfg.get('andamio_domain')})
-Chequeo de seguridad:  bin/andamio estado     Backups:  bin/andamio backups""", f"""
+Primera app:  andamio app create <nombre> --repo <dueño/repo>   (queda en https://<nombre>.{cfg.get('andamio_domain')})
+Chequeo de seguridad:  andamio estado     Backups:  andamio backups""", f"""
 VPN: import ~/andamio-vpn/mi-pc.conf into the WireGuard app (private panels only over the VPN);
   phone: qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf and scan it with the app.
 Grafana (if your monitoring is completo): https://grafana.{cfg.get('andamio_domain')} over the VPN.
-First app:  bin/andamio app create <name> --repo <owner/repo>   (it lives at https://<name>.{cfg.get('andamio_domain')})
-Security check:  bin/andamio status     Backups:  bin/andamio backups"""))
+First app:  andamio app create <name> --repo <owner/repo>   (it lives at https://<name>.{cfg.get('andamio_domain')})
+Security check:  andamio status     Backups:  andamio backups"""))
 
 
 # ================= backups =================
@@ -1632,8 +1632,8 @@ def server_alias() -> str:
     """El alias SSH del servidor: el primer host del inventario (lo crea andamio servidor)."""
     import yaml
     if not INVENTORY.exists():
-        die(L("Falta ansible/inventory.yml: corre primero `bin/andamio servidor`.",
-              "ansible/inventory.yml is missing: run `bin/andamio server` first."))
+        die(L("Falta ansible/inventory.yml: corre primero `andamio servidor`.",
+              "ansible/inventory.yml is missing: run `andamio server` first."))
     hosts = yaml.safe_load(INVENTORY.read_text())["all"]["children"]["servers"]["hosts"]
     return next(iter(hosts))
 
@@ -1832,8 +1832,8 @@ def cmd_backups(args: argparse.Namespace) -> None:
     cfg = load_config()
     alias = server_alias()
     if not ssh_ok([alias]):
-        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.",
-              f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
+        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `andamio servidor`.",
+              f"Can't reach the server ({alias}) over SSH: run `andamio server` first."))
     note(L("""
 Qué se guarda, cada noche (03:30 UTC): las bases de datos (PostgreSQL y Redis), los datos
 de tus apps y la plataforma (/srv/andamio), y lo necesario para reconstruir el servidor
@@ -1998,8 +1998,9 @@ can't read it. Notices go through ntfy.sh; if you prefer, use your own ntfy serv
             run_qr = subprocess.run(["qrencode", "-t", "ansiutf8", url], check=False)
             if run_qr.returncode == 0:
                 note(L("(o escanea el código con la cámara)", "(or scan the code with the camera)"))
-        ask(L("Cuando estés suscrito, presiona Enter para mandar una de prueba", "Once subscribed, press Enter to send a test one"),
-            "ok", check=lambda v: None)
+        sys.stdout.flush()
+        input(L("  Cuando estés suscrito, presiona Enter para mandar una de prueba… ",
+                "  Once subscribed, press Enter to send a test one… "))
     # La prueba sale DESDE el servidor: así se comprueba también que llega a ntfy.
     msg = L("Así se verán: un contenedor caído o el disco casi lleno. Todo bien por ahora.",
             "This is how they'll look: a container down or the disk almost full. All good for now.")
@@ -2539,8 +2540,8 @@ def cmd_estado(args: argparse.Namespace) -> None:
     cfg = load_config()
     alias = server_alias()
     if not ssh_ok([alias]):
-        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `bin/andamio servidor`.",
-              f"Can't reach the server ({alias}) over SSH: run `bin/andamio server` first."))
+        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `andamio servidor`.",
+              f"Can't reach the server ({alias}) over SSH: run `andamio server` first."))
     ip, ssh_port, domain = cfg["andamio_server_ip"], int(cfg["andamio_ssh_port"]), cfg["andamio_domain"]
     backups = str(cfg.get("andamio_backups", False)).lower() == "true"
 
@@ -2629,9 +2630,9 @@ def cmd_certificado(args: argparse.Namespace) -> None:
         title(L("Tu certificado (andamio_tls: custom)", "Your certificate (andamio_tls: custom)"))
         if not TLS_CERT.exists():
             die(L(f"No hay certificado propio en {TLS_CERT.relative_to(ROOT)}. Agrega uno con: "
-                  f"bin/andamio {cmd} <certificado> <llave>",
+                  f"andamio {cmd} <certificado> <llave>",
                   f"No custom certificate in {TLS_CERT.relative_to(ROOT)}. Add one with: "
-                  f"bin/andamio {cmd} <certificate> <key>"))
+                  f"andamio {cmd} <certificate> <key>"))
         info = cert_info(TLS_CERT)
         show_cert(info)
         for p in cert_warnings(info, cfg.get("andamio_domain", "")):
@@ -2641,7 +2642,7 @@ def cmd_certificado(args: argparse.Namespace) -> None:
                    f"Your configuration uses andamio_tls: {cfg.get('andamio_tls')}: this certificate isn't in use."))
         return
     if not args.key:
-        die(L(f"Falta la llave: bin/andamio {cmd} <certificado> <llave>", f"The key is missing: bin/andamio {cmd} <certificate> <key>"))
+        die(L(f"Falta la llave: andamio {cmd} <certificado> <llave>", f"The key is missing: andamio {cmd} <certificate> <key>"))
     if not shutil.which("openssl"):
         die(L("Falta openssl: sudo apt install openssl  |  brew install openssl",
               "openssl is missing: sudo apt install openssl  |  brew install openssl"))
@@ -2764,8 +2765,8 @@ def cmd_use(args: argparse.Namespace) -> None:
              f"Outside their folders, `andamio` uses {target}: {copy_label(target)}"))
         return
     if not copies:
-        note(L("Todavía no hay copias con configuración (se anotan al correr bin/andamio init).",
-               "No copies with a configuration yet (they're noted when you run bin/andamio init)."))
+        note(L("Todavía no hay copias con configuración (se anotan al correr andamio init).",
+               "No copies with a configuration yet (they're noted when you run andamio init)."))
         return
     print(L("Tus copias de andamio (● = la que usa `andamio` fuera de sus carpetas):",
             "Your andamio copies (● = the one `andamio` uses outside their folders):"))

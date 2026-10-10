@@ -14,7 +14,7 @@ BACKUPS=${BACKUPS:-false}
 ok() { echo "OK|$1|$2"; }
 warn() { echo "WARN|$1|$2|$3"; }
 fail() { echo "FAIL|$1|$2|$3"; }
-REAPPLY=$(L "bin/andamio servidor (vuelve a aplicar el endurecimiento)" "bin/andamio server (re-applies the hardening)")
+REAPPLY=$(L "andamio servidor (vuelve a aplicar el endurecimiento)" "andamio server (re-applies the hardening)")
 ONSERVER=$(L "en el servidor" "on the server")
 A_FW=Firewall; A_PATCH=$(L Parches Patches); A_DISK=$(L Disco Disk); A_TIME=$(L Hora Clock)
 A_CERT=$(L Certificados Certificates); A_CT=$(L Contenedores Containers); A_ISO=$(L Aislamiento Isolation)
@@ -85,7 +85,7 @@ if [ "$BACKUPS" = true ]; then
   elif [ "$last" -gt 26 ]; then fail Backups "$(L "El último backup es de hace $last horas" "The last backup is $last hours old")" "$journal"
   else ok Backups "$(L "Último backup hace $last h, fuera del servidor y cifrado" "Last backup $last h ago, off the server and encrypted")"; fi
 else
-  warn Backups "$(L "Sin backups: tus datos solo viven en este servidor" "No backups: your data only lives on this server")" "bin/andamio backups"
+  warn Backups "$(L "Sin backups: tus datos solo viven en este servidor" "No backups: your data only lives on this server")" "andamio backups"
 fi
 
 # --- Certificados (los que sirve Traefik) ---
@@ -101,7 +101,7 @@ else
     days=$(( (exp - now) / 86400 )); n=$((n + 1))
     [ "$days" -lt "$soonest" ] && soonest=$days
     if [ "$days" -lt 14 ]; then fail "$A_CERT" "$(L "$cn vence en $days días" "$cn expires in $days days")" \
-      "$acme $(L "(o bin/andamio certificado si es propio)" "(or bin/andamio certificate if it's your own)")"
+      "$acme $(L "(o andamio certificado si es propio)" "(or andamio certificate if it's your own)")"
     elif [ "$days" -lt 25 ]; then warn "$A_CERT" "$(L "$cn vence en $days días (debería haberse renovado)" "$cn expires in $days days (it should have renewed)")" "$acme"; fi
   done <<< "$certs"
   [ "$soonest" -ge 25 ] && ok "$A_CERT" "$(L "$n vigentes; el más próximo vence en $soonest días (se renuevan solos)" \
