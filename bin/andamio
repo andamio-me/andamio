@@ -2270,15 +2270,26 @@ def cmd_update(args: argparse.Namespace) -> None:
                "quédate con lo correcto de cada lado.",
                "Resolve the conflicts: look for the <<<<<<< and >>>>>>> markers in the files above and keep "
                "the right part of each side."))
+    elif ask_yes(L("¿Lo subo ya? (commit y push; `git show` lo muestra y `git revert HEAD` lo deshace)",
+                   "Push it now? (commit and push; `git show` shows it and `git revert HEAD` undoes it)"), True):
+        git = ["git", "-C", str(ROOT)]
+        if (run([*git, "add", "-A"]).returncode == 0
+                and run([*git, "commit", "-qm", f"andamio: actualización a {new[:8]}"]).returncode == 0
+                and interactive([*git, "push", "-q"]) == 0):
+            ok(L("Subido.", "Pushed."))
+            note(L("Aplícalo en el servidor cuando quieras:  andamio servidor",
+                   "Apply it on the server whenever you want:  andamio server"))
+            return
+        warn(L("No pude subirlo: hazlo a mano (abajo).", "Couldn't push it: do it by hand (below)."))
     note(L("""
 Revisa lo que cambió y súbelo; después aplícalo en el servidor:
   git diff --stat          (git diff: el detalle; git reset --hard && git clean -fd: lo deshace todo)
   git add -A && git commit -m "andamio: actualización" && git push
-  bin/andamio servidor     (aplica lo nuevo; también puedes: ansible/hl revisar, luego aplicar)""", """
+  andamio servidor         (aplica lo nuevo)""", """
 Review what changed and push it; then apply it on the server:
   git diff --stat          (git diff: details; git reset --hard && git clean -fd: undoes it all)
   git add -A && git commit -m "andamio: update" && git push
-  bin/andamio server       (applies what's new; or: ansible/hl check, then apply)"""))
+  andamio server           (applies what's new)"""))
 
 
 # ================= estado =================

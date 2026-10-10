@@ -290,7 +290,7 @@ All in `ansible/group_vars/all.yml`:
 
 ```bash
 andamio update --check   # what would change
-andamio update           # apply, then: git diff, commit, push, andamio server
+andamio update           # apply (offers commit and push at the end); then: andamio server
 ```
 
 Brings in andamio's improvements and security fixes without touching what's yours: your

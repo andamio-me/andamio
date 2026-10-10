@@ -297,7 +297,7 @@ Todo en `ansible/group_vars/all.yml`:
 
 ```bash
 andamio update --check   # qué cambiaría
-andamio update           # aplicar; luego: git diff, commit, push, andamio servidor
+andamio update           # aplicar (al final ofrece commit y push); luego: andamio servidor
 ```
 
 Trae las mejoras y los parches de seguridad de andamio sin tocar lo tuyo: tu configuración,
