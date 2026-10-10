@@ -202,6 +202,10 @@ def choose(question: str, options: list[tuple[str, str]], default: str) -> str:
 
 
 def ask_yes(question: str, default: bool) -> bool:
+    """Sí o no: con flechas en una terminal; escrito (s/n) en pipes y pruebas."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        yes = L("sí", "yes")
+        return choose(question, [(yes, ""), ("no", "")], yes if default else "no") == yes
     yes, no = L("s", "y"), "n"
     answer = ask(question, yes if default else no,
                  lambda v: None if v.lower() in ("s", "si", "sí", "y", "yes", "n", "no")
