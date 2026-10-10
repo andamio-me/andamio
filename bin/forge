@@ -183,7 +183,31 @@ jobs:
             time.sleep(3)
         if not run_id:
             fail(L("Ese repo no tiene corridas de CI (¿Actions desactivado?).", "That repo has no CI runs (Actions disabled?)."))
-        return subprocess.run(["gh", "run", "watch", run_id, *where, "--exit-status"], check=False).returncode
+        rc = subprocess.run(["gh", "run", "watch", run_id, *where, "--exit-status"], check=False).returncode
+        if rc != 0:
+            self.explain_run(run_id, where)
+        return rc
+
+    def explain_run(self, run_id: str, where: list[str]) -> None:
+        """Por qué falló una corrida: el paso, sus últimas líneas de log y el link."""
+        r = self.gh("run", "view", run_id, *where, "--json", "url,jobs")
+        try:
+            info = json.loads(r.stdout)
+        except ValueError:
+            return
+        failed = [(j["name"], [s["name"] for s in j.get("steps") or [] if s.get("conclusion") == "failure"])
+                  for j in info.get("jobs") or [] if j.get("conclusion") == "failure"]
+        if not info.get("jobs"):
+            print(L("  ✗ GitHub rechazó el workflow antes de empezar (no hay logs). Lo típico: un repo público "
+                    "que usa el pipeline de tu repo privado de andamio; hazlo privado.",
+                    "  ✗ GitHub rejected the workflow before starting (no logs). Usually: a public repo using "
+                    "the pipeline from your private andamio repo; make it private."))
+        for job, steps in failed:
+            print(f"  ✗ {job}" + (f": {', '.join(steps)}" if steps else ""))
+        if failed:
+            log = self.gh("run", "view", run_id, *where, "--log-failed").stdout.splitlines()[-25:]
+            print("\n".join("    " + line.split("\t", 2)[-1] for line in log))
+        print(L(f"  Detalle: {info.get('url', '')}", f"  Details: {info.get('url', '')}"))
 
     def registry(self) -> str:
         return "ghcr.io"
