@@ -2186,7 +2186,8 @@ LOCALHOST = re.compile(
 FIXED_PORT = re.compile(r"""(?:listen\s*\(\s*|port\s*[=:]\s*|ListenAndServe\(\s*":)(\d{2,5})\b""", re.I)
 DISK = re.compile(
     r"""(sqlite3?|better-sqlite3|\.sqlite\b|\.db['"]|provider\s*=\s*"sqlite"|multer\(|UPLOAD_FOLDER|MEDIA_ROOT"""
-    r"""|writeFile(Sync)?\(|open\([^)]*['"][wa]b?['"])""")
+    r"""|writeFile(Sync)?\(|appendFile(Sync)?\(|createWriteStream\(|open\([^)]*['"][wa]b?\+?['"]"""
+    r"""|\.write_(text|bytes)\(|\.open\(\s*['"][wa]|\.save\(\s*['"/]|os\.WriteFile\(|os\.Create\()""")
 
 
 def precheck_findings(d: Path, port: str, has_volume: bool) -> list[tuple[bool, str]]:
