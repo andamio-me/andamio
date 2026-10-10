@@ -1981,7 +1981,21 @@ def cmd_scaffold(args: argparse.Namespace) -> None:
     if kind in ("node", "python"):
         extra, start = node_values(d) if kind == "node" else python_values(d)
         values.update(extra)
-        start = ask(L("Comando para arrancar tu app (puede usar $PORT)", "Command that starts your app (may use $PORT)"), start)
+        print(L(f"  Tu app arrancará con:  \033[1m{start}\033[0m\n"
+                f"  \033[2m(escucha en el puerto {port}: andamio le pasa $PORT={port})\033[0m",
+                f"  Your app will start with:  \033[1m{start}\033[0m\n"
+                f"  \033[2m(it listens on port {port}: andamio passes it $PORT={port})\033[0m"))
+        if not ask_yes(L("¿Arranca así?", "Start it like this?"), True):
+            while True:
+                ans = ask(L("Comando que arranca tu app (como lo correrías en tu máquina; usa $PORT para el puerto)",
+                            "Command that starts your app (as you'd run it locally; use $PORT for the port)"), "").strip()
+                if ans.isdigit():   # respondieron un puerto: el comando sugerido ya usa $PORT
+                    port = values["PORT"] = ans
+                    ok(L(f"Puerto {port}, con el comando sugerido.", f"Port {port}, with the suggested command."))
+                    break
+                if ans:
+                    start = ans
+                    break
         values["START"] = start.replace("\\", "\\\\").replace('"', '\\"')
     elif kind == "go":
         values.update(go_values(d))
