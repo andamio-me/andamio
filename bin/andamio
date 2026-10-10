@@ -10,12 +10,16 @@
                     con el arreglo de cada problema (no cambia nada)
   andamio backups   backups diarios, cifrados y fuera del servidor (B2 o S3): los
                     configura, hace el primero y prueba que se puede restaurar
-  andamio app ...   tus apps: create, secret (set/rm/list), list, logs, rollback, destroy
+  andamio app ...   tus apps: create, secret (set/rm/list), apply, list, logs, stop/start,
+                    rollback, destroy
   andamio update    trae las mejoras y parches de andamio (fusión de tres vías por
                     archivo) sin tocar tu configuración, tus apps ni tus secretos
   andamio certificado [cert llave]
                     tu propio certificado HTTPS (andamio_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
+  andamio use [carpeta|dominio]
+                    con varios servidores: qué copia usa `andamio` fuera de sus carpetas
+                    (dentro de una, usa esa; `andamio` se instala en ~/.local/bin)
 
 Todo lo que genera queda en este repo (cifrado donde corresponde). Nada se sobreescribe:
 si un archivo ya existe, se respeta.
@@ -2513,6 +2517,7 @@ def overview() -> None:
   app logs <app>               logs en vivo
   app secret set|rm|list <app> [CLAVE]      variables y secretos (el valor se pide oculto)
                                {d('--later: guarda sin aplicar; después, una vez: app apply <app>')}
+  app apply [<app>]            aplica lo pendiente en el servidor (y reintenta un deploy fallido)
   app domain add|rm|list <app> [dominio]    un dominio propio además de <app>.tudominio
   app cors add|rm|list <app> [origen]       frontend en otro lado (Vercel...)
   app stop|start <app>         apagarla sin borrar nada / volver
@@ -2546,6 +2551,7 @@ def overview() -> None:
   app logs <app>               live logs
   app secret set|rm|list <app> [KEY]        variables and secrets (the value is asked hidden)
                                {d('--later: save without applying; then, once: app apply <app>')}
+  app apply [<app>]            applies what's pending on the server (and retries a failed deploy)
   app domain add|rm|list <app> [domain]     an own domain besides <app>.yourdomain
   app cors add|rm|list <app> [origin]       frontend hosted elsewhere (Vercel...)
   app stop|start <app>         turn it off without deleting anything / back on
@@ -2580,9 +2586,14 @@ def main() -> None:
         cmd_scaffold(argparse.Namespace(dir=args[1], port=args[2], out=args[3]))
         return
     if args[0] == "_apply":      # interno (andamio app ...): aplica la plataforma en el servidor
+        # Con una app: solo esa (segundos); sin ella, la plataforma entera.
+        app = args[1] if len(args) > 1 else ""
+        if app and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", app):
+            die(L(f"Nombre de app inválido: {app}", f"Invalid app name: {app}"))
+        playbook = ["una-app.yml", "-e", f"andamio_app_name={app}"] if app else ["site.yml", "--tags", "andamio"]
         cfg, alias = load_config(), server_alias()
         try:
-            rc = ansible(["site.yml", "--tags", "andamio"], cfg, alias)
+            rc = ansible(playbook, cfg, alias)
         finally:
             wipe_sudo()
         sys.exit(rc)

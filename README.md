@@ -84,7 +84,7 @@ written down.
 - A **GitHub** account (your apps live there and their images in GHCR).
 - Your machine: **Linux** (Ubuntu/Debian), **macOS**, or **Windows with WSL**
   ([install WSL](https://learn.microsoft.com/windows/wsl/install): `wsl --install` in
-  PowerShell, then work inside Ubuntu). `bin/andamio setup` installs everything else.
+  PowerShell, then work inside Ubuntu). `andamio setup` installs everything else.
 
 ## Quickstart
 
@@ -100,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh |
 # 2. In your copy: answer a few questions. Creates your config, an encryption key (age)
 #    and the platform secrets, all encrypted. Touches no server.
 cd ~/my-andamio
-bin/andamio init
+andamio init
 
 # 3. Commit your encrypted configuration
 git add -A && git commit -m "andamio: my server" && git push
@@ -108,7 +108,7 @@ git add -A && git commit -m "andamio: my server" && git push
 # 4. Prepare the server: verifies its SSH fingerprint, installs your key (works whether
 #    your provider gave you a key or a root password), creates your user, hardens it,
 #    sets up the VPN and starts the platform. Safe to re-run: it resumes.
-bin/andamio server
+andamio server
 ```
 
 ### Before `andamio server`: two checks at your provider
@@ -127,7 +127,12 @@ bin/andamio server
 Then import `~/andamio-vpn/mi-pc.conf` into the WireGuard app (or show it as a QR code for
 your phone with `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 
-`bin/andamio help` lists every command, in the order you'll use them.
+`andamio help` lists every command, in the order you'll use them.
+
+`andamio` works from any folder (`setup` installs it in `~/.local/bin`): inside your copy it
+uses that one, and elsewhere, the last one you used. Several servers, each with its copy?
+`andamio use` lists them and `andamio use <folder or domain>` picks the one to use outside
+their folders.
 
 ## Deploy your first app
 
@@ -141,7 +146,7 @@ the start command and review it before anything is pushed. Optionally:
 - an HTTP **health route** (e.g. `/healthz`) that returns 200 when the app is ready.
 
 ```bash
-bin/andamio app create myapp --repo <you>/myapp --health /healthz
+andamio app create myapp --repo <you>/myapp --health /healthz
 ```
 
 It registers the app (deploy key, CI variables, database and Redis user if you ask for
@@ -173,9 +178,9 @@ internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root do
 `--mem 512m`.
 
 ```bash
-bin/andamio app stop myapp      # off, without deleting anything (data, database, secrets, domain)
-bin/andamio app start myapp     # back on
-bin/andamio app destroy myapp   # gone for good: asks you to type its name, backs up its database first
+andamio app stop myapp      # off, without deleting anything (data, database, secrets, domain)
+andamio app start myapp     # back on
+andamio app destroy myapp   # gone for good: asks you to type its name, backs up its database first
 ```
 
 A stopped app stays stopped when you re-apply the server, and a `git push` won't deploy it
@@ -184,7 +189,7 @@ until you `start` it.
 ### Backend only (frontend on Vercel or elsewhere)
 
 ```bash
-bin/andamio app create api --repo <you>/backend --db --redis --public --host api \
+andamio app create api --repo <you>/backend --db --redis --public --host api \
   --cors https://myapp.vercel.app --domain api.mycompany.com
 ```
 
@@ -196,7 +201,7 @@ bin/andamio app create api --repo <you>/backend --db --redis --public --host api
 - `--domain`: your own domain on top of `api.yourdomain`, with its own Let's Encrypt
   certificate (point its DNS A record to the server first). Repeatable.
 
-Later: `bin/andamio app cors add|rm|list api <origin>` and `bin/andamio app domain add|rm|list api <domain>`.
+Later: `andamio app cors add|rm|list api <origin>` and `andamio app domain add|rm|list api <domain>`.
 
 ### Secrets
 
@@ -205,16 +210,26 @@ Two kinds, two places:
 **Runtime** (your app reads them while running: API keys, SMTP, Stripe...):
 
 ```bash
-bin/andamio app secret set myapp ANTHROPIC_API_KEY   # asks for the value, hidden
-cat key.txt | bin/andamio app secret set myapp ANTHROPIC_API_KEY   # or from a pipe
-bin/andamio app secret list myapp                    # names only, never values
-bin/andamio app secret rm myapp ANTHROPIC_API_KEY
+andamio app secret set myapp ANTHROPIC_API_KEY   # asks for the value, hidden
+cat key.txt | andamio app secret set myapp ANTHROPIC_API_KEY   # or from a pipe
+andamio app secret list myapp                    # names only, never values
+andamio app secret rm myapp ANTHROPIC_API_KEY
 ```
 
 The value never goes on the command line (so not into your shell history). It's stored
 encrypted with sops in `apps/myapp/secrets.sops.env`, committed (the commit message carries
-only the name), and applied: the app restarts with the new variable. `DOMAIN`,
-`DATABASE_URL`, `REDIS_URL` and `TAG` are set by andamio and can't be changed by hand.
+only the name), and applied: the app restarts with the new variable. If it already existed,
+its value is replaced (`✓ updated`). If the last deploy had failed (typically: it was
+missing that variable), it offers to retry it right there. `DOMAIN`, `DATABASE_URL`,
+`REDIS_URL` and `TAG` are set by andamio and can't be changed by hand.
+
+For several at once, save them without applying and apply at the end (one password, one restart):
+
+```bash
+andamio app secret set myapp STRIPE_KEY --later
+andamio app secret set myapp SMTP_PASSWORD --later
+andamio app apply myapp
+```
 
 Why not GitHub Secrets for these? They only exist inside CI: getting them to the server
 would mean the deploy key carries secrets, and they're write-only, so a rebuilt server
@@ -264,15 +279,15 @@ All in `ansible/group_vars/all.yml`:
 |---|---|
 | `andamio_tls` | `http` (default: one Let's Encrypt certificate per app, any DNS provider), `cloudflare` (one wildcard certificate; needs the zone in Cloudflare and an API token) or `custom` (your own certificate, see below) |
 | `andamio_forge` | `github` (default). Everything andamio needs from it goes through `bin/forge`; adding GitLab means implementing that one file plus its pipeline |
-| `andamio_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma) |
-| `andamio_backups` | `false` (default). `bin/andamio backups` turns it on: see below |
+| `andamio_monitoring` | `auto` (default), `minimo` (~115 MiB: metrics) or `completo` (~670 MiB: + logs, Grafana with alerts, Uptime Kuma). Going down to `minimo` stops what's left over; its data stays in case you go back |
+| `andamio_backups` | `false` (default). `andamio backups` turns it on: see below |
 | `andamio_telegram` | `false` (default) or `true` with a bot token and chat id in `host/sops/telegram-env.sops` |
 
 ### Updates
 
 ```bash
-bin/andamio update --check   # what would change
-bin/andamio update           # apply, then: git diff, commit, push, bin/andamio server
+andamio update --check   # what would change
+andamio update           # apply, then: git diff, commit, push, andamio server
 ```
 
 Brings in andamio's improvements and security fixes without touching what's yours: your
@@ -286,7 +301,7 @@ update shows up in `git diff` and can be undone.
 ### Security check
 
 ```bash
-bin/andamio status
+andamio status
 ```
 
 Read-only. On the server: SSH (keys only, no root, your port), firewall, automatic security
@@ -300,7 +315,7 @@ with its fix; exit code 1 if there are problems.
 ### Backups
 
 ```bash
-bin/andamio backups
+andamio backups
 ```
 
 Asks where to store them (Backblaze B2 or any S3-compatible storage: AWS, Cloudflare R2,
@@ -321,8 +336,8 @@ With a certificate from a commercial CA, or a Cloudflare Origin Certificate, cho
 `custom` in `andamio init`, or switch later:
 
 ```bash
-bin/andamio certificado fullchain.pem private.key   # validates, then stores it (key encrypted with sops)
-bin/andamio certificado                             # shows the current one and its expiry
+andamio certificado fullchain.pem private.key   # validates, then stores it (key encrypted with sops)
+andamio certificado                             # shows the current one and its expiry
 ```
 
 It checks that the key matches, that the certificate covers `yourdomain` and `*.yourdomain`,

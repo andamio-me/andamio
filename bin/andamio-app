@@ -393,7 +393,7 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
   git -C "$INFRA" commit -qm "feat(apps): $name $key $sub $value"
   git -C "$INFRA" push -q
   step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
-  "$INFRA/bin/andamio" _apply
+  "$INFRA/bin/andamio" _apply "$name"   # solo esta app
   echo
   if [ "$key" = domains ] && [ "$sub" = add ]; then
     L "✓ https://$value → $name (su certificado de Let's Encrypt se pide en el primer acceso)" \
@@ -486,7 +486,7 @@ app_apply() {
   [ -z "$(git -C "$INFRA" log --oneline '@{u}..' 2> /dev/null)" ] || git -C "$INFRA" push -q
   step "$(L "Servidor: aplicar los cambios${name:+ de $name} (pide tu contraseña de sudo)" \
             "Server: apply the changes${name:+ to $name} (asks for your sudo password)")"
-  "$INFRA/bin/andamio" _apply
+  "$INFRA/bin/andamio" _apply ${name:+"$name"}   # con app: solo esa (segundos)
 
   [ -n "$name" ] || return 0
   repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$name/app.yml")

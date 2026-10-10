@@ -1,0 +1,19 @@
+# Aplica una sola app en el servidor: baja la configuración y corre solo sus tareas (.env,
+# base, arranque), sin tocar el resto de la plataforma. Lo usan `andamio app secret`,
+# `app apply <app>`, `app domain` y `app cors`; el apply completo es site.yml.
+#   ansible-playbook una-app.yml -e andamio_app_name=<app>
+
+- name: Una app
+  hosts: servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Repo de andamio al día
+      ansible.builtin.include_role:
+        name: andamio
+        tasks_from: repo.yml
+
+    - name: La app
+      ansible.builtin.include_role:
+        name: andamio
+        tasks_from: app.yml

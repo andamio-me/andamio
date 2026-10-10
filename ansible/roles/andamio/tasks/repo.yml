@@ -1,0 +1,10 @@
+# Tu copia de andamio en el servidor, al día con main (la usan main.yml y una-app.yml).
+# Falla si hay cambios locales sin commitear: nunca los pisa.
+- name: Repo de andamio al día
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.git:
+    repo: "{{ andamio_repo }}"
+    dest: "{{ andamio_infra }}"
+    version: main
+    accept_newhostkey: true

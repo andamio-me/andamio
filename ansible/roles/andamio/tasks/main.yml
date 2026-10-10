@@ -78,15 +78,8 @@
     - { path: "{{ andamio_root }}", mode: "0750" }
     - { path: "{{ andamio_root }}/apps", mode: "0755" }
 
-# Falla si hay cambios locales sin commitear: nunca los pisa.
 - name: Repo de andamio al día
-  become: true
-  become_user: "{{ andamio_user }}"
-  ansible.builtin.git:
-    repo: "{{ andamio_repo }}"
-    dest: "{{ andamio_infra }}"
-    version: main
-    accept_newhostkey: true
+  ansible.builtin.include_tasks: repo.yml
 
 # .env de cada stack: vienen cifrados del repo (<stack>/secrets.sops.env) y se
 # descifran en tu WSL con tu llave age. El servidor nunca tiene la llave.

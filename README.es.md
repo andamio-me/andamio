@@ -88,7 +88,7 @@ está escrita.
 - Una cuenta de **GitHub** (ahí viven tus apps, y sus imágenes en GHCR).
 - Tu máquina: **Linux** (Ubuntu/Debian), **macOS**, o **Windows con WSL**
   ([instalar WSL](https://learn.microsoft.com/es-es/windows/wsl/install): `wsl --install` en
-  PowerShell, y luego trabajas dentro de Ubuntu). `bin/andamio setup` instala todo lo demás.
+  PowerShell, y luego trabajas dentro de Ubuntu). `andamio setup` instala todo lo demás.
 
 ## Inicio rápido
 
@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh |
 # 2. En tu copia: responde unas preguntas. Crea tu configuración, una llave de cifrado
 #    (age) y los secretos de la plataforma, todo cifrado. No toca ningún servidor.
 cd ~/mi-andamio
-bin/andamio init
+andamio init
 
 # 3. Sube tu configuración cifrada
 git add -A && git commit -m "andamio: mi servidor" && git push
@@ -112,7 +112,7 @@ git add -A && git commit -m "andamio: mi servidor" && git push
 # 4. Prepara el servidor: verifica su huella SSH, instala tu llave (sirve tanto si tu
 #    proveedor te dio una llave como una contraseña de root), crea tu usuario, lo
 #    endurece, arma la VPN y levanta la plataforma. Se puede repetir: retoma donde quedó.
-bin/andamio servidor
+andamio servidor
 ```
 
 ### Antes de `andamio servidor`: dos comprobaciones en tu proveedor
@@ -131,7 +131,12 @@ bin/andamio servidor
 Después importa `~/andamio-vpn/mi-pc.conf` en la app de WireGuard (o muéstralo como QR
 para el celular con `qrencode -t ansiutf8 < ~/andamio-vpn/mi-pc.conf`).
 
-`bin/andamio help` muestra todos los comandos, en el orden en que se usan.
+`andamio help` muestra todos los comandos, en el orden en que se usan.
+
+`andamio` funciona en cualquier carpeta (el `setup` lo instala en `~/.local/bin`): dentro
+de tu copia usa esa, y afuera, la última que usaste. ¿Varios servidores, cada uno con su
+copia? `andamio use` las lista y `andamio use <carpeta o dominio>` elige cuál usar fuera de
+sus carpetas.
 
 ## Despliega tu primera app
 
@@ -146,7 +151,7 @@ comando de arranque y lo revisas antes de que se suba nada. Opcionalmente:
 - una **ruta de salud** HTTP (p. ej. `/healthz`) que responda 200 cuando la app está lista.
 
 ```bash
-bin/andamio app create miapp --repo <tú>/miapp --health /healthz
+andamio app create miapp --repo <tú>/miapp --health /healthz
 ```
 
 Registra la app (llave de deploy, variables del CI, base y usuario de Redis si los pides) y
@@ -177,9 +182,9 @@ desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (do
 `--mem 512m`.
 
 ```bash
-bin/andamio app stop miapp      # apagarla sin borrar nada (datos, base, secretos, dominio)
-bin/andamio app start miapp     # volver a encenderla
-bin/andamio app destroy miapp   # borrarla del todo: pide escribir su nombre y respalda su base antes
+andamio app stop miapp      # apagarla sin borrar nada (datos, base, secretos, dominio)
+andamio app start miapp     # volver a encenderla
+andamio app destroy miapp   # borrarla del todo: pide escribir su nombre y respalda su base antes
 ```
 
 Una app detenida sigue detenida aunque vuelvas a aplicar el servidor, y un `git push` no la
@@ -188,7 +193,7 @@ despliega hasta que hagas `start`.
 ### Solo el backend (frontend en Vercel u otro lado)
 
 ```bash
-bin/andamio app create api --repo <tú>/backend --db --redis --public --host api \
+andamio app create api --repo <tú>/backend --db --redis --public --host api \
   --cors https://miapp.vercel.app --domain api.suempresa.com
 ```
 
@@ -201,7 +206,7 @@ bin/andamio app create api --repo <tú>/backend --db --redis --public --host api
 - `--domain`: un dominio propio además de `api.tudominio`, con su certificado de Let's
   Encrypt (apunta antes su registro A al servidor). Se puede repetir.
 
-Después: `bin/andamio app cors add|rm|list api <origen>` y `bin/andamio app domain add|rm|list api <dominio>`.
+Después: `andamio app cors add|rm|list api <origen>` y `andamio app domain add|rm|list api <dominio>`.
 
 ### Secretos
 
@@ -210,16 +215,26 @@ Dos tipos, dos lugares:
 **De ejecución** (tu app los lee mientras corre: claves de API, SMTP, Stripe...):
 
 ```bash
-bin/andamio app secret set miapp ANTHROPIC_API_KEY   # pide el valor, oculto
-cat clave.txt | bin/andamio app secret set miapp ANTHROPIC_API_KEY   # o desde un pipe
-bin/andamio app secret list miapp                    # solo nombres, nunca valores
-bin/andamio app secret rm miapp ANTHROPIC_API_KEY
+andamio app secret set miapp ANTHROPIC_API_KEY   # pide el valor, oculto
+cat clave.txt | andamio app secret set miapp ANTHROPIC_API_KEY   # o desde un pipe
+andamio app secret list miapp                    # solo nombres, nunca valores
+andamio app secret rm miapp ANTHROPIC_API_KEY
 ```
 
 El valor nunca va en la línea de comandos (ni queda en el historial de tu terminal). Se
 guarda cifrado con sops en `apps/miapp/secrets.sops.env`, se hace commit (el mensaje lleva
-solo el nombre) y se aplica: la app se reinicia con la variable nueva. `DOMAIN`,
-`DATABASE_URL`, `REDIS_URL` y `TAG` los pone andamio y no se cambian a mano.
+solo el nombre) y se aplica: la app se reinicia con la variable nueva. Si ya existía, su
+valor se reemplaza (`✓ actualizado`). Si el último deploy había fallado (típico: le faltaba
+esa variable), te ofrece reintentarlo ahí mismo. `DOMAIN`, `DATABASE_URL`, `REDIS_URL` y
+`TAG` los pone andamio y no se cambian a mano.
+
+Para varias de una vez, guárdalas sin aplicar y aplica al final (una contraseña, un reinicio):
+
+```bash
+andamio app secret set miapp STRIPE_KEY --later
+andamio app secret set miapp SMTP_PASSWORD --later
+andamio app apply miapp
+```
 
 ¿Por qué no GitHub Secrets para estos? Solo existen dentro del CI: llevarlos al servidor
 obligaría a que la llave de deploy transporte secretos, y son de solo escritura, así que un
@@ -270,15 +285,15 @@ Todo en `ansible/group_vars/all.yml`:
 |---|---|
 | `andamio_tls` | `http` (por defecto: un certificado de Let's Encrypt por app, con cualquier DNS), `cloudflare` (un certificado comodín; necesita la zona en Cloudflare y un token de API) o `custom` (tu propio certificado, ver abajo) |
 | `andamio_forge` | `github` (por defecto). Todo lo que andamio necesita de ella pasa por `bin/forge`; agregar GitLab es implementar ese archivo y su pipeline |
-| `andamio_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma) |
-| `andamio_backups` | `false` (por defecto). Lo activa `bin/andamio backups`: ver abajo |
+| `andamio_monitoring` | `auto` (por defecto), `minimo` (~115 MiB: métricas) o `completo` (~670 MiB: + logs, Grafana con alertas, Uptime Kuma). Bajar a `minimo` apaga lo que sobra; sus datos quedan por si vuelves |
+| `andamio_backups` | `false` (por defecto). Lo activa `andamio backups`: ver abajo |
 | `andamio_telegram` | `false` (por defecto) o `true`, con el token del bot y el chat en `host/sops/telegram-env.sops` |
 
 ### Actualizaciones
 
 ```bash
-bin/andamio update --check   # qué cambiaría
-bin/andamio update           # aplicar; luego: git diff, commit, push, bin/andamio servidor
+andamio update --check   # qué cambiaría
+andamio update           # aplicar; luego: git diff, commit, push, andamio servidor
 ```
 
 Trae las mejoras y los parches de seguridad de andamio sin tocar lo tuyo: tu configuración,
@@ -292,7 +307,7 @@ limpio, así que toda la actualización se ve en `git diff` y se puede deshacer.
 ### Chequeo de seguridad
 
 ```bash
-bin/andamio estado
+andamio estado
 ```
 
 No cambia nada. En el servidor: SSH (solo llave, sin root, tu puerto), firewall, parches de
@@ -307,7 +322,7 @@ hay problemas.
 ### Backups
 
 ```bash
-bin/andamio backups
+andamio backups
 ```
 
 Pregunta dónde guardarlos (Backblaze B2 o cualquier almacenamiento compatible con S3:
@@ -328,8 +343,8 @@ Con un certificado de una CA comercial, o un Origin Certificate de Cloudflare, e
 `custom` en `andamio init`, o cámbialo después:
 
 ```bash
-bin/andamio certificado fullchain.pem privada.key   # lo valida y lo guarda (la llave, cifrada con sops)
-bin/andamio certificado                             # muestra el actual y cuándo vence
+andamio certificado fullchain.pem privada.key   # lo valida y lo guarda (la llave, cifrada con sops)
+andamio certificado                             # muestra el actual y cuándo vence
 ```
 
 Revisa que la llave corresponda, que cubra `tudominio` y `*.tudominio`, que traiga la
