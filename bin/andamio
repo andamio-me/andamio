@@ -2270,11 +2270,18 @@ def cmd_update(args: argparse.Namespace) -> None:
                "quédate con lo correcto de cada lado.",
                "Resolve the conflicts: look for the <<<<<<< and >>>>>>> markers in the files above and keep "
                "the right part of each side."))
-    elif ask_yes(L("¿Lo subo ya? (commit y push; `git show` lo muestra y `git revert HEAD` lo deshace)",
-                   "Push it now? (commit and push; `git show` shows it and `git revert HEAD` undoes it)"), True):
+    elif (how := choose(L("¿Lo subo ya? (commit y push; `git revert HEAD` lo deshace)",
+                          "Push it now? (commit and push; `git revert HEAD` undoes it)"), [
+            ("si", L(f"Sí, con el mensaje «andamio: actualización a {new[:8]}»",
+                     f"Yes, with the message 'andamio: update to {new[:8]}'")),
+            ("mensaje", L("Sí, escribo yo el mensaje", "Yes, I'll write the message")),
+            ("no", L("No, primero lo reviso (git diff)", "No, I'll review it first (git diff)"))], "si")) != "no":
+        msg = L(f"andamio: actualización a {new[:8]}", f"andamio: update to {new[:8]}")
+        if how == "mensaje":
+            msg = ask(L("Mensaje del commit", "Commit message"), msg)
         git = ["git", "-C", str(ROOT)]
         if (run([*git, "add", "-A"]).returncode == 0
-                and run([*git, "commit", "-qm", f"andamio: actualización a {new[:8]}"]).returncode == 0
+                and run([*git, "commit", "-qm", msg]).returncode == 0
                 and interactive([*git, "push", "-q"]) == 0):
             ok(L("Subido.", "Pushed."))
             note(L("Aplícalo en el servidor cuando quieras:  andamio servidor",
