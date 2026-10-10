@@ -121,3 +121,7 @@
     chdir: "{{ andamio_app_dir }}"
   register: andamio_app_stop
   changed_when: "'detenida' in andamio_app_stop.stdout"
+
+# --- Tareas programadas (cron: en app.yml) ---
+- name: "{{ andamio_app_name }}: tareas programadas"
+  ansible.builtin.include_tasks: app-cron.yml

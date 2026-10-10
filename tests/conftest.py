@@ -104,11 +104,14 @@ def fake_copy(make_repo, env):
         "apps/web/app.yml": APP_YML,
         "apps/web/secrets.sops.env": "# relleno: los tests no descifran nada\n",
     }
+    files[".gitignore"] = (ROOT / ".gitignore").read_text()
     d = make_repo("copia", files)
     (d / "bin").mkdir()
     for name in ("andamio", "andamio-app", "forge"):
         shutil.copy2(ROOT / "bin" / name, d / "bin" / name)
     shutil.copytree(ROOT / "templates", d / "templates")
+    shutil.copytree(ROOT / "ansible" / "filter_plugins", d / "ansible" / "filter_plugins",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, env=env)
     subprocess.run(["git", "-C", str(d), "commit", "-qm", "bin"], check=True, env=env)
     return d

@@ -65,6 +65,8 @@ usage() {
   andamio app domain add|rm|list <nombre> [api.suempresa.com]   (dominio propio, además del tuyo)
   andamio app cors add|rm|list <nombre> [https://miapp.vercel.app]   (frontend en otro lado)
   andamio app volume add|rm|list <nombre> [/data]   (carpeta que persiste entre deploys, con backup)
+  andamio app cron add <nombre> '<horario>' '<comando>' [--name limpiar]   (tarea programada, ej. '0 3 * * *')
+  andamio app cron list|rm|run <nombre> [<tarea>]   (verlas, quitar una, correrla ya)
   andamio app ci-update [<nombre>]           (el pipeline de tus apps, a la versión de andamio actual)
   andamio app logs <nombre>
   andamio app rollback <nombre>
@@ -85,6 +87,8 @@ usage() {
   andamio app domain add|rm|list <name> [api.mycompany.com]   (your own domain, besides the server's)
   andamio app cors add|rm|list <name> [https://myapp.vercel.app]   (frontend hosted elsewhere)
   andamio app volume add|rm|list <name> [/data]   (folder that persists across deploys, backed up)
+  andamio app cron add <name> '<schedule>' '<command>' [--name cleanup]   (scheduled task, e.g. '0 3 * * *')
+  andamio app cron list|rm|run <name> [<task>]   (see them, remove one, run it now)
   andamio app ci-update [<name>]             (your apps' pipeline, to the current andamio version)
   andamio app logs <name>
   andamio app rollback <name>
@@ -554,6 +558,10 @@ app_apply() {
   "$INFRA/bin/andamio" _apply ${name:+"$name"}   # con app: solo esa (segundos)
 
   [ -n "$name" ] || return 0
+  if [ "${2:-}" = cron ]; then   # una tarea no toca la app: ni reinicio ni deploy
+    L "✓ Tareas de $name al día en el servidor." "✓ $name's tasks up to date on the server."; echo
+    return 0
+  fi
   # Una variable no cambia la imagen: no hace falta un deploy, basta el reinicio que ya hizo.
   local host url
   host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$INFRA/apps/$name/app.yml")
@@ -633,7 +641,7 @@ app_info() {
   [ -f "$f" ] || no_app "$name"
   # Del servidor, solo estado y consumo: nunca el entorno del contenedor (tiene los secretos).
   local live; live=$(ssh "$SERVER" bash -s -- "$name" <<'REMOTE' 2> /dev/null || true
-c=$(docker ps -aq --filter label=com.docker.compose.project=$1 --filter label=com.docker.compose.service=app | head -n 1)
+c=$(docker ps -aq --filter label=com.docker.compose.project=$1 --filter label=com.docker.compose.service=app --filter label=com.docker.compose.oneoff=False | head -n 1)
 [ -n "$c" ] || exit 0
 docker inspect --format 'state={{.State.Status}}
 started={{.State.StartedAt}}
@@ -700,6 +708,7 @@ rows = [
     ("CORS", ", ".join(a.get("cors") or [])),
     ("Worker", (f"{a['worker'].get('command', '')}  ({a['worker'].get('mem', '256m')})" if a.get("worker") else "")),
     (L("Secretos", "Secrets"), os.environ["SECRETS"]),
+    (L("Tareas", "Tasks"), ", ".join(f"{c['name']} ({c['schedule']})" for c in a.get("cron") or [])),
 ]
 for k, v in rows:
     if v:
@@ -763,12 +772,66 @@ app_set() {
   app_apply "$name"
 }
 
+# andamio app cron: tareas programadas (cron: en app.yml). Cada una, un timer de systemd en el
+# servidor que corre el comando con la imagen, los secretos y los límites de la app.
+app_cron() {
+  local sub=${1:-} name=${2:-}; shift 2 || usage
+  [ -n "$sub" ] && [ -n "$name" ] || usage
+  valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  case $sub in
+    list)
+      "$INFRA/bin/andamio" _cron list "$f" "$name"; echo; return ;;
+    run)
+      local task=${1:-}; [[ $task =~ ^[a-z][a-z0-9-]*$ ]] || usage
+      grep -qx "  - name: $task" "$f" || die "$(L "$name no tiene una tarea $task (andamio app cron list $name)" "$name has no task $task (andamio app cron list $name)")"
+      step "$(L "Corriendo $task de $name en el servidor (su salida, abajo)" "Running $name's $task on the server (its output, below)")"
+      local rc=0
+      ssh -t -q "$SERVER" "ANDAMIO_LANG=$LNG /srv/andamio/infra/scripts/app-cron.sh $name $task --manual" || rc=$?
+      echo
+      if [ "$rc" = 0 ]; then echo "✓ $(L "$task terminó bien" "$task finished fine")"; else die "$(L "$task terminó con código $rc" "$task exited with code $rc")"; fi
+      return ;;
+    add | rm) ;;
+    *) usage ;;
+  esac
+  no_uncommitted
+  local msg
+  if [ "$sub" = add ]; then
+    local schedule=${1:-} command=${2:-} task=""
+    [ -n "$schedule" ] && [ -n "$command" ] || usage
+    shift 2
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --name) task=${2:?$(L "falta el valor de --name" "missing value for --name")}; shift ;;
+        *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
+      esac
+      shift
+    done
+    echo
+    "$INFRA/bin/andamio" _cron add "$f" "$schedule" "$command" "$task"
+    task=$(git -C "$INFRA" diff -U0 -- "apps/$name/app.yml" | sed -n 's/^+  - name: //p' | tail -n 1)
+    msg="feat(apps): $name: cron add $task"
+  else
+    local task=${1:-}; [ -n "$task" ] || usage
+    "$INFRA/bin/andamio" _cron rm "$f" "$task"
+    msg="feat(apps): $name: cron rm $task"
+  fi
+  git -C "$INFRA" add "apps/$name/app.yml" ansible/group_vars/all.yml
+  git -C "$INFRA" commit -qm "$msg"
+  app_apply "$name" cron
+  if [ "$sub" = add ]; then
+    L "  Probarla ya: andamio app cron run $name $task   ·   Ver todas: andamio app cron list $name" \
+      "  Try it now: andamio app cron run $name $task   ·   See all: andamio app cron list $name"; echo
+  fi
+}
+
 app_logs() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
   [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
   # El contenedor más reciente de la app, corriendo o no: con la app caída es cuando más
   # se necesitan sus logs. -f los sigue mientras corra; si está apagada, muestra y sale.
-  ssh -t "$SERVER" "c=\$(docker ps -aq --filter label=com.docker.compose.project=$name --filter label=com.docker.compose.service=app | head -n 1)
+  ssh -t -q "$SERVER" "c=\$(docker ps -aq --filter label=com.docker.compose.project=$name --filter label=com.docker.compose.service=app --filter label=com.docker.compose.oneoff=False | head -n 1)
 if [ -z \"\$c\" ]; then echo '$(L "$name no tiene contenedores (¿nunca se desplegó?)" "$name has no containers (never deployed?)")'; exit 1; fi
 docker ps -a --filter id=\$c --format '{{.Names}}: {{.Status}}'
 docker logs -f --tail 100 \$c"
@@ -889,6 +952,7 @@ case ${1:-} in
   domain) shift; app_list_edit domains "$@" ;;
   cors) shift; app_list_edit cors "$@" ;;
   volume | volumen) shift; app_list_edit volumes "$@" ;;
+  cron) shift; app_cron "$@" ;;
   ci-update) shift; app_ci_update "$@" ;;
   *) usage ;;
 esac

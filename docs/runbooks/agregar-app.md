@@ -59,6 +59,8 @@ worker:
 
 ## Cambiar algo de una app
 - Dominio propio o CORS: `andamio app domain|cors add|rm|list <nombre> [valor]`.
+- Tarea programada: `andamio app cron add <nombre> "0 3 * * *" "python limpiar.py"` (`list`, `run`, `rm`).
+  Un timer de systemd `andamio-cron-<app>.<tarea>` corre `scripts/app-cron.sh` (`docker compose run`).
 - RAM, CPU, puerto, salud, acceso: `andamio app set <nombre> --mem 512m` (`--cpus`, `--port`,
   `--health`, `--public`, `--vpn`). Un reinicio, sin deploy. Ver cómo está: `andamio app info <nombre>`.
 - Lo demás (host, worker...): editar `apps/<nombre>/app.yml` y `andamio app apply <nombre>`

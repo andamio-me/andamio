@@ -567,3 +567,20 @@
   loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
   loop_control:
     loop_var: andamio_app_name
+
+# Las tareas programadas de una app borrada (andamio app destroy) no se quedan corriendo.
+- name: Tareas programadas en el servidor
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: andamio-cron-*.timer
+  register: andamio_cron_all
+
+- name: Tareas programadas de apps que ya no existen
+  ansible.builtin.set_fact:
+    andamio_cron_remove: >-
+      {{ andamio_cron_all.files | map(attribute='path') | map('basename') | map('regex_replace', '\.timer$', '')
+         | reject('regex', '^andamio-cron-(' ~ (andamio_app_names | join('|')) ~ ')\.') | list }}
+
+- name: Quitarlas
+  ansible.builtin.include_tasks: cron-remove.yml
+  when: andamio_cron_remove | length > 0

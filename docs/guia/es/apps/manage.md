@@ -1,6 +1,6 @@
 ---
 title: Administrar una app
-description: Listar, ver detalles, cambiar recursos, ver logs, apagar, volver atrás, aplicar cambios y borrar.
+description: Listar, ver detalles, cambiar recursos, tareas programadas, ver logs, apagar, volver atrás, aplicar cambios y borrar.
 ---
 
 ## Ver tus apps
@@ -100,6 +100,37 @@ andamio app volume rm miapp /data        # deja de montarla; los archivos quedan
 :::tip
 Para datos con muchas escrituras o varios procesos a la vez, mejor `--db` (PostgreSQL): una
 base SQLite en una carpeta persistente funciona, pero el backup copia el archivo tal cual.
+:::
+
+## Tareas programadas
+
+Algo que corra solo cada cierto tiempo: limpiar datos viejos, mandar un reporte, sincronizar.
+
+```bash
+andamio app cron add miapp "0 3 * * *" "python limpiar.py"         # cada día a las 3:00
+andamio app cron add miapp "*/15 * * * *" "node sync.js" --name sync # cada 15 minutos
+andamio app cron list miapp       # horario, próxima vez y cómo salió la última
+andamio app cron run miapp sync   # correrla ya y ver su salida (para probarla)
+andamio app cron rm miapp sync
+```
+
+- El horario es el de cron: `minuto hora día mes día-de-la-semana`. Sirven `*/15`, `1-5`,
+  `0,30` y los atajos `@hourly`, `@daily`, `@weekly`, `@monthly`.
+- **En tu hora**, no la del servidor (UTC): la primera vez andamio toma la zona de tu máquina
+  y te la confirma (`andamio_timezone` en tu configuración).
+- Corre con **lo mismo que tu app**: su imagen, sus secretos, su base, sus carpetas y sus
+  límites de RAM y CPU, en un contenedor aparte que se borra al terminar. No recibe tráfico.
+- **Si falla, te avisa al celular** (con [`andamio alertas`](/es/docs/server/monitoring/#alertas-al-celular)),
+  con las últimas líneas de su salida: una vez, y otra cuando vuelva a andar. Si pasa de una
+  hora, se corta.
+- Si el servidor estaba apagado a esa hora, corre al encender. Si todavía sigue corriendo
+  cuando le toca otra vez, no se duplica. Una app detenida no corre sus tareas.
+- Sin `--name`, el nombre sale del comando (`python limpiar.py` → `limpiar`).
+
+:::note
+El comando corre tal cual dentro de la imagen. Si usa `&&`, `|`, `>` o `$VARIABLE`, pasa por
+`sh -c`: las imágenes distroless (como la que andamio genera para Go) no traen `sh`, así que
+ahí usa un comando simple (`/server limpiar`).
 :::
 
 ## Borrarla

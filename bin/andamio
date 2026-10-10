@@ -2320,6 +2320,186 @@ def yaml_set(text: str, changes: list[str]) -> tuple[str, list[str]]:
     return "\n".join(lines), out
 
 
+# ================= tareas programadas (cron: en app.yml) =================
+
+CRON_NAME = re.compile(r"[a-z][a-z0-9-]{0,29}")
+
+
+def cron_lib():
+    """El conversor cron → systemd que usa Ansible (ansible/filter_plugins): uno solo para los dos."""
+    import importlib.util
+    sys.dont_write_bytecode = True   # sin __pycache__ en tu repo
+    spec = importlib.util.spec_from_file_location("andamio_cron", ROOT / "ansible" / "filter_plugins" / "andamio_cron.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def local_timezone() -> str:
+    """La zona horaria de esta máquina (America/Bogota), o UTC si no se puede saber."""
+    r = run(["timedatectl", "show", "-p", "Timezone", "--value"]) if shutil.which("timedatectl") else None
+    if r and r.returncode == 0 and "/" in r.stdout:
+        return r.stdout.strip()
+    target = str(Path("/etc/localtime").resolve())
+    if "zoneinfo/" in target:
+        return target.split("zoneinfo/", 1)[1]
+    try:
+        return Path("/etc/timezone").read_text().strip() or "UTC"
+    except OSError:
+        return "UTC"
+
+
+def check_timezone(v: str) -> str | None:
+    from zoneinfo import ZoneInfo
+    try:
+        ZoneInfo(v)
+        return None
+    except (ValueError, KeyError, OSError):
+        return L(f"No conozco la zona «{v}» (ej. America/Bogota, Europe/Madrid, UTC).",
+                 f"Unknown time zone '{v}' (e.g. America/New_York, Europe/Madrid, UTC).")
+
+
+def cron_timezone() -> str:
+    """La zona de las tareas (andamio_timezone): la primera vez, la de tu máquina, confirmada."""
+    import yaml
+    tz = (yaml.safe_load(CONFIG.read_text()) or {}).get("andamio_timezone")
+    if tz:
+        return tz
+    note(L("Las tareas corren a la hora que escribas, en tu zona horaria (el servidor usa UTC).",
+           "Tasks run at the time you write, in your time zone (the server uses UTC)."))
+    tz = ask(L("Tu zona horaria (se guarda en tu configuración)", "Your time zone (saved in your configuration)"),
+             local_timezone(), check_timezone)
+    set_config("andamio_timezone", tz)
+    return tz
+
+
+def next_run(calendar: str) -> str:
+    """Próxima vez, según systemd-analyze de esta máquina (si lo hay)."""
+    if not shutil.which("systemd-analyze"):
+        return ""
+    r = run(["systemd-analyze", "calendar", calendar])
+    m = re.search(r"Next elapse: (.+)", r.stdout)
+    return m.group(1).strip() if r.returncode == 0 and m else ""
+
+
+def cron_entries(text: str) -> list[dict]:
+    import yaml
+    return (yaml.safe_load(text) or {}).get("cron") or []
+
+
+def cron_write(text: str, entries: list[dict]) -> str:
+    """Reescribe el bloque cron: de un app.yml (al final); el resto queda igual."""
+    import json
+    out, skipping = [], False
+    for line in text.rstrip("\n").split("\n"):
+        if re.match(r"^cron:", line):
+            skipping = True
+            continue
+        if skipping and (not line.strip() or line[0] in " \t-"):
+            continue
+        skipping = False
+        out.append(line)
+    if entries:
+        out.append("cron:")
+        for e in entries:
+            out += [f"  - name: {e['name']}", f"    schedule: {json.dumps(e['schedule'])}",
+                    f"    command: {json.dumps(e['command'], ensure_ascii=False)}"]
+    return "\n".join(out) + "\n"
+
+
+def cron_default_name(command: str, taken: list[str]) -> str:
+    """Un nombre a partir del comando: «python limpiar.py» → limpiar, «npm run report» → report."""
+    words = [w for w in command.split() if not w.startswith("-")]
+    base = re.sub(r"[^a-z0-9]+", "-", Path(words[-1]).stem.lower()).strip("-") if words else ""
+    base = (base if CRON_NAME.fullmatch(base[:30] or "-") else L("tarea", "task"))[:26]
+    name, n = base, 2
+    while name in taken:
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
+def cmd_cron(args: list[str]) -> None:
+    """Interno (andamio app cron): _cron add <app.yml> <horario> <comando> [nombre] | rm <app.yml> <nombre>
+    | list <app.yml> <app>. add y rm editan el app.yml; bin/andamio-app hace el commit y lo aplica."""
+    op, f = args[0], Path(args[1])
+    text = f.read_text()
+    entries = cron_entries(text)
+    names = [e["name"] for e in entries]
+    if op == "add":
+        schedule, command = " ".join(args[2].split()), args[3].strip()
+        lib = cron_lib()
+        try:
+            calendar = lib.cron_calendar(schedule)
+        except lib.CronError as e:
+            die(str(e))
+        if not command or "\n" in command or len(command) > 500:
+            die(L("El comando va en una sola línea (hasta 500 caracteres).", "The command goes on one line (up to 500 characters)."))
+        name = args[4] if len(args) > 4 and args[4] else cron_default_name(command, names)
+        if not CRON_NAME.fullmatch(name):
+            die(L(f"Nombre inválido: {name} (minúsculas, números y guiones; empieza con letra)",
+                  f"Invalid name: {name} (lowercase letters, digits and hyphens; starts with a letter)"))
+        if name in names:
+            die(L(f"Ya hay una tarea {name}: usa otro --name, o quítala antes (app cron rm)",
+                  f"There's already a task {name}: use another --name, or remove it first (app cron rm)"))
+        tz = cron_timezone()
+        f.write_text(cron_write(text, [*entries, {"name": name, "schedule": schedule, "command": command}]))
+        nxt = next_run(f"{calendar} {tz}")
+        print(f"  {L('Tarea', 'Task'):<9} {name}\n  {L('Comando', 'Command'):<9} {command}\n"
+              f"  {L('Horario', 'Schedule'):<9} {schedule}   ({tz})"
+              + (f"\n  {L('Próxima', 'Next'):<9} {nxt}" if nxt else ""))
+    elif op == "rm":
+        name = args[2]
+        if name not in names:
+            die(L(f"No hay una tarea {name}. Tareas: {', '.join(names) or 'ninguna'}",
+                  f"No task {name}. Tasks: {', '.join(names) or 'none'}"))
+        f.write_text(cron_write(text, [e for e in entries if e["name"] != name]))
+    elif op == "list":
+        cron_list(args[2], entries)
+
+
+def cron_list(app: str, entries: list[dict]) -> None:
+    import yaml
+    if not entries:
+        print(L(f"  {app} no tiene tareas. Agrega una:  andamio app cron add {app} \"0 3 * * *\" \"python limpiar.py\"",
+                f"  {app} has no tasks. Add one:  andamio app cron add {app} \"0 3 * * *\" \"python cleanup.py\""))
+        return
+    tz = (yaml.safe_load(CONFIG.read_text()) or {}).get("andamio_timezone") or "UTC"
+    # Del servidor: próxima vez (en tu zona) y el resultado de la última (lo deja scripts/app-cron.sh).
+    # Mientras la tarea corre, systemd no da la próxima vez: se muestra "corriendo ahora".
+    script = "".join(
+        f"u=andamio-cron-{app}.{e['name']}; printf '%s|' {e['name']}; "
+        f"if [ \"$(systemctl show $u.timer -p LoadState --value)\" != loaded ]; then printf -- '-'; "
+        f"elif [ \"$(systemctl is-active $u.service)\" = activating ]; then printf '*'; "
+        f"else TZ={tz} systemctl show $u.timer -p NextElapseUSecRealtime --value | tr -d '\\n'; fi; printf '|'; "
+        f"cat /var/lib/andamio-cron/{app}.{e['name']} 2> /dev/null || echo; " for e in entries)
+    r = run(["ssh", "-n", server_alias(), script])
+    live = {}
+    for line in r.stdout.splitlines():
+        name, nxt, last = (line.split("|") + ["", ""])[:3]
+        live[name] = (nxt.strip(), last.split())
+    failed = []
+    for e in entries:
+        nxt, last = live.get(e["name"], ("-", []))
+        nxt = {"-": L(f"(sin aplicar: andamio app apply {app})", f"(not applied: andamio app apply {app})"),
+               "*": L("corriendo ahora", "running now"), "": "?"}.get(nxt, nxt)
+        if len(last) == 3:
+            rc, start, secs = last
+            ago = int(time.time()) - int(start)
+            when = L("hace segundos", "seconds ago") if ago < 60 else L("hace", "") + " " + (
+                f"{ago // 86400} d" if ago >= 86400 else f"{ago // 3600} h" if ago >= 3600 else f"{ago // 60} min") + L("", " ago")
+            res = (f"\033[32m✓\033[0m" if rc == "0" else f"\033[31m✗ {L('código', 'exit code')} {rc}\033[0m") + \
+                f" {when.strip()} ({secs} s)"
+            if rc != "0":
+                failed.append(e["name"])
+        else:
+            res = f"\033[2m{L('todavía no ha corrido', 'not run yet')}\033[0m"
+        print(f"\n  \033[1m{e['name']}\033[0m  {e['schedule']}  \033[2m({tz})\033[0m\n    {e['command']}")
+        print(f"    {L('Próxima', 'Next')}: {nxt}   ·   {L('Última', 'Last')}: {res}")
+    if failed:
+        print("\n  " + L(f"Por qué falló (ver su salida): andamio app cron run {app} {failed[0]}",
+                         f"Why it failed (see its output): andamio app cron run {app} {failed[0]}"))
+
+
 # ================= update =================
 
 # El extractor (tools/extraer-plataforma.py) pone aquí la URL del repo público de andamio.
@@ -2858,6 +3038,8 @@ def overview() -> None:
   app domain add|rm|list <app> [dominio]    un dominio propio además de <app>.tudominio
   app cors add|rm|list <app> [origen]       frontend en otro lado (Vercel...)
   app volume add|rm|list <app> [/data]      carpeta que persiste entre deploys (entra al backup)
+  app cron add <app> "0 3 * * *" "<comando>"   tarea programada, en tu hora (avisa si falla)
+                               {d('app cron list|run|rm <app> [tarea]: verlas, correr una ya, quitarla')}
   app stop|start <app>         apagarla sin borrar nada / volver
   app rollback <app>           volver al deploy anterior
   app destroy <app>            borrarla (respalda su base y sus carpetas antes)
@@ -2899,6 +3081,8 @@ def overview() -> None:
   app domain add|rm|list <app> [domain]     an own domain besides <app>.yourdomain
   app cors add|rm|list <app> [origin]       frontend hosted elsewhere (Vercel...)
   app volume add|rm|list <app> [/data]      folder that persists across deploys (backed up)
+  app cron add <app> "0 3 * * *" "<command>"   scheduled task, in your time (notifies if it fails)
+                               {d('app cron list|run|rm <app> [task]: see them, run one now, remove it')}
   app stop|start <app>         turn it off without deleting anything / back on
   app rollback <app>           back to the previous deploy
   app destroy <app>            delete it (backs up its database and folders first)
@@ -2941,6 +3125,9 @@ def main() -> None:
         if changed:
             f.write_text(text)
             print("\n".join(changed))
+        return
+    if args[0] == "_cron":       # interno (andamio app cron): ver cmd_cron
+        cmd_cron(args[1:])
         return
     if args[0] == "_ask":        # interno (andamio app ...): _ask <pregunta> <s|n por defecto>; sale 0 = sí
         sys.exit(0 if ask_yes(args[1], args[2] in ("s", "y")) else 1)

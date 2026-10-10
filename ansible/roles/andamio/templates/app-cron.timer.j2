@@ -1,0 +1,13 @@
+# GENERADO desde cron: en apps/{{ andamio_app_name }}/app.yml (Ansible). No editar a mano.
+# Horario: "{{ andamio_cron.schedule }}" en {{ andamio_timezone }}.
+[Unit]
+Description=andamio: horario de la tarea {{ andamio_cron.name }} de {{ andamio_app_name }}
+
+[Timer]
+OnCalendar={{ andamio_cron.schedule | cron_calendar }} {{ andamio_timezone }}
+# Si el servidor estaba apagado a la hora, corre al encender.
+Persistent=true
+Unit=andamio-cron-{{ andamio_app_name }}.{{ andamio_cron.name }}.service
+
+[Install]
+WantedBy=timers.target

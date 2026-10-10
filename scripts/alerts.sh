@@ -29,18 +29,7 @@ fi
 declare -A seen_restarts
 declare -A now exists
 
-send() {  # send <título> <texto> [ntfy]   (ntfy: no a Telegram)
-  local server=${ANDAMIO_DOMAIN:-$(hostname)}
-  if [ -n "${ANDAMIO_NTFY_URL:-}" ]; then
-    # El título va en la URL (?title=): ntfy no acepta UTF-8 en las cabeceras.
-    local q; q=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1 · $server")
-    curl -s -m 10 --data-binary "$2" "$ANDAMIO_NTFY_URL?title=$q" > /dev/null || true
-  fi
-  if [ "${3:-}" != ntfy ] && [ -r /etc/andamio/telegram.env ]; then
-    ( set -a; . /etc/andamio/telegram.env; set +a
-      printf '%s · %s\n%s\n' "$1" "$server" "$2" | /srv/andamio/infra/scripts/telegram-send.sh ) || true
-  fi
-}
+send() { "$(dirname "$0")/notify.sh" "$@"; }   # send <título> <texto>; NOTIFY_ONLY=ntfy: no a Telegram
 
 # --- Contenedores que deberían estar corriendo (política de reinicio) y no lo están ---
 # Clave: app/servicio (hola/app), no el nombre del contenedor, que cambia en cada deploy.
@@ -69,6 +58,8 @@ done < <(docker ps -aq | xargs -r docker inspect | python3 -c '
 import json, sys
 for c in json.load(sys.stdin):
     st, lb = c["State"], c["Config"].get("Labels") or {}
+    if lb.get("com.docker.compose.oneoff") == "True":
+        continue   # una tarea programada (compose run): termina sola, no es una app caída
     print(c["Id"], c.get("RestartCount", 0), c["Name"].lstrip("/"), st["Status"],
           (st.get("Health") or {}).get("Status", "-"), c["HostConfig"]["RestartPolicy"]["Name"] or "-",
           lb.get("com.docker.compose.project", ""), lb.get("com.docker.compose.service", ""))')
@@ -87,9 +78,9 @@ for key in "${!now[@]}"; do
   if [ "$key" = disk ]; then
     # Con el monitoreo completo, Grafana ya avisa el disco por Telegram: aquí, solo ntfy.
     only=""; [ "${ANDAMIO_MONITORING_LEVEL:-}" = completo ] && only=ntfy
-    send "❌ $(L "Disco al ${now[disk]}" "Disk at ${now[disk]}")" \
+    NOTIFY_ONLY=$only send "❌ $(L "Disco al ${now[disk]}" "Disk at ${now[disk]}")" \
       "$(L "Libera espacio: docker system prune, logs viejos o archivos de tus apps. Detalle: andamio estado" \
-           "Free some space: docker system prune, old logs or your apps' files. Details: andamio status")" $only
+           "Free some space: docker system prune, old logs or your apps' files. Details: andamio status")"
   else
     what=${key#c:}
     send "❌ $(L "Caído: $what" "Down: $what")" \

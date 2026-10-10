@@ -109,4 +109,5 @@ editarla, con [`andamio app set`](/es/docs/apps/manage/#cambiar-ram-cpu-puerto-o
 | `migrate` | `{ command: "python manage.py migrate" }`: corre con la imagen de tu app antes de cada deploy |
 | `worker` | `{ command: "..." }`: un segundo proceso con la misma imagen |
 | `volumes` | `[/data]`: carpetas que persisten entre deploys |
+| `cron` | Tareas programadas (`name`, `schedule`, `command`): mejor con `andamio app cron add` |
 | `resources` | Límites de `mem`, `cpus` y `pids` |

@@ -32,6 +32,8 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 | `andamio app domain add\|rm\|list <app> [dominio]` | Un dominio propio, además del tuyo |
 | `andamio app cors add\|rm\|list <app> [origen]` | Frontend en otro lado (Vercel…) |
 | `andamio app volume add\|rm\|list <app> [/data]` | Carpeta que persiste entre deploys (entra al backup) |
+| `andamio app cron add <app> "<horario>" "<comando>" [--name x]` | [Tarea programada](/es/docs/apps/manage/#tareas-programadas), en tu hora; avisa si falla |
+| `andamio app cron list\|run\|rm <app> [tarea]` | Verlas (próxima vez y última), correr una ya, quitarla |
 | `andamio app stop\|start <app>` | Apagarla sin borrar nada / volver |
 | `andamio app rollback <app>` | Volver al deploy anterior |
 | `andamio app destroy <app>` | Borrarla (respalda su base y sus carpetas antes) |

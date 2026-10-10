@@ -1,0 +1,79 @@
+# Tareas programadas de una app (cron: en su app.yml): un timer de systemd por tarea, que corre
+# scripts/app-cron.sh con la imagen de la app. El comando va aparte, en
+# /etc/andamio/cron/<app>.<tarea>.cmd: así no hay comillas que escapar dentro del unit.
+# Se incluye desde app.yml (con andamio_app y andamio_app_name).
+
+- name: "{{ andamio_app_name }}: carpeta de las tareas programadas"
+  ansible.builtin.file:
+    path: /etc/andamio/cron
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Antes de escribir nada: systemd tiene que entender el horario en esa zona.
+- name: "{{ andamio_app_name }}: horario válido para systemd"
+  ansible.builtin.command:
+    argv: [systemd-analyze, calendar, "{{ andamio_cron.schedule | cron_calendar }} {{ andamio_timezone }}"]
+  loop: "{{ andamio_app.cron | default([]) }}"
+  loop_control:
+    loop_var: andamio_cron
+    label: "{{ andamio_cron.name }}"
+  changed_when: false
+  check_mode: false
+
+- name: "{{ andamio_app_name }}: comando de cada tarea"
+  ansible.builtin.copy:
+    content: "{{ andamio_cron.command }}\n"
+    dest: /etc/andamio/cron/{{ andamio_app_name }}.{{ andamio_cron.name }}.cmd
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ andamio_app.cron | default([]) }}"
+  loop_control:
+    loop_var: andamio_cron
+    label: "{{ andamio_cron.name }}"
+
+- name: "{{ andamio_app_name }}: units de cada tarea"
+  ansible.builtin.template:
+    src: app-cron.{{ item.1 }}.j2
+    dest: /etc/systemd/system/andamio-cron-{{ andamio_app_name }}.{{ item.0.name }}.{{ item.1 }}
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    andamio_cron: "{{ item.0 }}"
+  loop: "{{ andamio_app.cron | default([]) | product(['service', 'timer']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}.{{ item.1 }}"
+  register: andamio_cron_units
+
+# Reiniciar el timer si cambió: así toma el horario nuevo.
+- name: "{{ andamio_app_name }}: tareas activas"
+  ansible.builtin.systemd_service:
+    name: andamio-cron-{{ andamio_app_name }}.{{ andamio_cron.name }}.timer
+    enabled: true
+    state: "{{ 'restarted' if andamio_cron_units is changed else 'started' }}"
+    daemon_reload: "{{ andamio_cron_units is changed }}"
+  loop: "{{ andamio_app.cron | default([]) }}"
+  loop_control:
+    loop_var: andamio_cron
+    label: "{{ andamio_cron.name }}"
+
+# Las que ya no están en app.yml (andamio app cron rm, o editado a mano).
+- name: "{{ andamio_app_name }}: tareas en el servidor"
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: andamio-cron-{{ andamio_app_name }}.*.timer
+  register: andamio_cron_found
+
+- name: "{{ andamio_app_name }}: tareas que ya no están en app.yml"
+  ansible.builtin.set_fact:
+    andamio_cron_remove: >-
+      {{ andamio_cron_found.files | map(attribute='path') | map('basename') | map('regex_replace', '\.timer$', '')
+         | difference(andamio_app.cron | default([]) | map(attribute='name')
+                      | map('regex_replace', '^', 'andamio-cron-' ~ andamio_app_name ~ '.')) }}
+
+- name: "{{ andamio_app_name }}: quitarlas"
+  ansible.builtin.include_tasks: cron-remove.yml
+  when: andamio_cron_remove | length > 0

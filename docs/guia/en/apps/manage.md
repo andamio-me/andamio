@@ -1,6 +1,6 @@
 ---
 title: Manage an app
-description: List, see details, change resources, see logs, stop, roll back, apply changes and delete.
+description: List, see details, change resources, scheduled tasks, see logs, stop, roll back, apply changes and delete.
 ---
 
 ## See your apps
@@ -100,6 +100,37 @@ andamio app volume rm myapp /data        # stops mounting it; the files stay on 
 :::tip
 For write-heavy data or several processes at once, `--db` (PostgreSQL) is better: a SQLite
 database in a persistent folder works, but the backup copies the file as is.
+:::
+
+## Scheduled tasks
+
+Something that runs by itself every so often: clean up old data, send a report, sync.
+
+```bash
+andamio app cron add myapp "0 3 * * *" "python cleanup.py"          # every day at 3:00
+andamio app cron add myapp "*/15 * * * *" "node sync.js" --name sync # every 15 minutes
+andamio app cron list myapp       # schedule, next run and how the last one went
+andamio app cron run myapp sync   # run it now and see its output (to try it)
+andamio app cron rm myapp sync
+```
+
+- The schedule is cron's: `minute hour day month weekday`. `*/15`, `1-5`, `0,30` and the
+  shortcuts `@hourly`, `@daily`, `@weekly`, `@monthly` all work.
+- **In your time**, not the server's (UTC): the first time, andamio takes your machine's time
+  zone and asks you to confirm it (`andamio_timezone` in your configuration).
+- It runs with **the same as your app**: its image, secrets, database, folders and RAM and CPU
+  limits, in a separate container that's removed when it ends. It gets no traffic.
+- **If it fails, you get a phone notice** (with [`andamio alerts`](/en/docs/server/monitoring/#phone-alerts)),
+  with the last lines of its output: once, and again when it works again. Past one hour,
+  it's stopped.
+- If the server was off at that time, it runs when it boots. If it's still running when its
+  next time comes, it doesn't double up. A stopped app doesn't run its tasks.
+- Without `--name`, the name comes from the command (`python cleanup.py` → `cleanup`).
+
+:::note
+The command runs as is inside the image. If it uses `&&`, `|`, `>` or `$VARIABLE`, it goes
+through `sh -c`: distroless images (like the one andamio generates for Go) have no `sh`, so
+there use a plain command (`/server cleanup`).
 :::
 
 ## Delete it

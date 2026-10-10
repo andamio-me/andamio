@@ -279,6 +279,7 @@ editas a mano, `andamio app apply <app>` lo aplica.
 | `migrate` | `{ command: "python manage.py migrate" }` corre con la imagen de tu app antes de cada deploy |
 | `worker` | `{ command: "...", heartbeat: false }`: un segundo proceso con la misma imagen |
 | `volumes` | `[/data]`: carpetas que persisten entre deploys (`app volume add`), en el backup |
+| `cron` | Tareas programadas (`app cron add miapp "0 3 * * *" "python limpiar.py"`): en tu hora, con la imagen y los secretos de la app; avisan si fallan |
 | `resources` | Límites de `mem`, `cpus` y `pids` |
 
 ### Si Trivy frena tu imagen

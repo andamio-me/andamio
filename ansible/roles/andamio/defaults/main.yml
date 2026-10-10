@@ -72,3 +72,6 @@ andamio_enabled_units: >-
   {{ ['andamio-container-health.timer']
      + (['andamio-backup.timer'] if andamio_backups | bool else [])
      + (['andamio-daily-summary.timer', 'andamio-telegram-bot.service'] if andamio_telegram | bool else []) }}
+# Zona horaria de las tareas programadas de las apps (cron: en app.yml). La pone
+# `andamio app cron add` la primera vez (la de tu máquina); el servidor sigue en UTC.
+andamio_timezone: UTC

@@ -109,4 +109,5 @@ port, health, access); for the rest, edit it and apply with `andamio app apply m
 | `migrate` | `{ command: "python manage.py migrate" }`: runs with your app's image before each deploy |
 | `worker` | `{ command: "..." }`: a second process with the same image |
 | `volumes` | `[/data]`: folders that persist across deploys |
+| `cron` | Scheduled tasks (`name`, `schedule`, `command`): easiest with `andamio app cron add` |
 | `resources` | `mem`, `cpus` and `pids` limits |

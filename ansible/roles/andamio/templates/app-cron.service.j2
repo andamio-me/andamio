@@ -1,0 +1,17 @@
+# GENERADO desde cron: en apps/{{ andamio_app_name }}/app.yml (Ansible). No editar a mano.
+[Unit]
+Description=andamio: tarea {{ andamio_cron.name }} de {{ andamio_app_name }}
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/andamio/infra/scripts/app-cron.sh {{ andamio_app_name }} {{ andamio_cron.name }}
+# Resultado de la última vez (lo lee andamio app cron list).
+StateDirectory=andamio-cron
+# El script corta la tarea a la hora; esto es solo un respaldo.
+TimeoutStartSec=65min
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes

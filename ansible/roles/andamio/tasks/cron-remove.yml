@@ -1,0 +1,24 @@
+# Quita tareas programadas del servidor: andamio_cron_remove = ["andamio-cron-<app>.<tarea>", ...].
+# Lo usan app-cron.yml (tareas quitadas de una app) y main.yml (apps que ya no existen).
+
+- name: "Tareas quitadas: timer detenido"
+  ansible.builtin.systemd_service:
+    name: "{{ item }}.timer"
+    state: stopped
+    enabled: false
+  loop: "{{ andamio_cron_remove }}"
+  failed_when: false
+
+- name: "Tareas quitadas: units, comando y último resultado"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ andamio_cron_remove | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.timer') | list
+       + andamio_cron_remove | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.service') | list
+       + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/etc/andamio/cron/\1.cmd') | list
+       + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/var/lib/andamio-cron/\1') | list }}
+
+- name: "Tareas quitadas: systemd al día"
+  ansible.builtin.systemd_service:
+    daemon_reload: true

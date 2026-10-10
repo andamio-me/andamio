@@ -32,6 +32,8 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 | `andamio app domain add\|rm\|list <app> [domain]` | A domain of your own, besides yours |
 | `andamio app cors add\|rm\|list <app> [origin]` | Frontend hosted elsewhere (Vercel…) |
 | `andamio app volume add\|rm\|list <app> [/data]` | Folder that persists across deploys (backed up) |
+| `andamio app cron add <app> "<schedule>" "<command>" [--name x]` | [Scheduled task](/en/docs/apps/manage/#scheduled-tasks), in your time; notifies if it fails |
+| `andamio app cron list\|run\|rm <app> [task]` | See them (next and last run), run one now, remove it |
 | `andamio app stop\|start <app>` | Turn it off without deleting anything / back on |
 | `andamio app rollback <app>` | Back to the previous deploy |
 | `andamio app destroy <app>` | Delete it (backs up its database and folders first) |
