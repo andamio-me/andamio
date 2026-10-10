@@ -607,7 +607,13 @@ app_list() {
 
 app_logs() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
-  ssh -t "$SERVER" "docker logs -f --tail 100 \$(docker ps -q --filter name=^$name-app- | head -1)"
+  [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+  # El contenedor más reciente de la app, corriendo o no: con la app caída es cuando más
+  # se necesitan sus logs. -f los sigue mientras corra; si está apagada, muestra y sale.
+  ssh -t "$SERVER" "c=\$(docker ps -aq --filter label=com.docker.compose.project=$name --filter label=com.docker.compose.service=app | head -n 1)
+if [ -z \"\$c\" ]; then echo '$(L "$name no tiene contenedores (¿nunca se desplegó?)" "$name has no containers (never deployed?)")'; exit 1; fi
+docker ps -a --filter id=\$c --format '{{.Names}}: {{.Status}}'
+docker logs -f --tail 100 \$c"
 }
 
 app_rollback() {
