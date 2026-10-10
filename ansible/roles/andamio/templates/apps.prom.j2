@@ -6,3 +6,6 @@
 {% set a = lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ name ~ '/app.yml') | from_yaml %}
 andamio_app_info{name="{{ name }}",host="{{ a.host }}",access="{{ a.access | default('vpn') }}",worker="{{ (a.worker is defined) | lower }}",stopped="{{ (a.stopped | default(false)) | lower }}"} 1
 {% endfor %}
+# HELP andamio_monitoring_info Nivel de monitoreo (andamio_monitoring): minimo o completo.
+# TYPE andamio_monitoring_info gauge
+andamio_monitoring_info{level="{{ andamio_monitoring_level }}"} 1

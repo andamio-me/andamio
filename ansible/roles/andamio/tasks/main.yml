@@ -481,6 +481,21 @@
   register: andamio_up
   changed_when: andamio_up.stderr is search('Creat|Recreat|Start')
 
+# Al bajar de completo a mínimo, `up` deja de levantarlos pero no los apaga. Sus volúmenes
+# (logs, gráficas, monitores) quedan: al volver a completo regresan con su historial.
+- name: Monitoreo mínimo, sin Grafana, Loki, Alloy ni Uptime Kuma
+  when: andamio_monitoring_level == 'minimo'
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.shell: |
+    set -eu
+    cd {{ andamio_infra }}/stacks/monitoring
+    docker compose --profile completo rm --stop --force loki alloy grafana 2>&1
+    cd {{ andamio_infra }}/stacks/uptime-kuma
+    docker compose down 2>&1
+  register: andamio_monitoring_down
+  changed_when: andamio_monitoring_down.stdout is search('Removed|Stopped')
+
 # Traefik corre sin root (65532): en un volumen nuevo, /acme pertenece a root y no puede
 # guardar los certificados ("permission denied" -> el resolver se descarta y no hay HTTPS).
 - name: Ubicación del volumen de certificados de Traefik
