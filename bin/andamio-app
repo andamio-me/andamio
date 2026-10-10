@@ -21,6 +21,12 @@ OWNER=$(cfg andamio_github_owner)
 DOMAIN=$(cfg andamio_domain)
 # Este repo en GitHub (dueño/nombre), de andamio_repo: ahí vive el workflow app-build.yml.
 INSTANCE_REPO=$(cfg andamio_repo | sed -E 's#^[^:]+:##; s#\.git$##')
+# Con varios servidores, a cuál va este comando (lo decide la carpeta donde estás).
+COPIES="${XDG_CONFIG_HOME:-$HOME/.config}/andamio/copias"
+if [ -f "$COPIES" ] && [ "$(grep -c . "$COPIES")" -gt 1 ] && [ $# -ge 2 ]; then
+  printf '\033[2m→ %s: %s · %s %s   (%s)\033[0m\n' "$(L Servidor Server)" "$DOMAIN" "$(L copia copy)" "$INFRA" \
+    "$(L "otro: cd a su carpeta, o andamio use" "another: cd into its folder, or andamio use")" >&2
+fi
 # Plantilla para apps nuevas sin --repo (opcional: andamio_app_template en la config).
 # El servidor: alias SSH = primer host de ansible/inventory.yml (~/.ssh/config lo resuelve).
 SERVER=$(python3 -c 'import sys, yaml; print(next(iter(yaml.safe_load(open(sys.argv[1]))["all"]["children"]["servers"]["hosts"])))'   "$INFRA/ansible/inventory.yml")

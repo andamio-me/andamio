@@ -991,7 +991,22 @@ def load_config() -> dict:
     for k in ("andamio_user", "andamio_ssh_port", "andamio_server_ip", "andamio_repo", "andamio_github_owner"):
         if not cfg.get(k):
             die(L(f"Falta {k} en {CONFIG.relative_to(ROOT)}.", f"{k} is missing in {CONFIG.relative_to(ROOT)}."))
+    announce_server(cfg)
     return cfg
+
+
+_ANNOUNCED = False
+
+
+def announce_server(cfg: dict) -> None:
+    """Con varios servidores, a cuál va este comando (lo decide la carpeta donde estás)."""
+    global _ANNOUNCED
+    if _ANNOUNCED or len(known_copies()) < 2:
+        return
+    _ANNOUNCED = True
+    print(f"\033[2m→ {L('Servidor', 'Server')}: {cfg.get('andamio_domain')} ({cfg.get('andamio_server_ip')}) · "
+          f"{L('copia', 'copy')} {ROOT}   ({L('otro', 'another')}: cd {L('a su carpeta', 'into its folder')}, "
+          f"{L('o', 'or')} andamio use)\033[0m")
 
 
 def set_config(key: str, value: str) -> None:
