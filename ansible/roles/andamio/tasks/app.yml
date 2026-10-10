@@ -91,7 +91,7 @@
 
 # volumes: en app.yml: que existan y sean del usuario de su imagen (antes de arrancar).
 - name: "{{ andamio_app_name }}: carpetas persistentes"
-  when: andamio_app.volumes | default([]) and andamio_app_tag.stdout | length > 4
+  when: (andamio_app.volumes | default([]) | length > 0) and andamio_app_tag.stdout | length > 4
   become: true
   become_user: "{{ andamio_user }}"
   ansible.builtin.command: "{{ andamio_infra }}/scripts/app-volumes.sh {{ andamio_app_name }}"
