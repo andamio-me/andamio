@@ -118,7 +118,7 @@ jobs:
         run: |
           if grep -qiE '^[[:space:]]*FROM[[:space:]].+[[:space:]]AS[[:space:]]+test[[:space:]]*$' Dockerfile; then
             # shellcheck disable=SC2086   # SECRET_FLAGS son varios argumentos a propósito
-            DOCKER_BUILDKIT=1 docker build --target test --progress plain $SECRET_FLAGS .
+            DOCKER_BUILDKIT=1 docker build --target test --progress plain --build-arg GIT_SHA="$GITHUB_SHA" $SECRET_FLAGS .
           else
             echo "El Dockerfile no tiene etapa \"test\": sin tests en imagen."
           fi
@@ -194,11 +194,15 @@ jobs:
       # La imagen se construye SIN publicar, Trivy la revisa y solo si pasa se sube a
       # GHCR: una imagen con vulnerabilidades graves y con arreglo nunca llega al
       # registro ni al servidor.
+      # GIT_SHA: el commit que se construye. Un Dockerfile que lo declare (ARG GIT_SHA) antes
+      # de un paso que baja algo de afuera (git clone, curl) lo repite en cada deploy en vez
+      # de reusarlo del caché. Si no lo declara, no cambia nada.
       - name: Imagen de la app (sin publicar)
         uses: docker/build-push-action@v7
         with:
           context: .
           target: ${{ inputs.target }}
+          build-args: GIT_SHA=${{ github.sha }}
           secret-files: ${{ steps.bs.outputs.files }}
           load: true
           tags: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}:${{ steps.meta.outputs.tag }}
@@ -232,6 +236,7 @@ jobs:
         with:
           context: .
           target: migrate
+          build-args: GIT_SHA=${{ github.sha }}
           secret-files: ${{ steps.bs.outputs.files }}
           load: true
           tags: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
