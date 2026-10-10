@@ -489,6 +489,17 @@ app_apply() {
   "$INFRA/bin/andamio" _apply ${name:+"$name"}   # con app: solo esa (segundos)
 
   [ -n "$name" ] || return 0
+  # Una variable no cambia la imagen: no hace falta un deploy, basta el reinicio que ya hizo.
+  local host url
+  host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$INFRA/apps/$name/app.yml")
+  if [ "$host" = "@" ]; then url="https://$DOMAIN"; else url="https://${host:-$name}.$DOMAIN"; fi
+  if grep -qx 'stopped: true' "$INFRA/apps/$name/app.yml"; then
+    L "✓ Guardado. $name está detenida: lo tomará al volver (andamio app start $name)." \
+      "✓ Saved. $name is stopped: it'll pick it up when it's back (andamio app start $name)."; echo
+  else
+    L "✓ $name ya corre con los cambios (reiniciada, sin deploy: la imagen es la misma): $url" \
+      "✓ $name now runs with the changes (restarted, no deploy needed: same image): $url"; echo
+  fi
   repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$name/app.yml")
   [ -n "$repo" ] || return 0
   run=$(forge ci-last-failed "$repo" 2> /dev/null || true)

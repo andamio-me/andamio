@@ -40,6 +40,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1008,15 +1009,73 @@ def interactive(cmd: list[str], **kw) -> int:
 
 
 _SUDO_FILE: Path | None = None
+# Recordar la contraseña entre comandos (como sudo): solo en memoria ($XDG_RUNTIME_DIR es
+# tmpfs, privado y se borra al cerrar sesión), nunca en disco; vence tras N minutos sin uso.
+SUDO_MINUTES = int(os.environ.get("ANDAMIO_SUDO_MINUTES") or 15)
+SUDO_CACHE = Path(os.environ["XDG_RUNTIME_DIR"]) / "andamio" if os.environ.get("XDG_RUNTIME_DIR") else None
+
+
+def sudo_cache_file(cfg: dict) -> Path | None:
+    if not SUDO_CACHE or SUDO_MINUTES <= 0:
+        return None
+    import hashlib
+    key = hashlib.sha256(f"{cfg['andamio_user']}@{cfg['andamio_server_ip']}".encode()).hexdigest()[:16]
+    return SUDO_CACHE / f"sudo-{key}"
+
+
+def sudo_remembered(cfg: dict, alias: str) -> str | None:
+    """La contraseña recordada, si no venció y el servidor la sigue aceptando."""
+    f = sudo_cache_file(cfg)
+    try:
+        if not f or not f.is_file() or time.time() - f.stat().st_mtime > SUDO_MINUTES * 60:
+            forget_sudo(f)
+            return None
+        pw = f.read_text()
+    except OSError:
+        return None
+    if remote(alias, "sudo -S -p '' -v", stdin=pw + "\n").returncode != 0:
+        forget_sudo(f)   # la cambiaste en el servidor: se pide de nuevo
+        return None
+    f.touch()   # 15 minutos desde el último uso
+    return pw
+
+
+def remember_sudo(cfg: dict, pw: str) -> None:
+    f = sudo_cache_file(cfg)
+    if not f:
+        return
+    try:
+        f.parent.mkdir(mode=0o700, exist_ok=True)
+        f.parent.chmod(0o700)
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as out:
+            out.write(pw)
+    except OSError:
+        pass
+
+
+def forget_sudo(f: Path | None = None) -> None:
+    """Borra la contraseña recordada (una, o todas si no se indica)."""
+    for p in ([f] if f else list(SUDO_CACHE.glob("sudo-*")) if SUDO_CACHE and SUDO_CACHE.is_dir() else []):
+        try:
+            p.write_text("\0" * 64)
+            p.unlink()
+        except OSError:
+            pass
 
 
 def sudo_password_file(cfg: dict, alias: str) -> Path:
     """La contraseña de sudo de TU usuario: se pide una vez, se verifica contra el
     servidor y Ansible la lee de un archivo privado (0600) que se borra al salir.
-    Nunca va en la línea de comandos."""
+    Nunca va en la línea de comandos. Se recuerda unos minutos (sudo_remembered)."""
     global _SUDO_FILE
     if _SUDO_FILE:
         return _SUDO_FILE
+    pw = sudo_remembered(cfg, alias)
+    if pw is not None:
+        ok(L(f"Contraseña de sudo recordada (vence a los {SUDO_MINUTES} min sin uso; andamio olvidar la borra)",
+             f"Sudo password remembered (expires after {SUDO_MINUTES} idle min; andamio forget wipes it)"))
+        return sudo_temp_file(pw)
     user = cfg["andamio_user"]
     note(L(f"""
 andamio necesita la contraseña de sudo de tu usuario '{user}' en el servidor
@@ -1029,17 +1088,25 @@ it, that was in its step 3, where it was asked twice). It's asked only once for 
         pw = getpass.getpass(L(f"  Contraseña de sudo de '{user}': ", f"  Sudo password for '{user}': "))
         if remote(alias, "sudo -S -p '' -v", stdin=pw + "\n").returncode == 0:
             ok(L("Contraseña correcta", "Password correct"))
-            tmp = Path(tempfile.mkdtemp(prefix="andamio-sudo-"))
-            _SUDO_FILE = tmp / "become"
-            _SUDO_FILE.write_text(pw)
-            _SUDO_FILE.chmod(0o600)
-            return _SUDO_FILE
+            remember_sudo(cfg, pw)
+            return sudo_temp_file(pw)
         warn(L(f"No es la contraseña de sudo de '{user}' ({2 - intento} intentos más).",
                f"That's not the sudo password for '{user}' ({2 - intento} more tries)."))
     die(L(f"No pude verificar la contraseña de '{user}'. Si la perdiste: entra con la consola web de tu "
           f"proveedor como root y cámbiala con `passwd {user}`.",
           f"Couldn't verify the password for '{user}'. If you lost it: log in as root through your "
           f"provider's web console and change it with `passwd {user}`."))
+
+
+def sudo_temp_file(pw: str) -> Path:
+    """El archivo que lee Ansible (ANSIBLE_BECOME_PASSWORD_FILE): privado y de este comando."""
+    global _SUDO_FILE
+    tmp = Path(tempfile.mkdtemp(prefix="andamio-sudo-"))
+    _SUDO_FILE = tmp / "become"
+    fd = os.open(_SUDO_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(pw)
+    return _SUDO_FILE
 
 
 def wipe_sudo() -> None:
@@ -2530,6 +2597,7 @@ def overview() -> None:
   certificado [cert llave]     tu propio certificado HTTPS: ver o reemplazar
   servidor                     también sirve para reaplicar todo (se puede repetir)
   use [carpeta|dominio]        con varios servidores: cuál usa `andamio` fuera de sus carpetas
+  olvidar                      borra ya tu contraseña de sudo (se recuerda 15 min sin uso, solo en memoria)
 
 {d('`andamio` funciona en cualquier carpeta: dentro de una copia usa esa; afuera, la de `andamio use`.')}
 {d('Detalle de un comando: andamio help <comando>     Idioma: ANDAMIO_LANG=es|en')}
@@ -2564,6 +2632,7 @@ def overview() -> None:
   certificate [cert key]       your own HTTPS certificate: show or replace
   server                       also re-applies everything (safe to repeat)
   use [folder|domain]          with several servers: which one `andamio` uses outside their folders
+  forget                       wipes your sudo password now (remembered 15 idle min, in memory only)
 
 {d('`andamio` works from any folder: inside a copy it uses that one; elsewhere, the one from `andamio use`.')}
 {d('Details of a command: andamio help <command>     Language: ANDAMIO_LANG=en|es')}
@@ -2598,7 +2667,7 @@ def main() -> None:
             wipe_sudo()
         sys.exit(rc)
     known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
-             "certificado", "certificate", "use", "usar"}
+             "certificado", "certificate", "use", "usar", "olvidar", "forget"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
@@ -2645,6 +2714,9 @@ def main() -> None:
     p_use.add_argument("copia", nargs="?", metavar=L("carpeta|dominio", "folder|domain"),
                        help=L("la copia a usar; sin nada, la lista", "the copy to use; with nothing, the list"))
     p_use.set_defaults(func=cmd_use)
+    p_forget = sub.add_parser("olvidar", aliases=["forget"],
+                              help=L("borra ya la contraseña de sudo recordada", "wipes the remembered sudo password now"))
+    p_forget.set_defaults(func=lambda _: (forget_sudo(), ok(L("Contraseña de sudo olvidada.", "Sudo password forgotten."))))
     ns = parser.parse_args(args)
     ns.func(ns)
 

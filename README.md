@@ -134,6 +134,9 @@ uses that one, and elsewhere, the last one you used. Several servers, each with 
 `andamio use` lists them and `andamio use <folder or domain>` picks the one to use outside
 their folders.
 
+Your server's sudo password is asked once and remembered for 15 idle minutes, in memory
+only (never on disk): `andamio forget` wipes it now and `ANDAMIO_SUDO_MINUTES=0` turns it off.
+
 ## Deploy your first app
 
 Your app, any language, needs a `Dockerfile`. **If it doesn't have one**, `app create`

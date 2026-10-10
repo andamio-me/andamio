@@ -138,6 +138,10 @@ de tu copia usa esa, y afuera, la última que usaste. ¿Varios servidores, cada 
 copia? `andamio use` las lista y `andamio use <carpeta o dominio>` elige cuál usar fuera de
 sus carpetas.
 
+Tu contraseña de sudo del servidor se pide una vez y se recuerda 15 minutos sin uso, solo
+en memoria (nunca en disco): `andamio olvidar` la borra ya y `ANDAMIO_SUDO_MINUTES=0` la
+desactiva.
+
 ## Despliega tu primera app
 
 Tu app, en cualquier lenguaje, necesita un `Dockerfile`. **Si no lo tiene**, `app create`
