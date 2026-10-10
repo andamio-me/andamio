@@ -23,6 +23,7 @@ repo.
 | Stop, roll back or delete an app | [Manage an app](/en/docs/apps/manage/) |
 | Keep files that last (uploads, SQLite) | [Persistent folders](/en/docs/apps/manage/#persistent-folders) |
 | Run something every night (cleanups, reports) | [Scheduled tasks](/en/docs/apps/manage/#scheduled-tasks) |
+| See everything in the browser | [Local panel](/en/docs/apps/panel/) (`andamio ui`) |
 | Get notified if something goes down | [Phone alerts](/en/docs/server/monitoring/#phone-alerts) |
 | Check that my server is secure | [Security](/en/docs/server/security/) |
 | Back up my data off the server | [Backups](/en/docs/server/backups/) |

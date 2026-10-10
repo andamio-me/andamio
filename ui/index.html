@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Panel de andamio (andamio ui): lo sirve bin/andamio en 127.0.0.1, solo en tu máquina. -->
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>andamio</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/"><span class="mark" aria-hidden="true"></span>andamio</a>
+    <span class="where" id="where"></span>
+    <span class="spacer"></span>
+    <span class="stamp" id="stamp"></span>
+    <button type="button" class="btn" id="refresh"></button>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -24,6 +24,7 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge ci-snippet DUEÑO/REPO VERSIÓN      el archivo de CI que una app agrega para desplegar
   forge ci-watch [DUEÑO/REPO [SHA]]        sigue la corrida de ese commit (o la última)
   forge ci-last-failed DUEÑO/REPO          id de la última corrida de main si falló (si no, nada)
+  forge ci-runs DUEÑO/REPO                 las últimas corridas de main (deploys), como JSON
   forge ci-repin DIR DUEÑO/REPO SHA        el pipeline de la app clonada en DIR, a esa versión
   forge ci-rerun DUEÑO/REPO ID             la reintenta y la sigue
   forge registry                           registro de imágenes (p. ej. ghcr.io)
@@ -215,6 +216,16 @@ jobs:
                     '.[0] | select(.status == "completed" and .conclusion == "failure") | .databaseId')
         return r.stdout.strip()
 
+    def ci_runs(self, repo: str, limit: int = 8) -> list[dict]:
+        """Las últimas corridas de main (los deploys), de la más nueva a la más vieja."""
+        r = self.gh("run", "list", "--repo", repo, "--branch", "main", "--limit", str(limit),
+                    "--json", "databaseId,status,conclusion,displayTitle,headSha,createdAt,url")
+        if r.returncode != 0:
+            return []
+        return [{"id": x["databaseId"], "status": x["status"], "conclusion": x["conclusion"] or "",
+                 "title": x["displayTitle"], "sha": x["headSha"][:7], "created": x["createdAt"], "url": x["url"]}
+                for x in json.loads(r.stdout or "[]")]
+
     def ci_rerun(self, repo: str, run_id: str) -> int:
         """Reintenta una corrida (con los secretos y variables de ahora) y la sigue."""
         if self.gh("run", "rerun", run_id, "--repo", repo).returncode != 0:
@@ -320,6 +331,7 @@ def main() -> None:
         "ssh-host": lambda: f.ssh_host(),
         "known-hosts": lambda: f.known_hosts(),
         "vars-get": lambda: json.dumps(f.vars_get(*need(1))),
+        "ci-runs": lambda: json.dumps(f.ci_runs(*need(1))),
         "ci-snippet": lambda: f.ci_snippet(*need(2)),
         "registry": lambda: f.registry(),
         "registry-name": lambda: f.registry_name(),

@@ -327,6 +327,16 @@ the VPN. **From the internet**, from your machine: whether any port answers that
 and the certificate and HTTP→HTTPS redirect as a visitor sees them. Every problem comes
 with its fix; exit code 1 if there are problems.
 
+### Local panel
+
+```bash
+andamio ui
+```
+
+Your apps in the browser: status, RAM, version, tasks, deploys and live logs. It runs **on your
+machine** (`127.0.0.1` only, with a key that changes every time) and talks to the server over
+SSH: there's no panel on the server to attack. For now, view only.
+
 ### Backups
 
 ```bash
@@ -375,6 +385,7 @@ What it protects:
 - **The deploy path:** CI can only ask the server to deploy one app (a forced command
   per key), and only images that passed the scans.
 - **Secrets:** encrypted in the repo with sops + age; the key never lives on the server.
+- **No panel on the server:** you manage it from your machine (CLI or `andamio ui`), over SSH.
 
 What it doesn't:
 - **One server.** No high availability; if the VPS is gone, you rebuild from the repo and
@@ -382,6 +393,9 @@ What it doesn't:
 - In `http` TLS mode, every app name, private ones included, appears in public
   certificate transparency logs. Use `cloudflare` mode if that matters to you.
 - A compromised GitHub account can push code that gets deployed. Protect it with 2FA.
+- **Your machine is the key to everything** (SSH key, secrets key, the repo): protect it
+  (encrypted disk, a passphrase on the SSH key). And you manage from it, not from your phone
+  or someone else's computer: the price of having no panel on the server.
 
 ## How a deploy works
 
@@ -421,6 +435,8 @@ needed: they run on your machine and in CI, on every push.
 - [ ] Ansible task names in English (today they're in Spanish)
 - [x] Guided backups (`andamio backups`)
 - [x] Automated tests in CI (`tools/tests.sh`)
+- [x] Local browser panel, view only (`andamio ui`)
+- [ ] Local panel with actions (stop, RAM, secrets, tasks) and a desktop app
 - [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request
 

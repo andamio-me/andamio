@@ -2457,6 +2457,25 @@ def cmd_cron(args: list[str]) -> None:
         cron_list(args[2], entries)
 
 
+def cron_live(app: str, entries: list[dict], tz: str) -> dict[str, tuple[str, list[str]]]:
+    """Del servidor, por tarea: (próxima vez en tu zona, [código, inicio, segundos] de la última).
+    Próxima: "-" = sin aplicar; "*" = corriendo ahora (systemd no la da mientras corre)."""
+    if not entries:
+        return {}
+    script = "".join(
+        f"u=andamio-cron-{app}.{e['name']}; printf '%s|' {e['name']}; "
+        f"if [ \"$(systemctl show $u.timer -p LoadState --value)\" != loaded ]; then printf -- '-'; "
+        f"elif [ \"$(systemctl is-active $u.service)\" = activating ]; then printf '*'; "
+        f"else TZ={tz} systemctl show $u.timer -p NextElapseUSecRealtime --value | tr -d '\\n'; fi; printf '|'; "
+        f"cat /var/lib/andamio-cron/{app}.{e['name']} 2> /dev/null || echo; " for e in entries)
+    r = run([*ssh_cmd("-n"), script])
+    live = {}
+    for line in r.stdout.splitlines():
+        name, nxt, last = (line.split("|") + ["", ""])[:3]
+        live[name] = (nxt.strip(), last.split())
+    return live
+
+
 def cron_list(app: str, entries: list[dict]) -> None:
     import yaml
     if not entries:
@@ -2464,19 +2483,7 @@ def cron_list(app: str, entries: list[dict]) -> None:
                 f"  {app} has no tasks. Add one:  andamio app cron add {app} \"0 3 * * *\" \"python cleanup.py\""))
         return
     tz = (yaml.safe_load(CONFIG.read_text()) or {}).get("andamio_timezone") or "UTC"
-    # Del servidor: próxima vez (en tu zona) y el resultado de la última (lo deja scripts/app-cron.sh).
-    # Mientras la tarea corre, systemd no da la próxima vez: se muestra "corriendo ahora".
-    script = "".join(
-        f"u=andamio-cron-{app}.{e['name']}; printf '%s|' {e['name']}; "
-        f"if [ \"$(systemctl show $u.timer -p LoadState --value)\" != loaded ]; then printf -- '-'; "
-        f"elif [ \"$(systemctl is-active $u.service)\" = activating ]; then printf '*'; "
-        f"else TZ={tz} systemctl show $u.timer -p NextElapseUSecRealtime --value | tr -d '\\n'; fi; printf '|'; "
-        f"cat /var/lib/andamio-cron/{app}.{e['name']} 2> /dev/null || echo; " for e in entries)
-    r = run(["ssh", "-n", server_alias(), script])
-    live = {}
-    for line in r.stdout.splitlines():
-        name, nxt, last = (line.split("|") + ["", ""])[:3]
-        live[name] = (nxt.strip(), last.split())
+    live = cron_live(app, entries, tz)
     failed = []
     for e in entries:
         nxt, last = live.get(e["name"], ("-", []))
@@ -2498,6 +2505,331 @@ def cron_list(app: str, entries: list[dict]) -> None:
     if failed:
         print("\n  " + L(f"Por qué falló (ver su salida): andamio app cron run {app} {failed[0]}",
                          f"Why it failed (see its output): andamio app cron run {app} {failed[0]}"))
+
+
+# ================= panel local (andamio ui) =================
+# Un servidor web en TU máquina (127.0.0.1), no en el servidor: habla con él por SSH, como la
+# CLI. Fase 1: solo mira (apps, estado, tareas, deploys y logs). Ver docs/decisions/0028.
+
+UI_DIR = ROOT / "ui"
+UI_FILES = {"/": ("index.html", "text/html"), "/app.css": ("app.css", "text/css"),
+            "/app.js": ("app.js", "text/javascript")}
+APP_NAME = re.compile(r"[a-z][a-z0-9-]{1,28}[a-z0-9]")
+RESERVED_SECRETS = {"DOMAIN", "DATABASE_URL", "REDIS_URL", "TAG"}
+
+# Corre en el servidor (python3 por stdin), en una sola conexión: el contenedor más nuevo de cada
+# app (sin los de las tareas) y el estado del servidor. Nunca el entorno: tiene los secretos.
+UI_LIVE = r'''
+import json, os, re, subprocess, time
+def sh(*a):
+    r = subprocess.run(a, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else ""
+ids = sh("docker", "ps", "-aq", "--filter", "label=com.docker.compose.service=app",
+         "--filter", "label=com.docker.compose.oneoff=False").split()
+apps = {}
+for c in (json.loads(sh("docker", "inspect", *ids) or "[]") if ids else []):
+    p = (c["Config"].get("Labels") or {}).get("com.docker.compose.project", "")
+    if p in apps and apps[p]["created"] > c["Created"]:
+        continue
+    st = c["State"]
+    apps[p] = {"created": c["Created"], "id": c["Id"][:12], "full": c["Id"], "state": st["Status"],
+               "health": (st.get("Health") or {}).get("Status", ""), "started": st.get("StartedAt", ""),
+               "restarts": c.get("RestartCount", 0), "version": c["Config"]["Image"].rpartition(":")[2][:7]}
+# Memoria y CPU, de los cgroups del contenedor (docker stats tarda segundos): CPU en % de un
+# núcleo, como docker stats, medida en medio segundo.
+def cg(full, f):
+    try:
+        return open(f"/sys/fs/cgroup/system.slice/docker-{full}.scope/{f}").read()
+    except OSError:
+        return ""
+def usec(full):
+    m = re.search(r"usage_usec (\d+)", cg(full, "cpu.stat"))
+    return int(m.group(1)) if m else None
+running = {p: a for p, a in apps.items() if a["state"] == "running"}
+before = {p: usec(a["full"]) for p, a in running.items()}
+time.sleep(0.5)
+for p, a in running.items():
+    m, u = cg(a["full"], "memory.current").strip(), usec(a["full"])
+    if m.isdigit():
+        a["mem"] = f"{int(m) / 1048576:.0f}MiB"
+    if u is not None and before[p] is not None:
+        a["cpu"] = f"{(u - before[p]) / 5000:.1f}%"
+for a in apps.values():
+    del a["full"]
+mem = {k: int(v.split()[0]) * 1024 for k, v in (l.split(":", 1) for l in open("/proc/meminfo"))}
+fs = os.statvfs("/")
+server = {"uptime": float(open("/proc/uptime").read().split()[0]), "load": float(open("/proc/loadavg").read().split()[0]),
+          "cpus": os.cpu_count(), "mem_total": mem["MemTotal"], "mem_used": mem["MemTotal"] - mem["MemAvailable"],
+          "disk_total": fs.f_blocks * fs.f_frsize, "disk_used": (fs.f_blocks - fs.f_bfree) * fs.f_frsize}
+print(json.dumps({"apps": apps, "server": server}))
+'''
+
+
+def ssh_cmd(*extra: str) -> list[str]:
+    """ssh al servidor, sin preguntas, y reusando una sola conexión (cada una nueva tarda ~2 s).
+    El socket vive en $XDG_RUNTIME_DIR (memoria, privado) y se cierra a los 2 min sin uso."""
+    cmd = ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes"]
+    if SUDO_CACHE:
+        SUDO_CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
+        cmd += ["-o", "ControlMaster=auto", "-o", f"ControlPath={SUDO_CACHE}/ssh-%C", "-o", "ControlPersist=120"]
+    return [*cmd, *extra, server_alias()]
+
+
+def ui_remote(script: str) -> dict:
+    """Corre un script de Python en el servidor (por stdin) y devuelve su JSON."""
+    import json
+    r = run([*ssh_cmd("-T"), "python3", "-"], input=script, timeout=40)
+    if r.returncode != 0:
+        raise RuntimeError(L("El servidor no respondió por SSH", "The server didn't answer over SSH")
+                           + (f": {r.stderr.strip().splitlines()[-1]}" if r.stderr.strip() else ""))
+    return json.loads(r.stdout)
+
+
+def ui_app_record(f: Path, cfg: dict) -> dict:
+    """Lo que dice el app.yml de una app, como lo muestra el panel."""
+    import yaml
+    a = yaml.safe_load(f.read_text()) or {}
+    name, domain = f.parent.name, cfg.get("andamio_domain", "")
+    host = str(a.get("host", name))
+    r = a.get("resources") or {}
+    return {"name": name, "url": f"https://{domain}" if host == "@" else f"https://{host}.{domain}",
+            "access": a.get("access", "vpn"), "repo": a.get("repo") or f"{cfg.get('andamio_github_owner', '')}/{name}",
+            "port": a.get("port"), "health": a.get("health", ""), "mem": r.get("mem"), "cpus": r.get("cpus"),
+            "db": bool(a.get("db")), "redis": bool(a.get("redis")), "volumes": a.get("volumes") or [],
+            "domains": a.get("domains") or [], "cors": a.get("cors") or [],
+            "worker": (a.get("worker") or {}).get("command", ""), "cron": a.get("cron") or [],
+            "stopped": bool(a.get("stopped"))}
+
+
+def ui_config() -> dict:
+    import yaml
+    return yaml.safe_load(CONFIG.read_text()) or {}
+
+
+def ui_apps() -> dict:
+    cfg = ui_config()
+    out: dict = {"domain": cfg.get("andamio_domain", ""), "server": None, "error": "", "apps": []}
+    live = {}
+    try:
+        data = ui_remote(UI_LIVE)
+        live, out["server"] = data["apps"], data["server"]
+    except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
+        out["error"] = str(e) or L("No pude leer el estado del servidor", "Couldn't read the server's status")
+    for f in sorted((ROOT / "apps").glob("*/app.yml")):
+        rec = ui_app_record(f, cfg)
+        rec["live"] = live.get(rec["name"])
+        out["apps"].append(rec)
+    return out
+
+
+def ui_app(name: str) -> dict | None:
+    """Todo de una app: configuración, estado, secretos (solo nombres), tareas y deploys."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    f = ROOT / "apps" / name / "app.yml"
+    if not APP_NAME.fullmatch(name) or not f.is_file():
+        return None
+    cfg = ui_config()
+    tz = cfg.get("andamio_timezone") or "UTC"
+    rec = ui_app_record(f, cfg)
+
+    def secrets() -> list[str]:
+        r = run(["sops", "decrypt", "--input-type", "dotenv", "--output-type", "dotenv",
+                 f"apps/{name}/secrets.sops.env"], cwd=ROOT) if shutil.which("sops") else None
+        if not r or r.returncode != 0:
+            return []
+        return [k for k in re.findall(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)=", r.stdout) if k not in RESERVED_SECRETS]
+
+    def deploys() -> list[dict]:
+        r = forge("ci-runs", rec["repo"])
+        return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else []
+
+    with ThreadPoolExecutor(4) as pool:
+        apps_f, sec_f = pool.submit(ui_apps), pool.submit(secrets)
+        dep_f, cron_f = pool.submit(deploys), pool.submit(cron_live, name, rec["cron"], tz)
+        everything = apps_f.result()
+        rec["live"] = next((a["live"] for a in everything["apps"] if a["name"] == name), None)
+        rec["secrets"], rec["deploys"] = sec_f.result(), dep_f.result()
+        cron = cron_f.result()
+    rec["timezone"] = tz
+    for e in rec["cron"]:
+        nxt, last = cron.get(e["name"], ("-", []))
+        e["next"] = nxt
+        e["last"] = dict(zip(("rc", "start", "secs"), map(int, last))) if len(last) == 3 else None
+    return {"app": rec, "error": everything["error"], "server": everything["server"], "domain": everything["domain"]}
+
+
+def open_browser(url: str) -> bool:
+    """El navegador de esta máquina; en WSL, el de Windows (que llega a 127.0.0.1 de WSL)."""
+    try:
+        wsl = "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        wsl = False
+    if wsl:
+        for cmd in (["wslview", url], ["cmd.exe", "/c", "start", "", url]):
+            if shutil.which(cmd[0]) and run(cmd, cwd="/mnt/c" if Path("/mnt/c").is_dir() else None).returncode == 0:
+                return True
+    import webbrowser
+    return webbrowser.open(url)
+
+
+def cmd_ui(args: argparse.Namespace) -> None:
+    import hmac
+    import json
+    import select
+    from http.cookies import SimpleCookie
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
+
+    if not CONFIG.exists():
+        die(L("Esta copia todavía no tiene configuración: corre primero `andamio init`.",
+              "This copy has no configuration yet: run `andamio init` first."))
+    token = secrets.token_urlsafe(32)
+    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), BaseHTTPRequestHandler)
+    httpd.daemon_threads = True
+    port = httpd.server_address[1]
+    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    origins = {f"http://{h}" for h in hosts}
+    cookie_name = f"andamio_ui_{port}"   # una por puerto: las cookies de 127.0.0.1 no separan puertos
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "andamio-ui"
+        sys_version = ""
+
+        def log_message(self, *_):   # sin ruido en tu terminal
+            pass
+
+        def send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+            self.send_response(code)
+            for k, v in {"Content-Type": f"{ctype}; charset=utf-8", "Content-Length": str(len(body)),
+                         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                         "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+                         "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; "
+                                                    "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+                         **(extra or {})}.items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def json(self, data, code: int = 200) -> None:
+            self.send(code, json.dumps(data).encode(), "application/json")
+
+        def deny(self, why: str) -> None:
+            self.send(403, why.encode(), "text/plain")
+
+        def allowed(self) -> bool:
+            # Otro sitio abierto en tu navegador no puede usar el panel: el nombre de host tiene que
+            # ser este (frena el DNS rebinding) y el origen, si viene, también.
+            if self.headers.get("Host") not in hosts:
+                self.deny("host")
+                return False
+            origin = self.headers.get("Origin")
+            if origin and origin not in origins:
+                self.deny("origin")
+                return False
+            return True
+
+        def authed(self) -> bool:
+            c = SimpleCookie(self.headers.get("Cookie", ""))
+            return cookie_name in c and hmac.compare_digest(c[cookie_name].value, token)
+
+        def do_GET(self) -> None:
+            if not self.allowed():
+                return
+            url = urlsplit(self.path)
+            # El link que imprime andamio ui trae la clave una vez; queda en una cookie y se va de la URL.
+            given = parse_qs(url.query).get("t", [""])[0]
+            if given and hmac.compare_digest(given, token):
+                self.send(303, b"", "text/plain", {"Location": "/", "Set-Cookie":
+                          f"{cookie_name}={token}; HttpOnly; SameSite=Strict; Path=/"})
+                return
+            if not self.authed():
+                self.deny(L("Abre el link que mostró `andamio ui` (cambia cada vez que lo corres).",
+                            "Open the link `andamio ui` printed (it changes every time you run it)."))
+                return
+            path = url.path
+            if path in UI_FILES:
+                fname, ctype = UI_FILES[path]
+                self.send(200, (UI_DIR / fname).read_bytes(), ctype)
+            elif path == "/api/meta":
+                cfg = ui_config()
+                self.json({"lang": LANG, "domain": cfg.get("andamio_domain", ""), "server": server_alias(),
+                           "copy": str(ROOT), "timezone": cfg.get("andamio_timezone") or "UTC"})
+            elif path == "/api/apps":
+                self.json(ui_apps())
+            elif path.startswith("/api/app/"):
+                data = ui_app(path.removeprefix("/api/app/"))
+                self.json(data) if data else self.json({"error": "no existe"}, 404)
+            elif path.startswith("/api/logs/"):
+                self.logs(path.removeprefix("/api/logs/"))
+            else:
+                self.send(404, b"", "text/plain")
+
+        def do_HEAD(self) -> None:
+            self.do_GET()
+
+        def do_POST(self) -> None:   # fase 1: solo mirar
+            self.send(405, b"", "text/plain")
+
+        do_PUT = do_DELETE = do_PATCH = do_POST
+
+        def logs(self, name: str) -> None:
+            """Logs en vivo (server-sent events): las últimas 200 líneas y lo que vaya saliendo."""
+            if not APP_NAME.fullmatch(name) or not (ROOT / "apps" / name / "app.yml").is_file():
+                self.send(404, b"", "text/plain")
+                return
+            remote = (f"c=$(docker ps -aq --filter label=com.docker.compose.project={name} "
+                      f"--filter label=com.docker.compose.service=app --filter label=com.docker.compose.oneoff=False "
+                      f"| head -n 1); [ -n \"$c\" ] || {{ echo '{L('sin contenedores: nunca se desplegó', 'no containers: never deployed')}'; exit 0; }}; "
+                      f"exec docker logs -f --tail 200 \"$c\" 2>&1")
+            proc = subprocess.Popen([*ssh_cmd("-T"),
+                                     remote], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            self.send_response(200)
+            for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store",
+                         "X-Content-Type-Options": "nosniff"}.items():
+                self.send_header(k, v)
+            self.end_headers()
+            fd, pending = proc.stdout.fileno(), b""
+            try:
+                while True:
+                    ready, _, _ = select.select([fd], [], [], 15)
+                    if not ready:   # sin logs nuevos: un latido, para notar si cerraste la página
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        continue
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        self.wfile.write(b"event: end\ndata: {}\n\n")
+                        self.wfile.flush()
+                        break
+                    *lines, pending = (pending + chunk).split(b"\n")
+                    if lines:
+                        self.wfile.write(b"".join(f"data: {json.dumps(l.decode(errors='replace').rstrip(chr(13)))}\n\n".encode()
+                                                  for l in lines))
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                proc.kill()
+                proc.wait()
+
+    httpd.RequestHandlerClass = Handler
+    url = f"http://127.0.0.1:{port}/?t={token}"
+    title(L("Panel de andamio", "andamio panel"))
+    note(L("Corre en tu máquina (solo 127.0.0.1) y habla con tu servidor por SSH. Solo mira: no cambia nada.",
+           "It runs on your machine (127.0.0.1 only) and talks to your server over SSH. View only: it changes nothing."))
+    print(f"\n  \033[1m{url}\033[0m\n")
+    if not args.no_browser and not open_browser(url):
+        warn(L("No pude abrir el navegador: copia el link de arriba.", "Couldn't open the browser: copy the link above."))
+    print("  " + L("Ctrl+C lo cierra.", "Ctrl+C closes it."), flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print()
+        ok(L("Panel cerrado.", "Panel closed."))
+    finally:
+        httpd.server_close()
 
 
 # ================= update =================
@@ -3047,6 +3379,8 @@ def overview() -> None:
 
 {b('Día a día')}
   estado                       chequeo de seguridad y salud, desde el servidor y desde Internet
+  ui                           panel en tu navegador: tus apps, su estado, tareas, deploys y logs
+                               {d('corre en tu máquina (no en el servidor) y habla con él por SSH')}
   update [--check]             trae mejoras y parches de andamio sin tocar lo tuyo
   certificado [cert llave]     tu propio certificado HTTPS: ver o reemplazar
   servidor                     también sirve para reaplicar todo (se puede repetir)
@@ -3090,6 +3424,8 @@ def overview() -> None:
 
 {b('Day to day')}
   status                       security and health check, from the server and from the internet
+  ui                           panel in your browser: your apps, their status, tasks, deploys and logs
+                               {d('runs on your machine (not the server) and talks to it over SSH')}
   update [--check]             brings in andamio's improvements and patches, never touching yours
   certificate [cert key]       your own HTTPS certificate: show or replace
   server                       also re-applies everything (safe to repeat)
@@ -3144,7 +3480,7 @@ def main() -> None:
             wipe_sudo()
         sys.exit(rc)
     known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
-             "certificado", "certificate", "use", "usar", "olvidar", "forget", "alertas", "alerts"}
+             "certificado", "certificate", "use", "usar", "olvidar", "forget", "alertas", "alerts", "ui"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
@@ -3195,6 +3531,13 @@ def main() -> None:
                           help=L("aviso al celular si un contenedor se cae o el disco se llena (ntfy, sin cuenta)",
                                  "phone notice if a container goes down or the disk fills up (ntfy, no account)"))
     p_al.set_defaults(func=cmd_alertas)
+    p_ui = sub.add_parser("ui", help=L("panel en tu navegador para ver tus apps (corre en tu máquina, no en el servidor)",
+                                       "panel in your browser to see your apps (runs on your machine, not the server)"))
+    p_ui.add_argument("--port", type=int, default=0, help=L("puerto local (por defecto, uno libre al azar)",
+                                                          "local port (default: a random free one)"))
+    p_ui.add_argument("--no-browser", action="store_true", help=L("no abrir el navegador; solo mostrar el link",
+                                                                  "don't open the browser; just print the link"))
+    p_ui.set_defaults(func=cmd_ui)
     p_forget = sub.add_parser("olvidar", aliases=["forget"],
                               help=L("borra ya la contraseña de sudo recordada", "wipes the remembered sudo password now"))
     p_forget.set_defaults(func=lambda _: (forget_sudo(), ok(L("Contraseña de sudo olvidada.", "Sudo password forgotten."))))

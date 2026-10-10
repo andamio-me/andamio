@@ -22,6 +22,7 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 |---|---|
 | `andamio app create <app> --repo <owner/repo>` | Registers it; from then on, every `git push` to `main` deploys it. Options in [Create an app](/en/docs/apps/create/#options) |
 | `andamio app list` | All of them, with URL, access and status |
+| `andamio ui` | [Panel in your browser](/en/docs/apps/panel/): apps, status, tasks, deploys and live logs (runs on your machine) |
 | `andamio app info <app>` | Its configuration and how it's doing now: status, RAM and CPU in use, version |
 | `andamio app set <app> [--mem 512m] [--cpus 1] [--port 8080] [--health /path] [--public\|--vpn]` | Change it without editing `app.yml`: a restart, no deploy |
 | `andamio app logs <app>` | Live logs |

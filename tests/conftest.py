@@ -110,6 +110,7 @@ def fake_copy(make_repo, env):
     for name in ("andamio", "andamio-app", "forge"):
         shutil.copy2(ROOT / "bin" / name, d / "bin" / name)
     shutil.copytree(ROOT / "templates", d / "templates")
+    shutil.copytree(ROOT / "ui", d / "ui")
     shutil.copytree(ROOT / "ansible" / "filter_plugins", d / "ansible" / "filter_plugins",
                     ignore=shutil.ignore_patterns("__pycache__"))
     subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, env=env)

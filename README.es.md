@@ -334,6 +334,16 @@ afuera dice la verdad), que el 22 esté cerrado, y el certificado y la redirecci
 HTTP→HTTPS como los ve un visitante. Cada problema trae su arreglo; código de salida 1 si
 hay problemas.
 
+### Panel local
+
+```bash
+andamio ui
+```
+
+Tus apps en el navegador: estado, RAM, versión, tareas, deploys y logs en vivo. Corre **en tu
+máquina** (solo `127.0.0.1`, con una clave que cambia cada vez) y habla con el servidor por
+SSH: en el servidor no hay ningún panel que atacar. Hoy solo mira.
+
 ### Backups
 
 ```bash
@@ -384,6 +394,7 @@ Lo que protege:
 - **El camino del deploy:** el CI solo puede pedirle al servidor que despliegue una app
   (un comando forzado por llave), y solo imágenes que pasaron los escaneos.
 - **Los secretos:** cifrados en el repo con sops + age; la llave nunca vive en el servidor.
+- **Sin panel en el servidor:** se administra desde tu máquina (CLI o `andamio ui`), por SSH.
 
 Lo que no:
 - **Un solo servidor.** Sin alta disponibilidad: si el VPS desaparece, se reconstruye
@@ -392,6 +403,9 @@ Lo que no:
   registros públicos de transparencia de certificados. Usa el modo `cloudflare` si te
   importa.
 - Una cuenta de GitHub comprometida puede subir código que se despliega. Protégela con 2FA.
+- **Tu máquina es la llave de todo** (llave SSH, llave de los secretos, el repo): protégela
+  (disco cifrado, contraseña en la llave SSH). Y se administra desde ella, no desde el
+  celular o una computadora ajena: es el precio de no tener un panel en el servidor.
 
 ## Cómo funciona un deploy
 
@@ -431,6 +445,8 @@ servidor ni cuentas: corren en tu máquina y en el CI, en cada push.
 - [ ] Nombres de las tareas de Ansible en inglés (hoy están en español)
 - [x] Backups guiados (`andamio backups`)
 - [x] Tests automáticos en el CI (`tools/tests.sh`)
+- [x] Panel local en el navegador, solo para mirar (`andamio ui`)
+- [ ] Panel local con acciones (apagar, RAM, secretos, tareas) y app de escritorio
 - [ ] Alertas por Telegram guiadas (`andamio telegram`)
 - [ ] Entornos de preview por pull request
 
