@@ -2397,6 +2397,100 @@ ansible/hl apply andamio
 Traefik restarts by itself to load it (a few seconds of downtime)."""))
 
 
+# ================= comando global =================
+
+# `andamio` en cualquier carpeta: un lanzador en ~/.local/bin elige la copia (la de la carpeta
+# actual, o la elegida con `andamio use`). Cada copia se anota sola al usarse.
+COPIES_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "andamio"
+COPIES, CURRENT = COPIES_DIR / "copias", COPIES_DIR / "actual"
+GLOBAL_CMD = Path.home() / ".local" / "bin" / "andamio"
+SHIM_MARK = "# andamio: comando global"
+SHIM = f"""#!/usr/bin/env bash
+{SHIM_MARK} (lo instala bin/andamio; se reescribe solo). Usa la copia de andamio de la
+# carpeta donde estás (o de una carpeta de arriba); afuera de una, la elegida con `andamio use`.
+d=$PWD
+while [ "$d" != / ]; do
+  if [ -x "$d/bin/andamio" ] && [ -f "$d/ansible/site.yml" ]; then exec "$d/bin/andamio" "$@"; fi
+  d=$(dirname "$d")
+done
+c=$(cat "${{XDG_CONFIG_HOME:-$HOME/.config}}/andamio/actual" 2> /dev/null)
+if [ -n "$c" ] && [ -x "$c/bin/andamio" ]; then exec "$c/bin/andamio" "$@"; fi
+if [[ ${{ANDAMIO_LANG:-${{LANG:-}}}} == es* ]]; then
+  echo "✗ No sé qué copia de andamio usar: entra a su carpeta, o corre ahí: bin/andamio use" >&2
+else
+  echo "✗ Don't know which andamio copy to use: cd into its folder, or run there: bin/andamio use" >&2
+fi
+exit 1
+"""
+
+
+def known_copies() -> list[Path]:
+    paths = COPIES.read_text().splitlines() if COPIES.exists() else []
+    return [Path(p) for p in dict.fromkeys(paths) if p and (Path(p) / "ansible" / "group_vars" / "all.yml").exists()]
+
+
+def remember_copy() -> None:
+    """Anota esta copia (si ya tiene configuración) e instala o pone al día el lanzador global."""
+    try:
+        if CONFIG.exists():
+            COPIES_DIR.mkdir(parents=True, exist_ok=True)
+            copies = known_copies()
+            if ROOT not in copies:
+                COPIES.write_text("".join(f"{p}\n" for p in [*copies, ROOT]))
+            if not CURRENT.exists() or not (Path(CURRENT.read_text().strip()) / "bin" / "andamio").exists():
+                CURRENT.write_text(f"{ROOT}\n")
+        current = GLOBAL_CMD.read_text() if GLOBAL_CMD.exists() else None
+        if current == SHIM or (current is not None and SHIM_MARK not in current):
+            return   # ya está al día, o ese archivo no es nuestro: no se toca
+        GLOBAL_CMD.parent.mkdir(parents=True, exist_ok=True)
+        GLOBAL_CMD.write_text(SHIM)
+        GLOBAL_CMD.chmod(0o755)
+        if current is None:
+            ok(L("Instalé el comando `andamio`: desde ahora funciona en cualquier carpeta (en una terminal nueva).",
+                 "Installed the `andamio` command: it now works from any folder (in a new terminal)."))
+    except OSError:
+        pass   # sin el lanzador, bin/andamio sigue funcionando igual
+
+
+def copy_label(p: Path) -> str:
+    import yaml
+    try:
+        cfg = yaml.safe_load((p / "ansible" / "group_vars" / "all.yml").read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        cfg = {}
+    return f"{cfg.get('andamio_domain') or '?'}  ({cfg.get('andamio_server_ip') or '?'})"
+
+
+def cmd_use(args: argparse.Namespace) -> None:
+    copies = known_copies()
+    current = Path(CURRENT.read_text().strip()) if CURRENT.exists() else None
+    if args.copia:
+        want = args.copia.rstrip("/")
+        p = Path(want).expanduser()
+        target = p.resolve() if (p / "ansible" / "group_vars" / "all.yml").exists() else next(
+            (c for c in copies if want in (c.name, str(c)) or copy_label(c).split()[0] == want), None)
+        if not target:
+            die(L(f"No encuentro una copia de andamio en «{want}» (ni con ese dominio). Mira la lista: andamio use",
+                  f"No andamio copy at '{want}' (nor with that domain). See the list: andamio use"))
+        COPIES_DIR.mkdir(parents=True, exist_ok=True)
+        CURRENT.write_text(f"{target}\n")
+        if target not in copies:
+            COPIES.write_text("".join(f"{c}\n" for c in [*copies, target]))
+        ok(L(f"Fuera de sus carpetas, `andamio` usa {target}: {copy_label(target)}",
+             f"Outside their folders, `andamio` uses {target}: {copy_label(target)}"))
+        return
+    if not copies:
+        note(L("Todavía no hay copias con configuración (se anotan al correr bin/andamio init).",
+               "No copies with a configuration yet (they're noted when you run bin/andamio init)."))
+        return
+    print(L("Tus copias de andamio (● = la que usa `andamio` fuera de sus carpetas):",
+            "Your andamio copies (● = the one `andamio` uses outside their folders):"))
+    for c in copies:
+        print(f"  {'●' if c == current else ' '} {c}   {copy_label(c)}")
+    note(L("Cambiar: andamio use <carpeta o dominio>. Dentro de la carpeta de una copia, andamio usa esa.",
+           "Switch: andamio use <folder or domain>. Inside a copy's folder, andamio uses that one."))
+
+
 def overview() -> None:
     """`andamio`, `andamio help`: todos los comandos, en el orden en que se usan."""
     banner()
@@ -2429,7 +2523,9 @@ def overview() -> None:
   update [--check]             trae mejoras y parches de andamio sin tocar lo tuyo
   certificado [cert llave]     tu propio certificado HTTPS: ver o reemplazar
   servidor                     también sirve para reaplicar todo (se puede repetir)
+  use [carpeta|dominio]        con varios servidores: cuál usa `andamio` fuera de sus carpetas
 
+{d('`andamio` funciona en cualquier carpeta: dentro de una copia usa esa; afuera, la de `andamio use`.')}
 {d('Detalle de un comando: andamio help <comando>     Idioma: ANDAMIO_LANG=es|en')}
 {d('Los nombres en inglés también funcionan: server, status, certificate.')}""",
             f"""{b('andamio')}: your secure VPS and your deployed apps, from this repo.
@@ -2459,13 +2555,17 @@ def overview() -> None:
   update [--check]             brings in andamio's improvements and patches, never touching yours
   certificate [cert key]       your own HTTPS certificate: show or replace
   server                       also re-applies everything (safe to repeat)
+  use [folder|domain]          with several servers: which one `andamio` uses outside their folders
 
+{d('`andamio` works from any folder: inside a copy it uses that one; elsewhere, the one from `andamio use`.')}
 {d('Details of a command: andamio help <command>     Language: ANDAMIO_LANG=en|es')}
 {d('Spanish names work too: servidor, estado, certificado.')}"""))
 
 
 def main() -> None:
     args = sys.argv[1:]
+    if not (args and args[0].startswith("_")):   # los internos los llama otro comando de andamio
+        remember_copy()
     if not args or args[0] in ("help", "ayuda", "-h", "--help"):
         if len(args) < 2:
             overview()
@@ -2485,7 +2585,7 @@ def main() -> None:
             wipe_sudo()
         sys.exit(rc)
     known = {"setup", "init", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
-             "certificado", "certificate"}
+             "certificado", "certificate", "use", "usar"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
@@ -2526,6 +2626,12 @@ def main() -> None:
                                                   "PEM certificate (with your CA's intermediates)"))
     p_cert.add_argument("key", nargs="?", help=L("su llave privada PEM", "its PEM private key"))
     p_cert.set_defaults(func=cmd_certificado)
+    p_use = sub.add_parser("use", aliases=["usar"],
+                           help=L("con varios servidores: qué copia usa `andamio` fuera de sus carpetas",
+                                  "with several servers: which copy `andamio` uses outside their folders"))
+    p_use.add_argument("copia", nargs="?", metavar=L("carpeta|dominio", "folder|domain"),
+                       help=L("la copia a usar; sin nada, la lista", "the copy to use; with nothing, the list"))
+    p_use.set_defaults(func=cmd_use)
     ns = parser.parse_args(args)
     ns.func(ns)
 

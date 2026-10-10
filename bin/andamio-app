@@ -30,6 +30,15 @@ PROJECTS=$HOME/projects
 export PATH=$HOME/.local/bin:$PATH
 
 die() { echo "✗ $*" >&2; exit 1; }
+# La app no está en esta copia: decir a qué servidor apunta y qué apps tiene (¿otra carpeta?).
+no_app() {
+  local a apps=""
+  for a in "$INFRA"/apps/*/app.yml; do [ -f "$a" ] && apps+="$(basename "$(dirname "$a")") "; done
+  die "$(L "No existe la app $1 en esta copia ($INFRA, servidor $SERVER, $DOMAIN). Sus apps: ${apps:-ninguna}
+  ¿Es de otro servidor? Corre el comando desde la carpeta de esa copia de andamio." \
+           "No app $1 in this copy ($INFRA, server $SERVER, $DOMAIN). Its apps: ${apps:-none}
+  Is it on another server? Run the command from that andamio copy's folder.")"
+}
 # Todo lo de GitHub (o la forja que sea) pasa por bin/forge.
 forge() { "$INFRA/bin/forge" "$@"; }
 step() { printf '\n==> %s\n' "$*"; }
@@ -123,9 +132,9 @@ app_create() {
   # tu configuración): el deploy fallaría sin logs. Mejor avisar antes de tocar nada.
   if [ -n "$repo" ] && ! forge repo-private "$repo" && forge repo-private "$INSTANCE_REPO"; then
     die "$(L "$repo es público y el pipeline vive en $INSTANCE_REPO, que es privado: $(forge name) no deja que un repo público lo use.
-  Haz privado el repo de tu app (gh repo edit $repo --visibility private --accept-visibility-change-consequences) y vuelve a correr." \
+  Haz privado el repo de tu app (gh repo edit $repo --visibility private) y vuelve a correr." \
              "$repo is public and the pipeline lives in $INSTANCE_REPO, which is private: $(forge name) doesn't let a public repo use it.
-  Make your app's repo private (gh repo edit $repo --visibility private --accept-visibility-change-consequences) and run again.")"
+  Make your app's repo private (gh repo edit $repo --visibility private) and run again.")"
   fi
 
   # El repo de la app, clonado aparte: Dockerfile (si falta, se propone uno) y CI.
@@ -275,7 +284,7 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
 app_state() {  # app_state <stop|start> <nombre>
   local want=$1 name=${2:-}; [ -n "$name" ] || usage; valid_name "$name"
   local f=$INFRA/apps/$name/app.yml
-  [ -f "$f" ] || die "$(L "No existe la app" "No such app"): $name"
+  [ -f "$f" ] || no_app "$name"
   no_uncommitted
   if [ "$want" = stop ]; then
     grep -qx 'stopped: true' "$f" && die "$(L "$name ya está detenida" "$name is already stopped")"
@@ -355,7 +364,7 @@ app_list_edit() {  # app_list_edit <domains|cors> <add|rm|list> <app> [valor]
   [ -n "$sub" ] && [ -n "$name" ] || usage
   valid_name "$name"
   local f=$INFRA/apps/$name/app.yml
-  [ -f "$f" ] || die "$(L "No existe la app" "No such app"): $name"
+  [ -f "$f" ] || no_app "$name"
   local current; current=$(yaml_get "$f" "$key")
   if [ "$sub" = list ]; then
     [ -n "$current" ] && sed 's/^/  /' <<< "$current" || L "  (ninguno)" "  (none)"; echo
@@ -399,7 +408,7 @@ app_secret() {
   [ -n "$sub" ] && [ -n "$name" ] || usage
   valid_name "$name"
   local rel=apps/$name/secrets.sops.env
-  [ -f "$INFRA/apps/$name/app.yml" ] || die "$(L "No existe la app" "No such app"): $name"
+  [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
   [ -f "$INFRA/$rel" ] || die "$(L "Falta $rel (se crea con andamio app create)" "$rel is missing (andamio app create creates it)")"
   if [ "$sub" = list ]; then
     (cd "$INFRA" && sops decrypt --input-type dotenv --output-type dotenv "$rel") | grep -oE '^[A-Za-z_][A-Za-z0-9_]*' \
@@ -454,6 +463,18 @@ app_secret() {
   step "$(L "Servidor: .env de $name y reinicio de la app (pide tu contraseña de sudo)" \
             "Server: $name's .env and app restart (asks for your sudo password)")"
   "$INFRA/bin/andamio" _apply
+
+  # Si el último deploy falló (típico: le faltaba justo esta variable), ofrecer reintentarlo.
+  local repo run
+  repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$name/app.yml")
+  [ "$sub" = set ] && [ -n "$repo" ] || return 0
+  run=$(forge ci-last-failed "$repo" 2> /dev/null || true)
+  [ -n "$run" ] || return 0
+  read -rp "$(L "El último deploy de $name falló. ¿Lo reintento ahora, con $key? [S/n] " \
+                "$name's last deploy failed. Retry it now, with $key? [Y/n] ")" ans
+  [[ ${ans:-s} =~ ^[sSyY] ]] || return 0
+  step "$(L "Reintentando el deploy" "Retrying the deploy")"
+  forge ci-rerun "$repo" "$run" || { L "! Volvió a fallar (la causa, arriba)." "! It failed again (cause above)."; echo; }
 }
 
 app_list() {
@@ -490,7 +511,7 @@ app_rollback() {
 app_destroy() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
   local dir=$INFRA/apps/$name
-  [ -f "$dir/app.yml" ] || die "$(L "No existe la app" "No such app"): $name"
+  [ -f "$dir/app.yml" ] || no_app "$name"
   [ "$name" = "$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("andamio_dashboard_app") or "")' \
       "$INFRA/ansible/group_vars/all.yml")" ] \
     && die "$(L "$name es tu dashboard (andamio_dashboard_app): no se destruye con este comando" \

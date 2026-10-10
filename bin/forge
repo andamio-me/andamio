@@ -23,6 +23,8 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge ci-allow-reuse DUEÑO/REPO          permite que tus otros repos usen su pipeline
   forge ci-snippet DUEÑO/REPO VERSIÓN      el archivo de CI que una app agrega para desplegar
   forge ci-watch [DUEÑO/REPO [SHA]]        sigue la corrida de ese commit (o la última)
+  forge ci-last-failed DUEÑO/REPO          id de la última corrida de main si falló (si no, nada)
+  forge ci-rerun DUEÑO/REPO ID             la reintenta y la sigue
   forge registry                           registro de imágenes (p. ej. ghcr.io)
   forge registry-name                      su nombre para mostrar (p. ej. GHCR)
   forge registry-token-help                cómo crear un token de solo lectura de imágenes
@@ -183,10 +185,27 @@ jobs:
             time.sleep(3)
         if not run_id:
             fail(L("Ese repo no tiene corridas de CI (¿Actions desactivado?).", "That repo has no CI runs (Actions disabled?)."))
+        return self.watch(run_id, where)
+
+    def watch(self, run_id: str, where: list[str]) -> int:
         rc = subprocess.run(["gh", "run", "watch", run_id, *where, "--exit-status"], check=False).returncode
         if rc != 0:
             self.explain_run(run_id, where)
         return rc
+
+    def ci_last_failed(self, repo: str) -> str:
+        """La última corrida de main, si terminó en falla (su id); si no, vacío."""
+        r = self.gh("run", "list", "--repo", repo, "--branch", "main", "--limit", "1",
+                    "--json", "databaseId,status,conclusion", "-q",
+                    '.[0] | select(.status == "completed" and .conclusion == "failure") | .databaseId')
+        return r.stdout.strip()
+
+    def ci_rerun(self, repo: str, run_id: str) -> int:
+        """Reintenta una corrida (con los secretos y variables de ahora) y la sigue."""
+        if self.gh("run", "rerun", run_id, "--repo", repo).returncode != 0:
+            fail(L("No pude reintentar la corrida.", "Couldn't re-run it."))
+        time.sleep(3)
+        return self.watch(run_id, ["--repo", repo])
 
     def explain_run(self, run_id: str, where: list[str]) -> None:
         """Por qué falló una corrida: el paso, sus últimas líneas de log y el link."""
@@ -307,6 +326,10 @@ def main() -> None:
         print("cambiado" if f.ci_allow_reuse(*need(1)) else "sin cambios")
     elif cmd == "ci-watch":
         sys.exit(f.ci_watch(*rest[:2]))
+    elif cmd == "ci-last-failed":
+        print(f.ci_last_failed(*need(1)))
+    elif cmd == "ci-rerun":
+        sys.exit(f.ci_rerun(*need(2)))
     elif cmd == "registry-token-check":
         problem = f.registry_token_check(sys.stdin.read().strip())
         if problem:

@@ -27,7 +27,8 @@ if grep -qx 'stopped: true' "$DIR/app.yml" 2> /dev/null; then
 fi
 
 notify() {
-  [ -r /etc/andamio/telegram.env ] || { echo "⚠ Sin aviso: no puedo leer /etc/andamio/telegram.env" >&2; return 0; }
+  [ -e /etc/andamio/telegram.env ] || return 0   # Telegram no activado: nada que avisar
+  [ -r /etc/andamio/telegram.env ] || { echo "⚠ $(L "Sin aviso: no puedo leer" "No notice: can't read") /etc/andamio/telegram.env" >&2; return 0; }
   ( set -a; . /etc/andamio/telegram.env; set +a; echo "$1" | "$INFRA/scripts/telegram-send.sh" ) || true
 }
 record() {  # registra el deploy en la tabla deployments de la app y en el registro central
