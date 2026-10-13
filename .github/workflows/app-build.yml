@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # gitleaks revisa todo el historial
       - name: Secretos (gitleaks)
@@ -127,7 +127,7 @@ jobs:
         if: hashFiles('pnpm-lock.yaml') != ''
         uses: pnpm/action-setup@v6
       - if: hashFiles('pnpm-lock.yaml') != ''
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -151,7 +151,7 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Nombres y tags
         id: meta
