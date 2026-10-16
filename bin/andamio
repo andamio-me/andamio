@@ -740,9 +740,20 @@ Ahí queda la configuración de tu servidor (IP, tu usuario, el puerto). Solo en
 hace falta cuenta de GitHub para blindar el VPS.""", """
 Your server's configuration lives there (IP, your user, the port). Only on your machine: no
 GitHub account is needed to lock down the VPS."""))
+    def is_copy(d: Path) -> bool:
+        return (d / "bin" / "andamio").exists() and (d / "ansible").is_dir()
     target = Path(ask(L("Dónde crearla", "Where to create it"), str(Path.home() / "mi-andamio"),
-                      lambda v: L(f"{Path(v).expanduser()} ya existe.", f"{Path(v).expanduser()} already exists.")
-                      if Path(v).expanduser().exists() else None)).expanduser()
+                      lambda v: L(f"{Path(v).expanduser()} ya existe y no es una copia de andamio: elige otra carpeta.",
+                                  f"{Path(v).expanduser()} already exists and isn't an andamio copy: pick another folder.")
+                      if Path(v).expanduser().exists() and not is_copy(Path(v).expanduser()) else None)).expanduser()
+    if is_copy(target):   # setup otra vez: la que ya creó (con lo que ya tenga hecho)
+        ok(L(f"Uso tu copia de {target}", f"Using your copy at {target}"))
+        title(L("Listo: tu máquina está preparada", "Done: your machine is ready"))
+        if ask_yes(L("¿Sigo con el blindaje? (andamio seguridad)", "Go on with the lockdown? (andamio security)"), True):
+            os.chdir(target)
+            os.execv(str(target / "bin" / "andamio"), [str(target / "bin" / "andamio"), L("seguridad", "security")])
+        note(L(f"Cuando quieras:  cd {target} && andamio seguridad", f"Whenever you want:  cd {target} && andamio security"))
+        return
     if run(["git", "clone", "-q", str(ROOT), str(target)]).returncode != 0:
         die(L(f"No pude crear {target}.", f"Couldn't create {target}."))
     # Sin origin: no es el template (ni sube nada a ningún lado). De dónde viene, para andamio update.
@@ -1520,10 +1531,13 @@ go on: the risk is low, but real."""))
     if not lines:
         die(L(f"No responde SSH en {ip} (ni en el 22 ni en el {port}). Lo más probable: el firewall de tu "
               f"proveedor (Azure, AWS, Oracle, Google Cloud...). Ábrele la entrada TCP 22 (la primera conexión) "
-              f"y {port} (tu SSH nuevo). Si ya están abiertos, revisa que el VPS esté encendido.",
+              f"y {port} (tu SSH nuevo). Si ya están abiertos, revisa que el VPS esté encendido. Si ya lo "
+              f"blindaste antes con andamio, SSH está en el puerto de esa vez: corrige andamio_ssh_port en "
+              f"{CONFIG.relative_to(ROOT)}.",
               f"No SSH answer at {ip} (neither on 22 nor on {port}). Most likely your provider's firewall "
               f"(Azure, AWS, Oracle, Google Cloud...): allow inbound TCP 22 (the first connection) and {port} "
-              f"(your new SSH). If they're already open, check that the VPS is running."))
+              f"(your new SSH). If they're already open, check that the VPS is running. If you already locked it "
+              f"down with andamio, SSH is on that time's port: fix andamio_ssh_port in {CONFIG.relative_to(ROOT)}."))
     host_key = " ".join(lines[0].split()[1:3])
     fp = run(["ssh-keygen", "-lf", "-"], input=f"{ip} {host_key}\n").stdout.split()[1]
     print(L(f"\n    Huella del servidor:  {fp}\n", f"\n    Server fingerprint:  {fp}\n"))

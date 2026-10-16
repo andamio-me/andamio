@@ -184,3 +184,15 @@ def test_setup_connects_a_local_copy(andamio, make_repo, tmp_path, monkeypatch, 
     assert "ansible/group_vars/all.yml" in files, "la configuración de seguridad sube con la copia"
     assert subprocess.run(["git", "-C", str(copy), "remote"],
                           capture_output=True, text=True).stdout.strip() == "origin"
+
+
+def test_setup_again_reuses_the_local_copy(andamio, make_repo, tmp_path, monkeypatch, git_identity):
+    """Volver a correr setup con la carpeta que ya creó: la reusa (no se queda diciendo "ya existe")."""
+    existing = make_repo("mi-andamio", {"bin/andamio": "#!/bin/sh\n", "ansible/site.yml": "[]\n"})
+    (existing / "ansible" / "group_vars").mkdir()
+    (existing / "ansible" / "group_vars" / "all.yml").write_text(PARTIAL)
+    monkeypatch.setattr(andamio, "ROOT", make_repo("andamio", {"README.md": "x\n"}))
+    monkeypatch.setattr(andamio, "ask", lambda q, default=None, check=None, **k: (check(str(existing)), str(existing))[1])
+    monkeypatch.setattr(andamio, "ask_yes", lambda *a, **k: False)
+    andamio.setup_local_copy([])
+    assert (existing / "ansible" / "group_vars" / "all.yml").read_text() == PARTIAL, "lo que ya tenía se queda"
