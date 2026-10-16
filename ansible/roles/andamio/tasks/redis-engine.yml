@@ -1,0 +1,10 @@
+# El motor de Redis (andamio_redis_engine: redis, valkey o dragonfly). Si el que corre es otro,
+# scripts/redis-engine.sh copia los datos al nuevo y lo deja como "redis". Va antes del .env de
+# stacks/data: si la copia falla, el actual sigue y nada se escribe. Lo usan main.yml y servicios.yml.
+
+- name: Motor de Redis ({{ andamio_redis_engine }})
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: "{{ andamio_infra }}/scripts/redis-engine.sh {{ andamio_redis_engine }}"
+  register: andamio_redis_engine_run
+  changed_when: "'Motor de Redis cambiado' in andamio_redis_engine_run.stdout"

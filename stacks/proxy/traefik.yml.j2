@@ -44,6 +44,7 @@ entryPoints:
         certResolver: le
 {% endif %}
       middlewares:
+        - rate-limit@file         # primero: lo que se pasa del límite ni llega a la app
         - security-headers@file   # para todas las apps públicas
         - retry@file              # deploys sin caída: reintenta si un backend desaparece
 

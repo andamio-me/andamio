@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Prueba de restauración (sirve para cualquier servidor andamio): el último backup se
-# puede leer y su dump de PostgreSQL carga en una base temporal, que se compara con
-# producción. No toca producción. Lo corre `andamio backups`; a mano: sudo scripts/restore-check.sh
+# puede leer y sus dumps de PostgreSQL y de MariaDB (si alguna app la usa) cargan en bases
+# temporales, que se comparan con producción. No toca producción. Lo corre `andamio backups`; a mano: sudo scripts/restore-check.sh
 #
 # Para una prueba completa de tus propios datos (archivos, otras bases), ver
 # scripts/restore-drill.sh como ejemplo.
 set -euo pipefail
-LNG=en; [[ ${ANDAMIO_LANG:-${LANG:-}} == es* ]] && LNG=es
+# Con sudo el entorno se pierde: entonces vale el idioma de /etc/andamio/andamio.env.
+LNG=en; lang=${ANDAMIO_LANG:-$(sed -n 's/^ANDAMIO_LANG=//p' /etc/andamio/andamio.env 2> /dev/null || true)}
+[[ ${lang:-${LANG:-}} == es* ]] && LNG=es
 L() { if [ "$LNG" = es ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi; }
 [ "$(id -u)" = 0 ] || { L "Correr con sudo" "Run with sudo"; exit 1; }
 
 T=/var/tmp/andamio-restore-check
 NET=restore-check-net
 PG=restore-check-pg
+MD=restore-check-mariadb
 cleanup() {
-  docker rm -f "$PG" > /dev/null 2>&1 || true
+  docker rm -f "$PG" "$MD" > /dev/null 2>&1 || true
   docker network rm "$NET" > /dev/null 2>&1 || true
   rm -rf "$T"
 }
@@ -66,6 +69,36 @@ check "$(L "bases de datos" databases)" "$(tr '\n' ' ' <<< "$PROD_DBS")" "$(dbs 
 for db in $PROD_DBS; do
   check "$db" "$(tables postgres "$PG_USER" "$db")" "$(tables "$PG" postgres "$db")"
 done
+
+# MariaDB de las apps: solo si corre en producción (alguna app la usa).
+if docker ps --format '{{.Names}}' | grep -qx mariadb; then
+  L "==> MariaDB temporal con el dump (red interna, sin puertos)" "==> Temporary MariaDB with the dump (internal network, no ports)"
+  check "$(L "dump de MariaDB restaurado" "MariaDB dump restored")" yes "$([ -s "$D/mariadb.sql" ] && echo yes || echo no)"
+  if [ -s "$D/mariadb.sql" ]; then
+    MD_IMAGE=$(docker inspect mariadb --format '{{.Config.Image}}')
+    # La misma clave de root que producción: el dump trae sus usuarios y la reemplaza al cargarlo.
+    MARIADB_ROOT_PASSWORD=$(docker exec mariadb printenv MARIADB_ROOT_PASSWORD)
+    # Por entorno, nunca en la línea de comandos (se vería en la lista de procesos).
+    MYSQL_PWD=$MARIADB_ROOT_PASSWORD
+    export MARIADB_ROOT_PASSWORD MYSQL_PWD
+    docker run -d --name "$MD" --network "$NET" -e MARIADB_ROOT_PASSWORD "$MD_IMAGE" > /dev/null
+    for _ in $(seq 1 90); do docker exec "$MD" healthcheck.sh --connect --innodb_initialized < /dev/null > /dev/null 2>&1 && break; sleep 1; done
+    mq() {  # mq <contenedor> <consulta>
+      docker exec -e MYSQL_PWD "$1" mariadb -uroot -N -B -e "$2" < /dev/null
+    }
+    loaded=yes
+    docker exec -i -e MYSQL_PWD "$MD" mariadb -uroot < "$D/mariadb.sql" > /dev/null || loaded=no
+    check "$(L "dump de MariaDB carga sin errores" "MariaDB dump loads without errors")" yes "$loaded"
+    SYS="'mysql', 'sys', 'performance_schema', 'information_schema'"
+    mdbs() { mq "$1" "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ($SYS) ORDER BY 1"; }
+    mtables() { mq "$1" "SELECT CONCAT(COUNT(*), ' $(L tablas tables)') FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$2'"; }
+    PROD_MDBS=$(mdbs mariadb)
+    check "$(L "bases de MariaDB" "MariaDB databases")" "$(tr '\n' ' ' <<< "$PROD_MDBS")" "$(mdbs "$MD" | tr '\n' ' ')"
+    for db in $PROD_MDBS; do
+      check "MariaDB $db" "$(mtables mariadb "$db")" "$(mtables "$MD" "$db")"
+    done
+  fi
+fi
 
 echo
 L "Resultado: $ok correctos, $bad con diferencias" "Result: $ok correct, $bad with differences"

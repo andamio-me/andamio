@@ -37,5 +37,5 @@ apps tiene: casi siempre es que estás en la carpeta de otra copia.
 
 ## Tu contraseña de sudo
 
-Cada servidor tiene la suya, y andamio las recuerda por separado (15 minutos sin uso, solo
+Cada servidor tiene la suya, y andamio las recuerda por separado (15 minutos sin uso por defecto, solo
 en memoria). `andamio olvidar` las borra todas.

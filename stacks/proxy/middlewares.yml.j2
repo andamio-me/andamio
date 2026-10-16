@@ -20,6 +20,13 @@ http:
           Server: ""                   # vacío = quitar la cabecera
           X-Powered-By: ""
 
+    # Por IP de origen (andamio_rate_*). Quien se pasa recibe 429 hasta que baja el ritmo.
+    rate-limit:
+      rateLimit:
+        average: {{ andamio_rate_average }}
+        period: 1s
+        burst: {{ andamio_rate_burst }}
+
     retry:
       retry:
         attempts: 3              # reintenta en otro backend si falla la conexión

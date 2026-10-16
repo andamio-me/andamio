@@ -9,6 +9,7 @@
     - { role: base, tags: base }
     - { role: ssh, tags: ssh }
     - { role: firewall, tags: firewall }
+    - { role: fail2ban, tags: fail2ban }
     - { role: docker, tags: docker }
     - { role: wireguard, tags: wireguard }
     - { role: andamio, tags: andamio }

@@ -30,6 +30,68 @@
         user: "{{ andamio_user }}"
         key: "{{ lookup('file', playbook_dir + '/../host/ssh/authorized_keys') }}"
 
+    # Antes de cerrarle la puerta a todo lo demás: tu usuario nuevo tiene que entrar con su
+    # llave (por el 22, que sigue abierto). Si no, el endurecimiento te dejaría afuera.
+    - name: Tu usuario nuevo entra con su llave
+      ansible.builtin.command: ssh -p 22 -o BatchMode=yes -o ConnectTimeout=15 {{ inventory_hostname }} true
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    # Desde aquí, el VPS nunca queda con contraseñas, root ni puertos abiertos: el endurecimiento
+    # de SSH y el firewall se aplican ya, no hasta site.yml (si site.yml fallaba o se corría
+    # tarde, los bots tenían SSH con contraseña y sin firewall).
+    - name: Endurecimiento de sshd (solo llave, sin root, solo tu usuario)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../host/ssh/00-andamio-hardening.conf.j2"
+        dest: /etc/ssh/sshd_config.d/00-andamio-hardening.conf
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+
+    - name: Sin el archivo de cloud-init que activaba contraseñas
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/50-cloud-init.conf
+        state: absent
+
+    # La contraseña de root que manda el proveedor (por correo, en su panel) deja de servir,
+    # también en la consola web. Para administrar: tu usuario con sudo.
+    - name: Contraseña de root bloqueada
+      ansible.builtin.user:
+        name: root
+        password_lock: true
+
+    - name: UFW instalado
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: true
+
+    # El 22 queda abierto solo hasta site.yml (el rol firewall lo cierra): si algo falla
+    # antes de mover el puerto, todavía se puede volver a entrar.
+    - name: Firewall, SSH permitido (el puerto nuevo y, por ahora, el 22)
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["{{ andamio_ssh_port }}", "22"]
+
+    - name: Firewall, todo lo demás que entra se rechaza
+      community.general.ufw:
+        direction: "{{ item.direction }}"
+        default: "{{ item.policy }}"
+      loop:
+        - { direction: incoming, policy: deny }
+        - { direction: outgoing, policy: allow }
+        - { direction: routed, policy: deny }
+      loop_control:
+        label: "{{ item.direction }}: {{ item.policy }}"
+
+    - name: Firewall activo
+      community.general.ufw:
+        state: enabled
+
     - name: Directorio del override de ssh.socket
       ansible.builtin.file:
         path: /etc/systemd/system/ssh.socket.d

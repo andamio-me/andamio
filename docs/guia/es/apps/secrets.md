@@ -38,8 +38,18 @@ Y relanza ese deploy sin que entres a GitHub.
 
 ## Varias de una vez
 
-Cada `secret set` reinicia la app. Para varias, guárdalas sin aplicar y aplica al final, una
-sola vez:
+Desde un archivo `.env` (una `CLAVE=valor` por línea; `export` y las comillas se aceptan, las
+líneas con `#` se ignoran): se revisan todas antes de tocar nada, se cifran juntas y la app se
+reinicia una sola vez. El commit lleva solo los nombres.
+
+```bash
+andamio app secret import miapp .env.produccion
+```
+
+En el panel: **Variables → Pegar varias**, pegas el `.env` o eliges el archivo, y ves cuáles son
+nuevas, cuáles reemplazan y cuáles tienen un problema, con los valores ocultos.
+
+Otra forma: guardarlas una por una sin aplicar y aplicar al final, una sola vez:
 
 ```bash
 andamio app secret set miapp STRIPE_KEY --later
@@ -55,7 +65,7 @@ andamio app secret rm miapp STRIPE_KEY         # quitarla
 cat clave.txt | andamio app secret set miapp STRIPE_KEY   # el valor desde un archivo
 ```
 
-`DOMAIN`, `DATABASE_URL`, `REDIS_URL` y `TAG` los pone andamio y no se cambian a mano.
+`DOMAIN`, `DATABASE_URL`, `MYSQL_URL`, `REDIS_URL` y `TAG` los pone andamio y no se cambian a mano.
 
 ## Por qué no GitHub Secrets
 

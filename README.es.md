@@ -183,7 +183,8 @@ otro lado. Para un dominio fuera del de tu servidor (`api.suempresa.com`) o un n
 
 Opciones útiles: `--port` (por defecto, el `EXPOSE` del Dockerfile), `--public` (accesible
 desde internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` o `--host @` (dominio raíz),
-`--mem 512m`, `--volume /data` (una carpeta que persiste entre deploys y entra al backup).
+`--mem 512m`, `--volume /data` (una carpeta que persiste entre deploys y entra al backup),
+`--env-file .env.produccion` (las variables que necesita para arrancar, cifradas antes del primer deploy).
 
 Antes de registrar nada, `app create` revisa tu código: avisa si hay un `.env` subido, si
 escucha en `localhost`, un puerto fijo distinto o archivos que se perderían en cada deploy.
@@ -340,9 +341,12 @@ hay problemas.
 andamio ui
 ```
 
-Tus apps en el navegador: estado, RAM, versión, tareas, deploys y logs en vivo. Corre **en tu
+El plano vivo de tu servidor y tus apps en el navegador: estado, RAM, versión, tareas,
+deploys y logs en vivo. Con clics: apagar y encender, cambiar RAM, CPU, puerto o acceso,
+secretos, tareas, dominios, CORS y carpetas, y reintentar un deploy; cada acción muestra y corre
+el mismo comando de la CLI. Corre **en tu
 máquina** (solo `127.0.0.1`, con una clave que cambia cada vez) y habla con el servidor por
-SSH: en el servidor no hay ningún panel que atacar. Hoy solo mira.
+SSH: en el servidor no hay ningún panel que atacar.
 
 ### Backups
 
@@ -445,8 +449,10 @@ servidor ni cuentas: corren en tu máquina y en el CI, en cada push.
 - [ ] Nombres de las tareas de Ansible en inglés (hoy están en español)
 - [x] Backups guiados (`andamio backups`)
 - [x] Tests automáticos en el CI (`tools/tests.sh`)
-- [x] Panel local en el navegador, solo para mirar (`andamio ui`)
-- [ ] Panel local con acciones (apagar, RAM, secretos, tareas) y app de escritorio
+- [x] Panel local en el navegador (`andamio ui`): plano vivo y las acciones del día a día
+- [x] Panel: backups, alertas y seguridad en el plano; deploys recientes
+- [x] Panel: crear una app (repo, revisión, configuración)
+- [ ] Panel como app de escritorio (Tauri)
 - [ ] Alertas por Telegram guiadas (`andamio telegram`)
 - [ ] Entornos de preview por pull request
 

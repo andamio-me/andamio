@@ -9,7 +9,12 @@
       - docker-buildx
     state: present
 
-- name: Configuración del daemon (logs rotados, live-restore)
+# Seguro por defecto, no por convención:
+#   ip 127.0.0.1: un "ports: 5432:5432" queda solo local (Docker se salta UFW); lo público
+#     va por Traefik, que publica 80/443 en 0.0.0.0 y [::] de forma explícita.
+#   no-new-privileges: ningún proceso de un contenedor gana privilegios con binarios setuid
+#     (sudo, su). Un contenedor que de verdad lo necesite: security_opt: [no-new-privileges:false].
+- name: Configuración del daemon (logs rotados, live-restore, puertos locales, sin escalar privilegios)
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../host/docker/daemon.json"
     dest: /etc/docker/daemon.json

@@ -67,6 +67,10 @@ def make_repo(tmp_path: Path, env: dict[str, str]):
         d.mkdir(parents=True)
         write_files(d, files)
         subprocess.run(["git", "init", "-q", "-b", "main", str(d)], check=True, env=env)
+        # Identidad del repo de prueba: así los commits de los tests (helper git()) funcionan en CI,
+        # donde no hay user.name global.
+        for key, value in (("user.name", "test"), ("user.email", "test@example.com")):
+            subprocess.run(["git", "-C", str(d), "config", key, value], check=True, env=env)
         subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, env=env)
         subprocess.run(["git", "-C", str(d), "commit", "-qm", "inicio"], check=True, env=env)
         return d
@@ -99,7 +103,8 @@ def fake_copy(make_repo, env):
     files = {
         "ansible/group_vars/all.yml": (
             "andamio_domain: ejemplo.com\nandamio_github_owner: tu-usuario\n"
-            "andamio_repo: git@github.com:tu-usuario/tu-andamio.git\nandamio_server_ip: 203.0.113.10\n"),
+            "andamio_repo: git@github.com:tu-usuario/tu-andamio.git\nandamio_server_ip: 203.0.113.10\n"
+            "andamio_user: andamio\n"),
         "ansible/inventory.yml": "all:\n  children:\n    servers:\n      hosts:\n        mi-vps:\n",
         "apps/web/app.yml": APP_YML,
         "apps/web/secrets.sops.env": "# relleno: los tests no descifran nada\n",
@@ -111,6 +116,7 @@ def fake_copy(make_repo, env):
         shutil.copy2(ROOT / "bin" / name, d / "bin" / name)
     shutil.copytree(ROOT / "templates", d / "templates")
     shutil.copytree(ROOT / "ui", d / "ui")
+    shutil.copytree(ROOT / "scripts", d / "scripts")
     shutil.copytree(ROOT / "ansible" / "filter_plugins", d / "ansible" / "filter_plugins",
                     ignore=shutil.ignore_patterns("__pycache__"))
     subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, env=env)

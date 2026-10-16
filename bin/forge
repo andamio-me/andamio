@@ -12,6 +12,7 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge repo-exists DUEÑO/REPO             código de salida 0 si existe y tienes acceso
   forge repo-private DUEÑO/REPO            código de salida 0 si es privado
   forge repo-create DUEÑO/REPO PLANTILLA   repo privado desde una plantilla (espera a main)
+  forge repo-create-empty DUEÑO/REPO       repo privado vacío (para subir una copia que ya existe)
   forge clone-url DUEÑO/REPO               URL SSH para clonar
   forge ssh-host                           host SSH de git (para ~/.ssh/config)
   forge known-hosts                        sus llaves de host SSH (para known_hosts)
@@ -21,16 +22,27 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge vars-get DUEÑO/REPO                variables de CI como JSON {nombre: valor}
   forge var-set DUEÑO/REPO NOMBRE VALOR    variable de CI (no secreta)
   forge ci-allow-reuse DUEÑO/REPO          permite que tus otros repos usen su pipeline
-  forge ci-snippet DUEÑO/REPO VERSIÓN      el archivo de CI que una app agrega para desplegar
+  forge default-branch DUEÑO/REPO          su rama principal (main, production…)
+  forge pr-create DUEÑO/REPO BASE RAMA TÍTULO   abre un PR (el cuerpo por stdin) y dice su URL
+  forge ci-snippet DUEÑO/REPO VERSIÓN [--branch B] [--app A --dir D [--context C] [--watch P]...]
+                                           el archivo de CI que una app agrega para desplegar
+                                           (con --app: una de varias apps del repo, en su carpeta)
   forge ci-watch [DUEÑO/REPO [SHA]]        sigue la corrida de ese commit (o la última)
   forge ci-last-failed DUEÑO/REPO          id de la última corrida de main si falló (si no, nada)
-  forge ci-runs DUEÑO/REPO                 las últimas corridas de main (deploys), como JSON
+  forge ci-runs DUEÑO/REPO [N]             las últimas N corridas de main (deploys; 8), como JSON
+  forge repos                              tus repos (nombre, privado, actualizado), como JSON
   forge ci-repin DIR DUEÑO/REPO SHA        el pipeline de la app clonada en DIR, a esa versión
   forge ci-rerun DUEÑO/REPO ID             la reintenta y la sigue
+  forge ci-failure DUEÑO/REPO ID           por qué falló una corrida (pasos, últimas líneas, pistas), como JSON
+  forge ci-jobs DUEÑO/REPO ID              sus jobs y pasos, con estado y tiempos (el progreso en vivo), como JSON
   forge registry                           registro de imágenes (p. ej. ghcr.io)
   forge registry-name                      su nombre para mostrar (p. ej. GHCR)
   forge registry-token-help                cómo crear un token de solo lectura de imágenes
   forge registry-token-check               valida el token (por stdin); el problema, si hay
+
+Con varias apps en un repo, ci-watch, ci-last-failed y ci-runs aceptan --workflow ARCHIVO
+(p. ej. andamio-api.yml): solo las corridas de esa app. ci-last-failed y ci-runs aceptan
+--branch RAMA (la que despliega; main si no se dice).
 """
 from __future__ import annotations
 
@@ -65,6 +77,15 @@ def fail(msg: str, code: int = 1) -> None:
     sys.exit(code)
 
 
+def watch_pattern(w: str) -> str:
+    """Una ruta del repo como patrón de GitHub Actions: una carpeta (backend, packages/) cubre todo lo
+    de adentro; un archivo (package.json) o un patrón con * quedan como están."""
+    w = w.strip().lstrip("/")
+    if "*" in w or (not w.endswith("/") and "." in w.rsplit("/", 1)[-1]):
+        return w
+    return w.rstrip("/") + "/**"
+
+
 class GitHub:
     """GitHub con la CLI oficial `gh`. Imágenes en GHCR; pipeline en GitHub Actions."""
 
@@ -97,6 +118,11 @@ class GitHub:
                 return
             time.sleep(2)
         fail(L(f"{repo} se creó, pero main no apareció en 30 s", f"{repo} was created, but main didn't show up in 30 s"))
+
+    def repo_create_empty(self, repo: str) -> None:
+        r = self.gh("repo", "create", repo, "--private", "--clone=false")
+        if r.returncode != 0:
+            fail(r.stderr.strip())
 
     def clone_url(self, repo: str) -> str:
         return f"git@github.com:{repo}.git"
@@ -152,18 +178,49 @@ class GitHub:
             fail(r.stderr.strip())
         return True
 
-    def ci_snippet(self, repo: str, version: str) -> str:
-        return f"""# .github/workflows/andamio.yml
-name: CI/CD
+    def pr_create(self, repo: str, base: str, head: str, title: str, body: str) -> str:
+        r = self.gh("pr", "create", "--repo", repo, "--base", base, "--head", head, "--title", title, "--body", body)
+        if r.returncode != 0:
+            fail(r.stderr.strip())
+        return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+
+    def default_branch(self, repo: str) -> str:
+        r = self.gh("repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+        return r.stdout.strip() or "main"
+
+    def ci_snippet(self, repo: str, version: str, app: str = "", dir: str = "", context: str = "",
+                   watch: list[str] | None = None, branch: str = "main") -> str:
+        if not app:
+            head, image, extra = "andamio.yml", "${{ github.event.repository.name }}", ""
+            on = f"""  push: {{ branches: [{branch}] }}
+  pull_request: {{ branches: [{branch}] }}"""
+        else:
+            # Una de varias apps del repo: su carpeta, su imagen, su llave, y solo corre si cambió
+            # algo suyo (o este archivo).
+            # Su carpeta siempre; --watch suma otras rutas (packages/, un archivo). Si se construye desde
+            # la raíz, también los manifiestos de la raíz: una dependencia compartida que cambia la redespliega.
+            root = ["package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock", "pnpm-workspace.yaml",
+                    ".nvmrc", ".node-version", "go.work"] if context == "." else []
+            paths = list(dict.fromkeys(watch_pattern(w) for w in [dir, *(watch or []), *root] if w and w != "."))
+            paths.append(f".github/workflows/andamio-{app}.yml")
+            plist = ", ".join(f'"{x}"' for x in paths)
+            head, image = f"andamio-{app}.yml", app
+            on = f"""  push: {{ branches: [{branch}], paths: [{plist}] }}
+  pull_request: {{ branches: [{branch}], paths: [{plist}] }}"""
+            extra = f"""
+      dir: {dir}""" + (f"""
+      context: {context}""" if context else "") + f"""
+      deploy_key: DEPLOY_SSH_KEY_{app.upper().replace('-', '_')}"""
+        return f"""# .github/workflows/{head}
+name: {"CI/CD" if not app else f"CI/CD {app}"}
 on:
-  push: {{ branches: [main] }}
-  pull_request: {{ branches: [main] }}
+{on}
 jobs:
   build:
     uses: {repo}/.github/workflows/app-build.yml@{version}
     permissions: {{ contents: read, packages: write }}
     with:
-      image: ${{{{ github.event.repository.name }}}}
+      image: {image}{extra}
       deploy: true
       deploy_host: ${{{{ vars.DEPLOY_HOST }}}}
       deploy_port: ${{{{ vars.DEPLOY_PORT }}}}
@@ -172,13 +229,14 @@ jobs:
       # {L("Secretos que el Dockerfile necesita AL CONSTRUIR (RUN --mount=type=secret,id=NOMBRE):",
            "Secrets the Dockerfile needs AT BUILD TIME (RUN --mount=type=secret,id=NAME):")}
       # build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
-    secrets: inherit   # DEPLOY_SSH_KEY {L("y los de build_secrets", "and the build_secrets ones")}"""
+    secrets: inherit   # {L("la llave de deploy y los de build_secrets", "the deploy key and the build_secrets ones")}"""
 
-    def ci_watch(self, repo: str | None = None, sha: str | None = None) -> int:
+    def ci_watch(self, repo: str | None = None, sha: str | None = None, workflow: str = "") -> int:
         """Sigue la corrida de ese commit (recién empujado: espera hasta 1 min a que aparezca),
         o la última del repo."""
         where = ["--repo", repo] if repo else []
-        query = [*where, *(["--commit", sha] if sha else []), "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"]
+        query = [*where, *(["--commit", sha] if sha else []), *(["--workflow", workflow] if workflow else []),
+                 "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"]
         run_id = ""
         for _ in range(20 if sha else 1):
             run_id = self.gh("run", "list", *query).stdout.strip()
@@ -209,21 +267,35 @@ jobs:
             f.write_text(pat.sub(lambda m: f"{m.group(1)}{uses_repo}{m.group(2)}{sha}", text))
         return f"{old} {sha}" if old else ""
 
-    def ci_last_failed(self, repo: str) -> str:
-        """La última corrida de main, si terminó en falla (su id); si no, vacío."""
-        r = self.gh("run", "list", "--repo", repo, "--branch", "main", "--limit", "1",
+    def ci_last_failed(self, repo: str, workflow: str = "", branch: str = "main") -> str:
+        """La última corrida de su rama, si terminó en falla (su id); si no, vacío."""
+        r = self.gh("run", "list", "--repo", repo, "--branch", branch, "--limit", "1",
+                    *(["--workflow", workflow] if workflow else []),
                     "--json", "databaseId,status,conclusion", "-q",
                     '.[0] | select(.status == "completed" and .conclusion == "failure") | .databaseId')
         return r.stdout.strip()
 
-    def ci_runs(self, repo: str, limit: int = 8) -> list[dict]:
-        """Las últimas corridas de main (los deploys), de la más nueva a la más vieja."""
-        r = self.gh("run", "list", "--repo", repo, "--branch", "main", "--limit", str(limit),
-                    "--json", "databaseId,status,conclusion,displayTitle,headSha,createdAt,url")
+    def repos(self) -> list[dict]:
+        """Tus repos (y los de tus organizaciones a los que tienes acceso), del más reciente al más viejo."""
+        r = self.gh("repo", "list", "--limit", "200", "--json", "nameWithOwner,isPrivate,updatedAt,description")
         if r.returncode != 0:
             return []
+        return [{"repo": x["nameWithOwner"], "private": x["isPrivate"], "updated": x["updatedAt"],
+                 "description": x.get("description") or ""} for x in json.loads(r.stdout or "[]")]
+
+    def ci_runs(self, repo: str, limit: int = 8, workflow: str = "", branch: str = "main") -> list[dict]:
+        """Las últimas corridas de su rama (los deploys), de la más nueva a la más vieja."""
+        # Solo los push: otras corridas en la rama (las de Dependabot, p. ej.) no son deploys ni tienen imagen.
+        r = self.gh("run", "list", "--repo", repo, "--branch", branch, "--event", "push", "--limit", str(limit),
+                    *(["--workflow", workflow] if workflow else []),
+                    "--json", "databaseId,status,conclusion,displayTitle,headSha,createdAt,startedAt,updatedAt,url")
+        if r.returncode != 0:
+            return []
+        # started/updated: cuánto tardó (una corrida terminada no se actualiza más).
         return [{"id": x["databaseId"], "status": x["status"], "conclusion": x["conclusion"] or "",
-                 "title": x["displayTitle"], "sha": x["headSha"][:7], "created": x["createdAt"], "url": x["url"]}
+                 "title": x["displayTitle"], "sha": x["headSha"][:7], "full": x["headSha"],
+                 "created": x["createdAt"], "started": x.get("startedAt") or "", "updated": x.get("updatedAt") or "",
+                 "url": x["url"]}
                 for x in json.loads(r.stdout or "[]")]
 
     def ci_rerun(self, repo: str, run_id: str) -> int:
@@ -232,6 +304,46 @@ jobs:
             fail(L("No pude reintentar la corrida.", "Couldn't re-run it."))
         time.sleep(3)
         return self.watch(run_id, ["--repo", repo])
+
+    def ci_jobs(self, repo: str, run_id: str) -> list[dict]:
+        """Los jobs de una corrida y sus pasos (estado, inicio y fin): el progreso de un deploy."""
+        r = self.gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs")
+        try:
+            jobs = json.loads(r.stdout).get("jobs") or []
+        except ValueError:
+            return []
+        step = lambda s: {"name": s.get("name", ""), "status": s.get("status", ""), "conclusion": s.get("conclusion") or "",
+                          "started": s.get("started_at") or "", "completed": s.get("completed_at") or ""}
+        return [{**step(j), "name": j.get("name", "").split(" / ")[-1], "steps": [step(s) for s in j.get("steps") or []]}
+                for j in jobs]
+
+    def ci_failure(self, repo: str, run_id: str) -> dict:
+        """Por qué falló una corrida, para mostrarlo sin ir a GitHub: los pasos que fallaron, las
+        últimas líneas de su log y las pistas 💡 que deja el servidor al desplegar."""
+        r = self.gh("run", "view", run_id, "--repo", repo, "--json", "url,jobs,conclusion,displayTitle")
+        try:
+            info = json.loads(r.stdout)
+        except ValueError:
+            return {"error": L("No pude leer esa corrida de GitHub", "Couldn't read that run from GitHub")}
+        bad = [j for j in info.get("jobs") or [] if j.get("conclusion") == "failure"]
+        failed = [{"job": j["name"], "steps": [s["name"] for s in j.get("steps") or [] if s.get("conclusion") == "failure"]} for j in bad]
+        # El log de cada job que falló (la API directa: `gh run view --log-failed` vuelve vacío con
+        # workflows reutilizables, como el de andamio), recortado alrededor del último error.
+        lines: list[str] = []
+        every: list[str] = []
+        for j in bad[:2]:
+            raw = self.gh("api", f"repos/{repo}/actions/jobs/{j['databaseId']}/logs").stdout.splitlines()
+            clean = [re.sub(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ?", "", l) for l in raw]
+            every += clean
+            last = max((i for i, l in enumerate(clean) if "##[error]" in l), default=len(clean) - 1)
+            lines += clean[max(0, last - 50):last + 3]
+        text = lambda l: re.sub(r"^##\[(error|warning|group|endgroup)\]", "", l).strip()
+        hints = [text(l).split("💡", 1)[1].strip(" :") for l in every if "💡" in l and "echo" not in l]
+        cause = next((text(l).split("❌", 1)[1].strip() for l in every if "❌" in l and "echo" not in l and "grep" not in l), "")
+        return {"url": info.get("url", ""), "title": info.get("displayTitle", ""), "conclusion": info.get("conclusion", ""),
+                "failed": failed, "cause": cause, "hints": list(dict.fromkeys(h for h in hints if h))[:6],
+                "log": [text(l) if l.startswith("##[") else l for l in lines if not l.startswith("##[endgroup]")],
+                "rejected": not info.get("jobs")}
 
     def explain_run(self, run_id: str, where: list[str]) -> None:
         """Por qué falló una corrida: el paso, sus últimas líneas de log y el link."""
@@ -311,6 +423,25 @@ def main() -> None:
         print(__doc__.strip())
         sys.exit(0 if args else 2)
     cmd, rest, f = args[0], args[1:], current()
+    # Opciones --nombre valor (repetibles): --workflow, y las de ci-snippet.
+    opts: dict[str, list[str]] = {}
+    pos: list[str] = []
+    it = iter(rest)
+    for a in it:
+        if a.startswith("--") and a[2:] in ("workflow", "app", "dir", "context", "watch", "branch"):
+            v = next(it, None)
+            if v is None:
+                fail(L(f"falta el valor de {a}", f"missing value for {a}"), 2)
+            opts.setdefault(a[2:], []).append(v)
+        else:
+            pos.append(a)
+    rest = pos
+    wf = (opts.get("workflow") or [""])[0]
+    if wf and not re.fullmatch(r"[A-Za-z0-9._-]+\.ya?ml", wf):
+        fail(L(f"--workflow inválido: {wf}", f"invalid --workflow: {wf}"), 2)
+    br = (opts.get("branch") or ["main"])[0]
+    if not re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", br) or ".." in br:
+        fail(L(f"--branch inválida: {br}", f"invalid --branch: {br}"), 2)
 
     def need(n: int) -> list[str]:
         if len(rest) != n:
@@ -331,8 +462,14 @@ def main() -> None:
         "ssh-host": lambda: f.ssh_host(),
         "known-hosts": lambda: f.known_hosts(),
         "vars-get": lambda: json.dumps(f.vars_get(*need(1))),
-        "ci-runs": lambda: json.dumps(f.ci_runs(*need(1))),
-        "ci-snippet": lambda: f.ci_snippet(*need(2)),
+        "ci-failure": lambda: json.dumps(f.ci_failure(*need(2))),
+        "ci-jobs": lambda: json.dumps(f.ci_jobs(*need(2))),
+        "ci-runs": lambda: json.dumps(f.ci_runs(rest[0], int(rest[1]), wf, br) if len(rest) == 2 and rest[1].isdigit()
+                                      else f.ci_runs(*need(1), workflow=wf, branch=br)),
+        "default-branch": lambda: f.default_branch(*need(1)),
+        "repos": lambda: json.dumps(f.repos()),
+        "ci-snippet": lambda: f.ci_snippet(*need(2), app=(opts.get("app") or [""])[0], dir=(opts.get("dir") or [""])[0],
+                                           context=(opts.get("context") or [""])[0], watch=opts.get("watch"), branch=br),
         "registry": lambda: f.registry(),
         "registry-name": lambda: f.registry_name(),
         "registry-token-help": lambda: f.registry_token_help(),
@@ -343,20 +480,24 @@ def main() -> None:
         print(printing[cmd]())
     elif cmd == "repo-create":
         f.repo_create(*need(2))
+    elif cmd == "repo-create-empty":
+        f.repo_create_empty(*need(1))
     elif cmd == "deploy-key-add":
         f.deploy_key_add(*need(3))
     elif cmd == "secret-set":
         f.secret_set(*need(2), sys.stdin.read())
     elif cmd == "var-set":
         f.var_set(*need(3))
+    elif cmd == "pr-create":
+        print(f.pr_create(*need(4), sys.stdin.read()))
     elif cmd == "ci-allow-reuse":
         print("cambiado" if f.ci_allow_reuse(*need(1)) else "sin cambios")
     elif cmd == "ci-watch":
-        sys.exit(f.ci_watch(*rest[:2]))
+        sys.exit(f.ci_watch(*rest[:2], workflow=wf))
     elif cmd == "ci-repin":
         print(f.ci_repin(*need(3)))
     elif cmd == "ci-last-failed":
-        print(f.ci_last_failed(*need(1)))
+        print(f.ci_last_failed(*need(1), workflow=wf, branch=br))
     elif cmd == "ci-rerun":
         sys.exit(f.ci_rerun(*need(2)))
     elif cmd == "registry-token-check":

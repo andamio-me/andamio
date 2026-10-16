@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Mini-PaaS de andamio: `bin/andamio app ...` llama a este script. Se usa desde tu máquina.
 #
-#   andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
+#   andamio app create <nombre> [--repo dueño/repo] [--public] [--db] [--mysql] [--redis] [--host <sub>|@] [--mem 256m]
+#                      [--dir backend] [--path /api]   (varias apps en un repo; ver usage)
 #   andamio app secret set|rm <nombre> <CLAVE>      andamio app secret list <nombre>
+#   andamio app secret import <nombre> <.env|->     (varias de una vez)
 #   andamio app list | info <nombre> | set <nombre> --mem 512m | logs <nombre> | rollback <nombre> | destroy <nombre>
 #
 # create: repo propio (--repo) o desde andamio_app_template, apps/<nombre>/app.yml, secretos y llave de
@@ -47,13 +49,35 @@ no_app() {
 }
 # Todo lo de GitHub (o la forja que sea) pasa por bin/forge.
 forge() { "$INFRA/bin/forge" "$@"; }
+# El repo de una app y, si comparte el repo con otras (dir: en app.yml), su workflow: sus
+# corridas son solo las de ese archivo.
+app_ci() {  # app_ci <app.yml> <nombre>  ->  "dueño/repo rama [andamio-<nombre>.yml]"
+  python3 - "$1" "$2" "$OWNER" <<'PY'
+import sys, yaml
+f, name, owner = sys.argv[1:]
+a = yaml.safe_load(open(f)) or {}
+print(a.get("repo") or f"{owner}/{name}", a.get("branch") or "main", f"andamio-{name}.yml" if a.get("dir") else "")
+PY
+}
 step() { printf '\n==> %s\n' "$*"; }
+# Las etapas de una acción larga, para el panel (que las muestra como progreso y las esconde de la
+# salida). En la terminal no se imprimen.
+stage() { [ "${ANDAMIO_ASSUME:-}" = default ] && printf '::stage %s\n' "$1"; return 0; }
 usage() {
   L "  andamio app create <nombre> [--repo dueño/repo] [--port 3000] [--health /ruta]
-                             [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
+                             [--public] [--db] [--mysql] [--redis] [--host <sub>|@] [--mem 256m]
                              [--domain api.suempresa.com] [--cors https://miapp.vercel.app] [--volume /data]
+                             [--env-file .env.produccion]   (variables para el primer deploy; - = stdin)
+                             [--branch production]   (la rama que despliega; sin decirla, la principal del repo)
+                             [--dir backend [--context .] [--watch packages/]] [--path /api]
+                               (varias apps en un repo: su carpeta, desde dónde se construye, qué más
+                                dispara su deploy y, opcional, una ruta bajo el host de otra app)
+  andamio app source <nombre> [--dir backend] [--context .|-] [--watch-add packages/] [--watch-rm …]
+                                             (de dónde sale una de varias apps de un repo)
   andamio app secret set <nombre> <CLAVE> [--later]   (el valor se pide oculto, o por un pipe;
                                              --later: guarda sin aplicar, para juntar varios)
+  andamio app secret import <nombre> <.env|-> [--later]   (varias de una vez: CLAVE=valor por línea;
+                                             - = stdin; agrega o reemplaza, un solo reinicio)
   andamio app secret rm <nombre> <CLAVE>
   andamio app secret list <nombre>           (solo los nombres)
   andamio app apply [<nombre>]               (aplica lo pendiente en el servidor: un reinicio)
@@ -66,16 +90,32 @@ usage() {
   andamio app cors add|rm|list <nombre> [https://miapp.vercel.app]   (frontend en otro lado)
   andamio app volume add|rm|list <nombre> [/data]   (carpeta que persiste entre deploys, con backup)
   andamio app cron add <nombre> '<horario>' '<comando>' [--name limpiar]   (tarea programada, ej. '0 3 * * *')
-  andamio app cron list|rm|run <nombre> [<tarea>]   (verlas, quitar una, correrla ya)
+  andamio app cron list|rm|run|runs <nombre> [<tarea>]   (verlas, quitar una, correrla ya, sus últimas corridas)
+  andamio app cron edit <nombre> <tarea> [--schedule '<horario>'] [--command '<comando>']
   andamio app ci-update [<nombre>]           (el pipeline de tus apps, a la versión de andamio actual)
-  andamio app logs <nombre>
-  andamio app rollback <nombre>
+  andamio app retry <nombre>                 (reintenta su último deploy, si falló)
+  andamio app logs <nombre> [--worker]
+  andamio app restart <nombre>               (reinicia sus contenedores, misma versión)
+  andamio app deploy <nombre>                (despliega de nuevo lo último de main que salió bien, sin push)
+  andamio app rollback <nombre> [<commit>]   (volver a un deploy anterior; sin commit, al penúltimo)
+  andamio app restore <nombre> [<respaldo>|latest]   (su base y carpetas, como en ese respaldo)
+  andamio app revert <nombre> <commit>       (deshace un cambio de su configuración: RAM, dominios, tareas...)
+  andamio app sql <nombre> ['SELECT ...']    (su base, de SOLO LECTURA: psql o una consulta)
   andamio app destroy <nombre>
 " "  andamio app create <name> [--repo owner/repo] [--port 3000] [--health /path]
-                           [--public] [--db] [--redis] [--host <sub>|@] [--mem 256m]
+                           [--public] [--db] [--mysql] [--redis] [--host <sub>|@] [--mem 256m]
                            [--domain api.mycompany.com] [--cors https://myapp.vercel.app] [--volume /data]
+                           [--env-file .env.production]   (variables for the first deploy; - = stdin)
+                           [--branch production]   (the branch that deploys; by default the repo's main one)
+                           [--dir backend [--context .] [--watch packages/]] [--path /api]
+                             (several apps in one repo: its folder, where it's built from, what else
+                              triggers its deploy and, optionally, a path under another app's host)
+  andamio app source <name> [--dir backend] [--context .|-] [--watch-add packages/] [--watch-rm …]
+                                             (where one of several apps in a repo comes from)
   andamio app secret set <name> <KEY> [--later]   (the value is asked hidden, or read from a pipe;
                                              --later: save without applying, to batch several)
+  andamio app secret import <name> <.env|-> [--later]   (several at once: KEY=value per line;
+                                             - = stdin; adds or replaces, a single restart)
   andamio app secret rm <name> <KEY>
   andamio app secret list <name>             (names only)
   andamio app apply [<name>]                 (applies what's pending on the server: one restart)
@@ -88,10 +128,17 @@ usage() {
   andamio app cors add|rm|list <name> [https://myapp.vercel.app]   (frontend hosted elsewhere)
   andamio app volume add|rm|list <name> [/data]   (folder that persists across deploys, backed up)
   andamio app cron add <name> '<schedule>' '<command>' [--name cleanup]   (scheduled task, e.g. '0 3 * * *')
-  andamio app cron list|rm|run <name> [<task>]   (see them, remove one, run it now)
+  andamio app cron list|rm|run|runs <name> [<task>]   (see them, remove one, run it now, its last runs)
+  andamio app cron edit <name> <task> [--schedule '<schedule>'] [--command '<command>']
   andamio app ci-update [<name>]             (your apps' pipeline, to the current andamio version)
-  andamio app logs <name>
-  andamio app rollback <name>
+  andamio app retry <name>                   (retries its last deploy, if it failed)
+  andamio app logs <name> [--worker]
+  andamio app restart <name>                 (restarts its containers, same version)
+  andamio app deploy <name>                  (deploys main's latest successful build again, no push)
+  andamio app rollback <name> [<commit>]     (back to an earlier deploy; no commit: the one before)
+  andamio app restore <name> [<backup>|latest]   (its database and folders, as in that backup)
+  andamio app revert <name> <commit>         (undoes a change to its configuration: RAM, domains, tasks...)
+  andamio app sql <name> ['SELECT ...']      (its database, READ-ONLY: psql or one query)
   andamio app destroy <name>
 "
   exit 1
@@ -108,13 +155,35 @@ ask() {
   [ "$rc" = 130 ] && exit 130
   return "$rc"
 }
-confirm() { ask "$1" n || die "$(L Cancelado Cancelled)"; }
+# confirm <pregunta> [VARIABLE]: sí o no (por defecto no). Con VARIABLE=1 en el entorno, el panel
+# ya lo confirmó en la página: sigue sin preguntar (y lo dice).
+confirm() {
+  if [ -n "${2:-}" ] && [ "${!2:-}" = 1 ]; then
+    echo "$1 $(L "sí (lo confirmaste en el panel)" "yes (you confirmed it in the panel)")"
+    return 0
+  fi
+  ask "$1" n || die "$(L Cancelado Cancelled)"
+}
 # URL pública de un host: "@" es el dominio raíz.
 app_url() { if [ "$1" = "@" ]; then echo "https://$DOMAIN"; else echo "https://$1.$DOMAIN"; fi; }
 valid_name() {
   [[ $1 =~ ^[a-z][a-z0-9-]{1,28}[a-z0-9]$ ]] \
     || die "$(L "Nombre inválido: minúsculas, números y guiones (3-30)" "Invalid name: lowercase letters, digits and hyphens (3-30)")"
 }
+# Sube tu copia. Si GitHub tiene commits que tu copia no (un PR mergeado allá, Dependabot), los trae
+# y pone los tuyos encima, y vuelve a subir. Si los dos cambiaron lo mismo, no adivina: deshace el
+# intento y dice cómo resolverlo.
+push_infra() {
+  git -C "$INFRA" push -q 2> /dev/null && return 0
+  echo "  $(L "GitHub tiene cambios que tu copia no: los traigo y pongo los tuyos encima" "GitHub has changes your copy doesn't: fetching them and putting yours on top")"
+  if ! git -C "$INFRA" pull -q --rebase 2> /dev/null; then
+    git -C "$INFRA" rebase --abort 2> /dev/null || true
+    die "$(L "Tu copia y GitHub cambiaron lo mismo. Resuélvelo en $INFRA (git pull) y vuelve a correr el comando." \
+             "Your copy and GitHub changed the same thing. Resolve it in $INFRA (git pull) and run the command again.")"
+  fi
+  push_infra
+}
+
 no_uncommitted() {
   git -C "$INFRA" diff --quiet && git -C "$INFRA" diff --cached --quiet \
     || die "$(L "Este repo tiene cambios sin commitear; súbelos o descártalos antes" "This repo has uncommitted changes; push or discard them first")"
@@ -124,13 +193,14 @@ app_create() {
   local name=${1:-}; shift || true
   [ -n "$name" ] || usage
   valid_name "$name"
-  local access=vpn db=false redis=false host=$name mem=256m repo="" port=3000 port_set="" health=""
-  local domains=() origins=() volumes=()
+  local access=vpn db=false redis=false mysql=false host=$name mem=256m repo="" port=3000 port_set="" health="" env_file=""
+  local domains=() origins=() volumes=() watch=() appdir="" context="" path="" branch=""
   local missing; missing=$(L "falta el valor de" "missing value for")
   while [ $# -gt 0 ]; do
     case $1 in
       --public) access=public ;;
       --db) db=true ;;
+      --mysql | --mariadb) mysql=true ;;   # MariaDB (compatible con MySQL): MYSQL_URL y DB_* de Laravel
       --redis) redis=true ;;
       --host) host=${2:?$missing --host}; shift ;;
       --mem) mem=${2:?$missing --mem}; shift ;;
@@ -140,6 +210,14 @@ app_create() {
       --domain) domains+=("$(valid_domain "${2:?$missing --domain}")"); shift ;;
       --cors) origins+=("$(valid_origin "${2:?$missing --cors}")"); shift ;;
       --volume) volumes+=("$(valid_volume "${2:?$missing --volume}")"); shift ;;
+      --env-file) env_file=${2:?$missing --env-file}; shift ;;   # variables para el primer deploy (- = stdin)
+      # Varias apps en un repo (front y back): la carpeta de esta, desde dónde se construye, qué
+      # carpetas disparan su deploy y, opcional, una ruta bajo el dominio de otra (/api).
+      --dir) appdir=$(valid_dir "${2:?$missing --dir}"); shift ;;
+      --context) context=$(valid_dir "${2:?$missing --context}" root); shift ;;
+      --watch) watch+=("$(valid_watch "${2:?$missing --watch}")"); shift ;;
+      --path) path=${2:?$missing --path}; shift ;;
+      --branch) branch=${2:?$missing --branch}; shift ;;   # la rama que despliega (sin decirla: la principal del repo)
       *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
     esac
     shift
@@ -150,13 +228,34 @@ app_create() {
   [[ $port =~ ^[0-9]{2,5}$ ]] || die "$(L "Puerto inválido" "Invalid port"): $port"
   [[ -z $health || $health =~ ^/[A-Za-z0-9._/-]*$ ]] \
     || die "$(L "Ruta de salud inválida: $health (ej. /healthz)" "Invalid health path: $health (e.g. /healthz)")"
+  # Las variables (--env-file): se leen una vez a una carpeta privada (se borra al salir) y se
+  # revisan antes de tocar nada. Los valores nunca se muestran.
+  local envtmp=""
+  if [ -n "$env_file" ]; then
+    envtmp=$(mktemp -d); chmod 700 "$envtmp"
+    CLEANUP="${CLEANUP:-} $envtmp"
+    # shellcheck disable=SC2064   # la lista se fija ahora, a propósito
+    trap "rm -rf ${CLEANUP}" EXIT
+    if [ "$env_file" = - ]; then cat > "$envtmp/in"; else
+      [ -r "$env_file" ] || die "$(L "No puedo leer $env_file" "Can't read $env_file")"
+      cat -- "$env_file" > "$envtmp/in"
+    fi
+    envfile_check "$envtmp/in"
+  fi
   [[ -z $repo || $repo =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] \
     || die "$(L "Repo inválido: $repo (dueño/nombre)" "Invalid repo: $repo (owner/name)")"
+  [[ -z $branch || ( $branch =~ ^[A-Za-z0-9._/-]{1,100}$ && $branch != *..* ) ]] \
+    || die "$(L "Rama inválida: $branch" "Invalid branch: $branch")"
+  [[ -z $path || $path =~ ^/[a-z0-9._-]+(/[a-z0-9._-]+)*$ ]] \
+    || die "$(L "Ruta inválida: $path (ej. /api)" "Invalid path: $path (e.g. /api)")"
+  if [ -z "$appdir" ] && { [ -n "$context" ] || [ ${#watch[@]} -gt 0 ]; }; then
+    die "$(L "--context y --watch van con --dir (la carpeta de la app)" "--context and --watch go with --dir (the app's folder)")"
+  fi
+  [ -z "$appdir" ] || [ -n "$repo" ] || die "$(L "--dir va con --repo (el repo donde está esa carpeta)" "--dir goes with --repo (the repo that has that folder)")"
 
   local dir=$INFRA/apps/$name
   [ -e "$dir" ] && die "$(L "Ya existe" "Already exists"): $dir"
-  grep -rqsE "^host: \"?$host\"?( |$)" "$INFRA"/apps/*/app.yml \
-    && die "$(L "El host '$host' ya lo usa otra app" "Host '$host' is already used by another app")"
+  host_free "$host" "$path"
   [ -z "$repo" ] && [ -e "$PROJECTS/$name" ] && die "$(L "Ya existe" "Already exists"): $PROJECTS/$name"
   [ -n "$repo" ] || [ -n "$TEMPLATE" ] \
     || die "$(L "Indica el repo de tu app con --repo dueño/nombre (o define andamio_app_template en la config)" \
@@ -174,38 +273,56 @@ app_create() {
   Make your app's repo private (gh repo edit $repo --visibility private) and run again.")"
   fi
 
+  # La contraseña de sudo al principio (el panel ya la pidió): así no te la pide a mitad de camino.
+  [ "${ANDAMIO_ASSUME:-}" = default ] || "$INFRA/bin/andamio" _sudo
+
   # El repo de la app, clonado aparte: Dockerfile (si falta, se propone uno) y CI.
   local work=""
   if [ -n "$repo" ]; then
     work=$(mktemp -d)
-    # shellcheck disable=SC2064   # el temporal se fija ahora, a propósito
-    trap "rm -rf '$work'" EXIT
+    CLEANUP="${CLEANUP:-} $work"
+    # shellcheck disable=SC2064   # la lista se fija ahora, a propósito
+    trap "rm -rf ${CLEANUP}" EXIT
+    stage review
     step "$(L "Revisando el repo $repo" "Checking the repo $repo")"
-    git clone -q --depth 1 "$(forge clone-url "$repo")" "$work/repo" \
-      || die "$(L "No pude clonar $repo por SSH" "Couldn't clone $repo over SSH")"
-    "$INFRA/bin/andamio" _scaffold "$work/repo" "$port_set" "$work/out"
+    # La rama que despliega: la principal del repo (main, production…), o --branch.
+    [ -n "$branch" ] || branch=$(forge default-branch "$repo")
+    git clone -q --depth 1 --branch "$branch" "$(forge clone-url "$repo")" "$work/repo" \
+      || die "$(L "No pude clonar la rama $branch de $repo por SSH" "Couldn't clone branch $branch of $repo over SSH")"
+    # Con --dir, la app es esa carpeta: ahí van el Dockerfile y la revisión.
+    local src=$work/repo${appdir:+/$appdir}
+    [ -d "$src" ] || die "$(L "$repo no tiene la carpeta $appdir" "$repo has no folder $appdir")"
+    # Sin --dir, y la raíz no es una app pero el repo tiene varias: decir cuáles, en vez de adivinar.
+    if [ -z "$appdir" ]; then
+      local many; many=$("$INFRA/bin/andamio" _folders "$src")
+      [ -z "$many" ] || die "$(L "$repo tiene varias apps y la raíz no es una. Elige cuál con --dir:" \
+                                 "$repo has several apps and its root isn't one. Pick which with --dir:")
+$many"
+    fi
+    "$INFRA/bin/andamio" _scaffold "$src" "$port_set" "$work/out"
     local p; p=$(sed -n 's/^port=//p' "$work/out")
     # Sin --port: el del Dockerfile generado, o el EXPOSE del que ya tenía.
-    if [ -z "$port_set" ] && [ -z "$p" ] && [ -f "$work/repo/Dockerfile" ]; then
-      p=$(grep -m1 -oiE '^EXPOSE +[0-9]+' "$work/repo/Dockerfile" | grep -oE '[0-9]+' || true)
+    if [ -z "$port_set" ] && [ -z "$p" ] && [ -f "$src/Dockerfile" ]; then
+      p=$(grep -m1 -oiE '^EXPOSE +[0-9]+' "$src/Dockerfile" | grep -oE '[0-9]+' || true)
     fi
     port=${p:-$port}
     # Lo que haría fallar el primer deploy o perder datos, antes de registrar nada.
     local pre=0
-    "$INFRA/bin/andamio" _precheck "$work/repo" "$port" "$([ ${#volumes[@]} -gt 0 ] && echo 1 || echo 0)" || pre=$?
+    "$INFRA/bin/andamio" _precheck "$src" "$port" "$([ ${#volumes[@]} -gt 0 ] && echo 1 || echo 0)" || pre=$?
     [ "$pre" -le 2 ] || exit "$pre"
     if [ "$pre" = 2 ]; then
       confirm "$(L "Hay algo grave arriba. ¿Seguir igual? (mejor corrígelo, haz push y vuelve a correr)" \
-                   "There's something serious above. Go on anyway? (better fix it, push and run again)")"
+                   "There's something serious above. Go on anyway? (better fix it, push and run again)")" ANDAMIO_PRECHECK_OK
     fi
   fi
 
   echo "App:      $name"
-  echo "Repo:     ${repo:-$OWNER/$name ($(L "nuevo, desde" "new, from") $TEMPLATE)}"
-  echo "URL:      $(app_url "$host")  ($access)"
-  echo "$(L Recursos Resources): PostgreSQL=$db Redis=$redis RAM=$mem  $(L puerto port)=$port${health:+  $(L salud health)=$health}"
+  echo "Repo:     ${repo:-$OWNER/$name ($(L "nuevo, desde" "new, from") $TEMPLATE)}${branch:+  ($(L rama branch) $branch)}"
+  echo "URL:      $(app_url "$host")$path  ($access)"
+  [ -z "$appdir" ] || echo "$(L Carpeta Folder):  $appdir${context:+  ($(L "se construye desde" "built from") $context)}  ·  $(L "despliega si cambia" "deploys when it changes"): $appdir ${watch[*]:-}"
+  echo "$(L Recursos Resources): PostgreSQL=$db MariaDB=$mysql Redis=$redis RAM=$mem  $(L puerto port)=$port${health:+  $(L salud health)=$health}"
   [ ${#volumes[@]} -eq 0 ] || echo "$(L "Carpetas persistentes" "Persistent folders"): ${volumes[*]}"
-  confirm "$(L "¿Crear?" "Create?")"
+  confirm "$(L "¿Crear?" "Create?")" ANDAMIO_CREATE_OK
 
   if [ -z "$repo" ]; then
     step "$(L "Repo $OWNER/$name desde la plantilla" "Repo $OWNER/$name from the template")"
@@ -213,24 +330,32 @@ app_create() {
     git clone -q "$(forge clone-url "$OWNER/$name")" "$PROJECTS/$name"
   fi
 
+  stage register
   step "apps/$name/app.yml"
   mkdir -p "$dir"
   local nets=""
-  { $db || $redis; } && nets="data"
+  { $db || $redis || $mysql; } && nets="data"
   # La imagen de migraciones (Prisma, plantilla) necesita la base: sin --db no hay
   # migrate. Un repo existente declara sus migraciones a mano en app.yml si las tiene.
   local migrate=$db; [ -n "$repo" ] && migrate=false
+  # La rama que despliega, solo si no es main (la de siempre).
+  local deploy_branch=""; [ -n "$branch" ] && [ "$branch" != main ] && deploy_branch=$branch
   cat > "$dir/app.yml" <<EOF
 # $(L "Creada con" "Created with"): andamio app create $name. $(L "compose.yaml se genera de aquí" "compose.yaml is generated from this") (ansible/apps.yml).
 name: $name
 ${repo:+repo: $repo
+}${deploy_branch:+branch: $deploy_branch
 }host: "$host"
 port: $port
 ${health:+health: $health
+}${appdir:+dir: $appdir
+}${context:+context: $context
+}${path:+path: $path
 }access: $access
 networks: [${nets}]
 migrate: $migrate
 db: $db
+mysql: $mysql
 redis: $redis
 resources:
   mem: $mem
@@ -240,22 +365,30 @@ EOF
   [ ${#domains[@]} -gt 0 ] && yaml_list "$dir/app.yml" domains "${domains[@]}"
   [ ${#origins[@]} -gt 0 ] && yaml_list "$dir/app.yml" cors "${origins[@]}"
   [ ${#volumes[@]} -gt 0 ] && yaml_list "$dir/app.yml" volumes "${volumes[@]}"
+  [ ${#watch[@]} -gt 0 ] && yaml_list "$dir/app.yml" watch "${watch[@]}"
   for d in "${domains[@]}"; do dns_check "$d"; done
 
   step "$(L "Secretos, llave de deploy y compose" "Secrets, deploy key and compose") (ansible/apps.yml)"
-  (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'msg|fatal|ok=')
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml -e "andamio_only_app=$name" | grep -E 'msg|fatal|ok=')
   [ -f "$dir/deploy_key.pub" ] \
     || die "$(L "No se creó la llave de deploy (¿el repo existe y tienes permiso en $(forge name)?)" \
                "The deploy key wasn't created (does the repo exist, and do you have permission on $(forge name)?)")"
 
+  if [ -n "$envtmp" ]; then
+    step "$(L "Variables de entorno (--env-file), cifradas en apps/$name/secrets.sops.env" \
+              "Environment variables (--env-file), encrypted in apps/$name/secrets.sops.env")"
+    secrets_merge "apps/$name/secrets.sops.env" "$envtmp/in"
+  fi
+
   step "$(L "Commit y push de este repo" "Commit and push this repo")"
   git -C "$INFRA" add "apps/$name"
   git -C "$INFRA" commit -qm "feat(apps): $name (andamio app create)"
-  git -C "$INFRA" push -q
+  push_infra
 
+  stage server
   step "$(L "Servidor: .env, base, Redis y llave de deploy (pide tu contraseña de sudo)" \
             "Server: .env, database, Redis and deploy key (asks for your sudo password)")"
-  "$INFRA/bin/andamio" _apply
+  "$INFRA/bin/andamio" _apply "$name" --registry   # el registro de apps y esta app; nada más
 
   # El CI de la app usa el pipeline de ESTE repo: si es privado, la forja exige permitirlo.
   [ "$(forge ci-allow-reuse "$INSTANCE_REPO")" = cambiado ] \
@@ -263,10 +396,16 @@ EOF
 
   local vpn=""; [ "$access" = vpn ] && vpn="  ($(L "con la VPN" "over the VPN"))"
   if [ -n "$repo" ]; then
-    push_pipeline "$work/repo" "$repo" "$name"
+    stage pipeline
+    BRANCH=${branch:-main} APPDIR=$appdir CONTEXT=$context WATCH="${watch[*]:-}" push_pipeline "$work/repo" "$repo" "$name"
     echo
-    L "  Desde ahora cada push a main despliega. Tu app:" "  From now on every push to main deploys. Your app:"
-    echo " $(app_url "$host")$vpn"
+    if [ -n "$appdir" ]; then
+      L "  Desde ahora cada push a ${branch:-main} que toque $appdir ${watch[*]:-}despliega. Tu app:" \
+        "  From now on every push to ${branch:-main} touching $appdir ${watch[*]:-}deploys. Your app:"
+    else
+      L "  Desde ahora cada push a ${branch:-main} despliega. Tu app:" "  From now on every push to ${branch:-main} deploys. Your app:"
+    fi
+    echo " $(app_url "$host")$path$vpn"
     return
   fi
 
@@ -289,16 +428,30 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
   local sha; sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
     || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
-  if ! grep -rqs "workflows/app-build.yml@" "$dir/.github/workflows"; then
-    mkdir -p "$dir/.github/workflows"
-    forge ci-snippet "$INSTANCE_REPO" "$sha" > "$dir/.github/workflows/andamio.yml"
+  # Una de varias apps del repo (APPDIR): su propio archivo, andamio-<app>.yml.
+  local wfile=andamio.yml snippet=(--branch "${BRANCH:-main}")
+  if [ -n "${APPDIR:-}" ]; then
+    wfile=andamio-$name.yml
+    snippet+=(--app "$name" --dir "$APPDIR" ${CONTEXT:+--context "$CONTEXT"})
+    local w; for w in ${WATCH:-}; do snippet+=(--watch "$w"); done
   fi
-  if [ ! -f "$dir/Dockerfile" ]; then
+  if [ -n "${APPDIR:-}" ] && [ ! -f "$dir/.github/workflows/$wfile" ]; then
+    mkdir -p "$dir/.github/workflows"
+    forge ci-snippet "$INSTANCE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/$wfile"
+  elif [ -z "${APPDIR:-}" ] && ! grep -rqs "workflows/app-build.yml@" "$dir/.github/workflows"; then
+    mkdir -p "$dir/.github/workflows"
+    forge ci-snippet "$INSTANCE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/andamio.yml"
+  else
+    # Ya trae pipeline, pero puede ser de otra copia de andamio (otro servidor, una prueba) o de
+    # otra versión: se pone al día con esta, y así el push de abajo dispara el primer deploy.
+    forge ci-repin "$dir" "$INSTANCE_REPO" "$sha" > /dev/null
+  fi
+  if [ ! -f "$dir/${APPDIR:+$APPDIR/}Dockerfile" ]; then
     echo
     L "! $repo no tiene Dockerfile: sin él no hay qué desplegar. Agrégalo y, junto con este
-  archivo en .github/workflows/andamio.yml, haz push:" "! $repo has no Dockerfile: without it there's nothing to deploy. Add one and push it
-  along with this file at .github/workflows/andamio.yml:"
-    printf '\n%s\n' "$(cat "$dir/.github/workflows/andamio.yml")"
+  archivo en .github/workflows/$wfile, haz push:" "! $repo has no Dockerfile: without it there's nothing to deploy. Add one and push it
+  along with this file at .github/workflows/$wfile:"
+    printf '\n%s\n' "$(cat "$dir/.github/workflows/$wfile")"
     return
   fi
   local changes; changes=$(git -C "$dir" status --porcelain --untracked-files=all | awk '{print "    " $2}')
@@ -308,8 +461,8 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   fi
   echo
   L "Para desplegarse, $repo necesita:" "To deploy, $repo needs:"; echo; echo "$changes"
-  if ! ask "$(L "¿Los subo a $repo? (commit en main y push: arranca el primer deploy)" \
-                "Push them to $repo? (commit on main and push: starts the first deploy)")" s; then
+  if ! ask "$(L "¿Los subo a $repo? (commit en ${BRANCH:-main} y push: arranca el primer deploy)" \
+                "Push them to $repo? (commit on ${BRANCH:-main} and push: starts the first deploy)")" s; then
     local keep=$HOME/andamio-$name; rm -rf "$keep"; mkdir -p "$keep"
     (cd "$dir" && git status --porcelain --untracked-files=all | awk '{print $2}' | xargs -I{} cp --parents {} "$keep/")
     L "No subí nada. Los archivos quedaron en $keep: cópialos a tu repo y haz push." \
@@ -318,11 +471,30 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   fi
   git -C "$dir" add -A
   git -C "$dir" commit -qm "$(L "andamio: Dockerfile y pipeline de deploy" "andamio: Dockerfile and deploy pipeline")"
-  git -C "$dir" push -q origin HEAD \
-    || die "$(L "$repo rechazó el push (¿main protegida?). Sube esos archivos con un PR." "$repo rejected the push (protected main?). Add those files through a PR.")"
+  if ! git -C "$dir" push -q origin HEAD 2> "$dir/.push-err"; then
+    # La rama exige PRs (o está protegida): los mismos archivos van en un PR. Al mergearlo, despliega.
+    local prb="andamio/pipeline-$name" url
+    git -C "$dir" push -q -f origin "HEAD:refs/heads/$prb" \
+      || die "$(L "$repo rechazó el push a ${BRANCH:-main} y a una rama nueva: $(tail -1 "$dir/.push-err")" "$repo rejected the push to ${BRANCH:-main} and to a new branch: $(tail -1 "$dir/.push-err")")"
+    url=$(L "Agrega lo que $name necesita para desplegarse con andamio (Dockerfile y/o pipeline). Al mergearlo arranca su primer deploy." \
+            "Adds what $name needs to deploy with andamio (Dockerfile and/or pipeline). Merging it starts its first deploy." \
+          | forge pr-create "$repo" "${BRANCH:-main}" "$prb" "andamio: $(L "deploy de" "deploy of") $name") \
+      || die "$(L "Subí la rama $prb, pero no pude abrir el PR: ábrelo a mano hacia ${BRANCH:-main}" "Pushed branch $prb, but couldn't open the PR: open it by hand into ${BRANCH:-main}")"
+    echo "✓ $(L "${BRANCH:-main} solo acepta PRs: abrí uno con esos archivos" "${BRANCH:-main} only takes PRs: opened one with those files")"
+    echo "  $url"
+    L "  Mergéalo y arranca el primer deploy (lo ves en el panel, en Deploys)." "  Merge it and the first deploy starts (see it in the panel, under Deploys)."; echo
+    return 0
+  fi
   echo "✓ $(L "Subido a $repo: primer deploy en curso" "Pushed to $repo: first deploy running")"
+  # Desde el panel no se espera aquí (varios minutos con la ventana tomada): la app muestra su
+  # primer deploy en vivo. En la terminal, se sigue como siempre.
+  if [ "${ANDAMIO_ASSUME:-}" = default ]; then
+    stage deploy
+    echo "✓ $(L "Primer deploy en curso: lo ves en vivo en la app" "First deploy running: watch it live in the app")"
+    return 0
+  fi
   step "$(L "Primer deploy (tests, escaneo, build y deploy)" "First deploy (tests, scan, build and deploy)")"
-  forge ci-watch "$repo" "$(git -C "$dir" rev-parse HEAD)" || { L "! El deploy falló (la causa, arriba). Arréglalo y haz push: cada push lo vuelve a intentar." "! The deploy failed (cause above). Fix it and push: every push tries again."; echo; }
+  forge ci-watch "$repo" "$(git -C "$dir" rev-parse HEAD)" ${APPDIR:+--workflow "$wfile"} || { L "! El deploy falló (la causa, arriba). Arréglalo y haz push: cada push lo vuelve a intentar." "! The deploy failed (cause above). Fix it and push: every push tries again."; echo; }
 }
 
 # andamio app stop|start: el estado vive en app.yml (stopped: true), así sobrevive a
@@ -341,9 +513,9 @@ app_state() {  # app_state <stop|start> <nombre>
   fi
   git -C "$INFRA" add "apps/$name/app.yml"
   git -C "$INFRA" commit -qm "feat(apps): $want $name (andamio app $want)"
-  git -C "$INFRA" push -q
+  push_infra
   step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
-  "$INFRA/bin/andamio" _apply
+  "$INFRA/bin/andamio" _apply "$name" --registry   # esta app y el registro (su "detenida")
   echo
   local host; host=$(awk '$1 == "host:" {gsub(/"/, "", $2); print $2}' "$f")
   if [ "$want" = stop ]; then
@@ -357,6 +529,46 @@ app_state() {  # app_state <stop|start> <nombre>
 }
 
 # Dominios propios (domains:) y CORS (cors:) de una app: listas en su app.yml.
+# Una carpeta del repo de la app (relativa, sin ..): --dir, --context, --watch. Con "root",
+# también la raíz (".").
+valid_dir() {
+  local d=${1%/}
+  [ "${2:-}" = root ] && [ "$d" = . ] && { echo .; return; }
+  [[ $d =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && $d != *..* && $d != . ]] \
+    || die "$(L "Carpeta inválida: $1 (relativa al repo, ej. backend o apps/web)" "Invalid folder: $1 (relative to the repo, e.g. backend or apps/web)")"
+  echo "$d"
+}
+
+# Una ruta que dispara el deploy (--watch): una carpeta (packages/), un archivo (package.json) o un
+# patrón (config/*.yml). Relativa al repo, sin .. ni espacios.
+valid_watch() {
+  local w=${1#/}
+  [[ $w =~ ^[A-Za-z0-9._*/-]+$ && $w != *..* && -n $w ]] \
+    || die "$(L "Ruta inválida: $1 (ej. packages/, package.json o config/*.yml)" "Invalid path: $1 (e.g. packages/, package.json or config/*.yml)")"
+  echo "$w"
+}
+
+# Un host (subdominio) es de una sola app, salvo que se repartan rutas: el front en / y el back
+# en /api. Dos apps no pueden tener el mismo host y la misma ruta (o las dos sin ruta).
+host_free() {  # host_free <host> [ruta]
+  python3 - "$LNG" "$1" "${2:-}" "$INFRA"/apps/*/app.yml <<'PY' || exit 1
+import sys, yaml
+lng, host, path, files = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+L = lambda es, en: es if lng == "es" else en
+for f in files:
+    try:
+        a = yaml.safe_load(open(f)) or {}
+    except OSError:
+        continue
+    if str(a.get("host", "")) == host and str(a.get("path") or "") == path:
+        who = a.get("name", f)
+        sys.exit("✗ " + L(f"El host '{host}'{' con la ruta ' + path if path else ''} ya lo usa otra app ({who})",
+                          f"Host '{host}'{' with path ' + path if path else ''} is already used by another app ({who})")
+                 + ("" if path else L(" (otra app puede ir en una ruta del mismo host: --path /api)",
+                                      " (another app can take a path on the same host: --path /api)")))
+PY
+}
+
 valid_domain() {
   local d=${1,,}
   [[ $d =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$ ]] \
@@ -397,7 +609,12 @@ dns_check() {
       "! $1 doesn't point to $ip yet. Create an A record in its DNS: $1 → $ip
   Until it does, Let's Encrypt rejects the certificate (and rate-limits failed attempts)."
     echo
-    confirm "$(L "¿Agregarlo igual?" "Add it anyway?")"
+    # Desde el panel: ya lo viste y marcaste "agregarlo igual" (ANDAMIO_DNS_OK=1).
+    if [ "${ANDAMIO_DNS_OK:-}" = 1 ]; then
+      L "  Agregado igual (lo confirmaste en el panel)." "  Added anyway (you confirmed it in the panel)."; echo
+    else
+      confirm "$(L "¿Agregarlo igual?" "Add it anyway?")"
+    fi
   fi
 }
 # yaml_list <app.yml> <clave> [valores...]: reescribe esa lista (vacía = la quita).
@@ -444,10 +661,10 @@ app_list_edit() {  # app_list_edit <domains|cors|volumes> <add|rm|list> <app> [v
   fi
   yaml_list "$f" "$key" "${items[@]}"
   step "$(L "Compose de $name (ansible/apps.yml)" "$name's compose (ansible/apps.yml)")"
-  (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'fatal|ok=')
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml -e "andamio_only_app=$name" | grep -E 'fatal|ok=')
   git -C "$INFRA" add "apps/$name"
   git -C "$INFRA" commit -qm "feat(apps): $name $key $sub $value"
-  git -C "$INFRA" push -q
+  push_infra
   step "$(L "Servidor (pide tu contraseña de sudo)" "Server (asks for your sudo password)")"
   "$INFRA/bin/andamio" _apply "$name"   # solo esta app
   echo
@@ -466,9 +683,61 @@ app_list_edit() {  # app_list_edit <domains|cors|volumes> <add|rm|list> <app> [v
   echo
 }
 
+# Un archivo KEY=VALUE (como un .env) para --env-file: nombres válidos, ninguno de los que pone
+# andamio. Si algo está mal dice la línea, nunca el valor.
+envfile_check() {
+  python3 - "$1" "$RESERVED" "$LNG" <<'PY' || exit 1
+import re, sys
+path, reserved, lng = sys.argv[1], sys.argv[2].split(), sys.argv[3]
+L = lambda es, en: es if lng == "es" else en
+for n, line in enumerate(open(path, encoding="utf-8", errors="replace").read().splitlines(), 1):
+    s = line.strip()
+    if not s or s.startswith("#"):
+        continue
+    s = s.removeprefix("export ").strip()
+    key = s.split("=", 1)[0].strip()
+    if "=" not in s or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+        sys.exit("✗ " + L(f"Línea {n}: va CLAVE=valor (MAYÚSCULAS, números y _)", f"Line {n}: it goes KEY=value (UPPERCASE, digits and _)"))
+    if key in reserved:
+        sys.exit("✗ " + L(f"Línea {n}: {key} lo pone andamio", f"Line {n}: andamio sets {key}"))
+PY
+}
+
+# secrets_merge <apps/x/secrets.sops.env> <archivo KEY=VALUE>: agrega o reemplaza esas variables,
+# cifradas. Descifra en una carpeta privada que se borra; los valores nunca se muestran.
+secrets_merge() {
+  local rel=$1 src=$2 tmp added; tmp=$(mktemp -d); chmod 700 "$tmp"
+  (cd "$INFRA" && sops decrypt --input-type dotenv --output-type dotenv "$rel") > "$tmp/actual"
+  added=$(python3 - "$tmp/actual" "$src" "$tmp/nuevo" <<'PY'
+import sys
+cur, new, out = sys.argv[1:]
+given = {}
+for line in open(new, encoding="utf-8", errors="replace").read().splitlines():
+    s = line.strip()
+    if s and not s.startswith("#"):
+        k, v = s.removeprefix("export ").strip().split("=", 1)
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+            v = v[1:-1]   # KEY="valor" como en un .env
+        given[k.strip()] = v
+print(" ".join(given))   # solo los nombres
+lines = []
+for line in open(cur).read().splitlines():
+    k = line.split("=", 1)[0]
+    lines.append(f"{k}={given.pop(k)}" if k in given else line)
+lines += [f"{k}={v}" for k, v in given.items()]
+open(out, "w").write("\n".join(lines) + "\n")
+PY
+)
+  (cd "$INFRA" && sops encrypt --input-type dotenv --output-type dotenv --filename-override "$rel" "$tmp/nuevo") > "$tmp/cifrado"
+  mv "$tmp/cifrado" "$INFRA/$rel"
+  echo "✓ $(L "Agregadas" "Added"): $added"
+  shred -u "$tmp"/* 2> /dev/null; rm -rf "$tmp"
+}
+
 # Secretos de ejecución de una app (apps/<app>/secrets.sops.env -> .env en el servidor).
 # El valor nunca va en la línea de comandos: se escribe oculto o llega por un pipe.
-RESERVED="DOMAIN DATABASE_URL REDIS_URL TAG"   # los pone andamio
+RESERVED="DOMAIN DATABASE_URL MYSQL_URL REDIS_URL TAG"   # los pone andamio
 app_secret() {
   local sub=${1:-} name=${2:-} key=${3:-} later=false
   [ "${4:-}" = --later ] && later=true
@@ -482,6 +751,10 @@ app_secret() {
       | while read -r k; do
           if [[ " $RESERVED " == *" $k "* ]]; then echo "  $k  ($(L "lo pone andamio" "set by andamio"))"; else echo "  $k"; fi
         done
+    return
+  fi
+  if [ "$sub" = import ]; then
+    secret_import "$name" "$rel" "$key" "$later"
     return
   fi
   [[ $sub == set || $sub == rm ]] || usage
@@ -525,10 +798,45 @@ app_secret() {
   step "$(L "Commit y push (solo el nombre, nunca el valor)" "Commit and push (only the name, never the value)")"
   git -C "$INFRA" add "$rel"
   git -C "$INFRA" commit -qm "secret($name): $sub $key"
-  git -C "$INFRA" push -q
+  push_infra
 
   if [ "$later" = true ]; then
     L "  Guardado, sin aplicar. Cuando termines con los cambios: andamio app apply $name" \
+      "  Saved, not applied. When you're done with your changes: andamio app apply $name"; echo
+    return 0
+  fi
+  app_apply "$name"
+}
+
+# Varias variables de una vez (un .env, o por stdin: el panel). Se revisan todas antes de tocar
+# nada (nombres, ninguna de las que pone andamio), se cifran juntas: un commit y un reinicio.
+# Los valores nunca se muestran ni van al commit: solo los nombres.
+secret_import() {
+  local name=$1 rel=$2 src=${3:-} later=$4
+  [ -n "$src" ] || usage
+  no_uncommitted
+  local tmp; tmp=$(mktemp -d); chmod 700 "$tmp"
+  # shellcheck disable=SC2064   # el temporal se fija ahora, a propósito
+  trap "shred -u '$tmp'/* 2> /dev/null; rm -rf '$tmp'" EXIT
+  if [ "$src" = - ]; then cat > "$tmp/in"; else
+    [ -r "$src" ] || die "$(L "No puedo leer $src" "Can't read $src")"
+    cat -- "$src" > "$tmp/in"
+  fi
+  envfile_check "$tmp/in"
+  grep -qE '^[[:space:]]*(export[[:space:]]+)?[A-Z][A-Z0-9_]*[[:space:]]*=' "$tmp/in" \
+    || die "$(L "No hay variables: va una CLAVE=valor por línea" "No variables: one KEY=value per line")"
+  local out names
+  out=$(secrets_merge "$rel" "$tmp/in")
+  echo "$out ($rel, $(L cifradas encrypted))"
+  names=${out#*: }
+
+  step "$(L "Commit y push (solo los nombres, nunca los valores)" "Commit and push (only the names, never the values)")"
+  git -C "$INFRA" add "$rel"
+  git -C "$INFRA" commit -qm "secret($name): import $names"
+  push_infra
+
+  if [ "$later" = true ]; then
+    L "  Guardadas, sin aplicar. Cuando termines con los cambios: andamio app apply $name" \
       "  Saved, not applied. When you're done with your changes: andamio app apply $name"; echo
     return 0
   fi
@@ -545,14 +853,14 @@ app_apply() {
     # Cambios a mano en su app.yml: regenerar su compose y guardarlos antes de aplicar.
     if [ -n "$(git -C "$INFRA" status --porcelain -- "apps/$name")" ]; then
       step "$(L "Compose de $name (cambiaste su app.yml)" "$name's compose (you changed its app.yml)")"
-      (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'fatal|ok=')
+      (cd "$INFRA/ansible" && ansible-playbook apps.yml -e "andamio_only_app=$name" | grep -E 'fatal|ok=')
       git -C "$INFRA" add "apps/$name"
       git -C "$INFRA" commit -qm "feat(apps): $name: cambios en app.yml"
     fi
   fi
   no_uncommitted
   # El servidor baja la configuración del repo: lo que esté sin subir, se sube antes.
-  [ -z "$(git -C "$INFRA" log --oneline '@{u}..' 2> /dev/null)" ] || git -C "$INFRA" push -q
+  [ -z "$(git -C "$INFRA" log --oneline '@{u}..' 2> /dev/null)" ] || push_infra
   step "$(L "Servidor: aplicar los cambios${name:+ de $name} (pide tu contraseña de sudo)" \
             "Server: apply the changes${name:+ to $name} (asks for your sudo password)")"
   "$INFRA/bin/andamio" _apply ${name:+"$name"}   # con app: solo esa (segundos)
@@ -602,11 +910,10 @@ app_ci_update() {
   ask "$(L "¿Desplegar cada app ahora con el pipeline nuevo? Si no, lo usa en su próximo push" \
            "Deploy each app now with the new pipeline? Otherwise it's used on its next push")" n && skip=""
   for n in "${names[@]}"; do
-    repo=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("repo") or "")' "$INFRA/apps/$n/app.yml")
-    repo=${repo:-$OWNER/$n}
+    local br wf; read -r repo br wf <<< "$(app_ci "$INFRA/apps/$n/app.yml" "$n")"
     tmp=$(mktemp -d)
-    if ! git clone -q --depth 1 "$(forge clone-url "$repo")" "$tmp/r" 2> /dev/null; then
-      L "  ! $n: no pude clonar $repo" "  ! $n: couldn't clone $repo"; echo; rm -rf "$tmp"; continue
+    if ! git clone -q --depth 1 --branch "$br" "$(forge clone-url "$repo")" "$tmp/r" 2> /dev/null; then
+      L "  ! $n: no pude clonar $repo ($br)" "  ! $n: couldn't clone $repo ($br)"; echo; rm -rf "$tmp"; continue
     fi
     change=$(forge ci-repin "$tmp/r" "$INSTANCE_REPO" "$sha")
     if [ -z "$change" ]; then
@@ -614,11 +921,38 @@ app_ci_update() {
     else
       git -C "$tmp/r" add -A .github/workflows
       git -C "$tmp/r" commit -qm "andamio: pipeline ${change%% *} -> ${sha:0:8}$skip"
-      git -C "$tmp/r" push -q
-      L "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (sin desplegar)}" "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (not deployed)}"; echo
+      if git -C "$tmp/r" push -q 2> /dev/null; then
+        L "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (sin desplegar)}" "  ✓ $n: ${change:0:8} → ${sha:0:8}${skip:+ (not deployed)}"; echo
+      else
+        # La rama solo acepta PRs: el cambio va en uno (al mergearlo, rige y despliega).
+        local prb="andamio/pipeline-${sha:0:8}" url
+        if git -C "$tmp/r" push -q -f origin "HEAD:refs/heads/$prb" 2> /dev/null &&
+           url=$(L "Pone el pipeline de andamio al día (${change:0:8} → ${sha:0:8})." "Updates the andamio pipeline (${change:0:8} → ${sha:0:8})." \
+                 | forge pr-create "$repo" "$br" "$prb" "andamio: pipeline ${sha:0:8}"); then
+          L "  ✓ $n: $br solo acepta PRs, abrí uno: $url" "  ✓ $n: $br only takes PRs, opened one: $url"; echo
+        else
+          L "  ! $n: $repo rechazó el push y no pude abrir el PR" "  ! $n: $repo rejected the push and I couldn't open the PR"; echo
+        fi
+      fi
     fi
     rm -rf "$tmp"
   done
+}
+
+# andamio app retry: el último deploy falló (típico: faltaba una variable que ya pusiste) y
+# quieres volver a intentarlo sin hacer otro push. Lo sigue en vivo.
+app_retry() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  local repo run
+  local wf br; read -r repo br wf <<< "$(app_ci "$f" "$name")"
+  run=$(forge ci-last-failed "$repo" --branch "$br" ${wf:+--workflow "$wf"} 2> /dev/null || true)
+  [ -n "$run" ] || die "$(L "El último deploy de $name no falló: nada que reintentar (para desplegar, haz push)" \
+                             "$name's last deploy didn't fail: nothing to retry (to deploy, push)")"
+  step "$(L "Reintentando el último deploy de $name" "Retrying $name's last deploy")"
+  forge ci-rerun "$repo" "$run" || die "$(L "Volvió a fallar (la causa, arriba)." "It failed again (cause above).")"
+  echo "✓ $(L "$name desplegada" "$name deployed")"
 }
 
 app_list() {
@@ -703,7 +1037,10 @@ rows = [
     (L("Puerto", "Port"), f"{a.get('port')}" + (f"   {L('salud', 'health')} {a['health']}" if a.get("health") else "")),
     ("RAM", f"{r.get('mem')}" + (f"   {dim(L('usa', 'using') + ' ' + live['mem'])}" if live.get("mem") else "")),
     ("CPU", f"{r.get('cpus')}" + (f"   {dim(L('usa', 'using') + ' ' + live['cpu'])}" if live.get("cpu") else "")),
-    (L("Datos", "Data"), ", ".join(n for n, on in (("PostgreSQL", a.get("db")), ("Redis", a.get("redis"))) if on)),
+    (L("Datos", "Data"), ", ".join(n for n, on in (("PostgreSQL", a.get("db")), ("MariaDB", a.get("mysql")), ("Redis", a.get("redis"))) if on)),
+    (L("Base", "Database"), " · ".join(x for x in (
+        L(f"hasta {a['db_connections']} conexiones", f"up to {a['db_connections']} connections") if a.get("db_connections") else "",
+        L(f"consultas de hasta {a['db_timeout']}", f"queries up to {a['db_timeout']}") if str(a.get("db_timeout") or "0") != "0" else "") if x)),
     (L("Carpetas", "Folders"), ", ".join(a.get("volumes") or [])),
     ("CORS", ", ".join(a.get("cors") or [])),
     ("Worker", (f"{a['worker'].get('command', '')}  ({a['worker'].get('mem', '256m')})" if a.get("worker") else "")),
@@ -713,8 +1050,10 @@ rows = [
 for k, v in rows:
     if v:
         print(f"  {k:<9} {v}")
-print("\n  " + dim(L(f"Cambiar: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /ruta | --public | --vpn",
-                    f"Change: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /path | --public | --vpn")))
+print("\n  " + dim(L(f"Cambiar: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /ruta | --public | --vpn"
+                    + (" | --db-connections 20 | --db-timeout 30s" if a.get("db") or a.get("mysql") else ""),
+                    f"Change: andamio app set {a['name']} --mem 512m | --cpus 1 | --port 8080 | --health /path | --public | --vpn"
+                    + (" | --db-connections 20 | --db-timeout 30s" if a.get("db") or a.get("mysql") else ""))))
 PY
 }
 
@@ -741,12 +1080,23 @@ app_set() {
                 changes+=("health=$2"); shift ;;
       --public) changes+=("access=public") ;;
       --vpn) changes+=("access=vpn") ;;
+      # Límites de su base (PostgreSQL compartido): conexiones y duración de una consulta. 0 = sin límite.
+      --db-connections)
+        [[ ${2:-} =~ ^[0-9]{1,3}$ ]] && [ "$2" -le 500 ] \
+          || die "$(L "Conexiones inválidas: ${2:-} (un número, ej. 20; 0 = sin límite)" "Invalid connections: ${2:-} (a number, e.g. 20; 0 = no limit)")"
+        grep -qxE '(db|mysql): true' "$f" || die "$(L "$name no tiene base (db: true o mysql: true)" "$name has no database (db: true or mysql: true)")"
+        changes+=("db_connections=$((10#$2))"); shift ;;
+      --db-timeout)
+        [[ ${2:-} =~ ^(0|[1-9][0-9]{0,4}(ms|s|min))$ ]] \
+          || die "$(L "Tiempo inválido: ${2:-} (ej. 30s, 2min, 500ms; 0 = sin límite)" "Invalid time: ${2:-} (e.g. 30s, 2min, 500ms; 0 = no limit)")"
+        grep -qxE '(db|mysql): true' "$f" || die "$(L "$name no tiene base (db: true o mysql: true)" "$name has no database (db: true or mysql: true)")"
+        changes+=("db_timeout=$2"); shift ;;
       *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
     esac
     shift
   done
-  [ ${#changes[@]} -gt 0 ] || die "$(L "Nada que cambiar. Opciones: --mem 512m, --cpus 1, --port 8080, --health /ruta, --public, --vpn" \
-                                       "Nothing to change. Options: --mem 512m, --cpus 1, --port 8080, --health /path, --public, --vpn")"
+  [ ${#changes[@]} -gt 0 ] || die "$(L "Nada que cambiar. Opciones: --mem 512m, --cpus 1, --port 8080, --health /ruta, --public, --vpn, --db-connections 20, --db-timeout 30s" \
+                                       "Nothing to change. Options: --mem 512m, --cpus 1, --port 8080, --health /path, --public, --vpn, --db-connections 20, --db-timeout 30s")"
   no_uncommitted
 
   # Edita solo esas líneas: los comentarios y el orden de app.yml se quedan como estaban.
@@ -766,10 +1116,138 @@ app_set() {
     die "$(L Cancelado Cancelled)"
   fi
   step "$(L "Compose de $name (ansible/apps.yml)" "$name's compose (ansible/apps.yml)")"
-  (cd "$INFRA/ansible" && ansible-playbook apps.yml | grep -E 'fatal|ok=')
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml -e "andamio_only_app=$name" | grep -E 'fatal|ok=')
   git -C "$INFRA" add "apps/$name"
   git -C "$INFRA" commit -qm "feat(apps): $name: $(paste -sd',' <<< "$summary" | sed 's/: [^,]* → /=/g')"
   app_apply "$name"
+  # El tiempo máximo vale para conexiones nuevas: reiniciar renueva las que la app ya tenía abiertas.
+  if grep -q '^db_timeout:' <<< "$summary" && ! grep -qx 'stopped: true' "$f"; then
+    app_restart "$name"
+  fi
+}
+
+# andamio app source: de dónde sale una app que comparte su repo con otras (dir: en app.yml): su
+# carpeta, desde dónde se construye y qué rutas disparan su deploy. Cambiarlo reescribe su
+# pipeline (.github/workflows/andamio-<app>.yml) en el repo de la app y lo guarda en app.yml. No
+# toca el servidor: la imagen y la llave siguen siendo las suyas.
+app_source() {
+  local name=${1:-}; shift || true
+  [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  local cur; cur=$(python3 - "$f" "$OWNER" <<'PY'
+import sys, yaml
+a = yaml.safe_load(open(sys.argv[1])) or {}
+print(a.get("repo") or f"{sys.argv[2]}/{a.get('name')}")
+print(a.get("branch") or "main")
+print(a.get("dir") or "")
+print(a.get("context") or "")
+print(" ".join(a.get("watch") or []))
+PY
+)
+  local repo branch appdir context watch_s
+  { read -r repo; read -r branch; read -r appdir; read -r context; read -r watch_s; } <<< "$cur"  || true   # los últimos pueden venir vacíos
+  local watch=(); [ -z "$watch_s" ] || read -ra watch <<< "$watch_s"
+  if [ $# -eq 0 ]; then
+    echo "Repo:      $repo  ($(L rama branch) $branch)"
+    echo "$(L Carpeta Folder):   ${appdir:-$(L "la raíz (una app por repo)" "the root (one app per repo)")}"
+    [ -z "$appdir" ] && return
+    echo "$(L "Se construye desde" "Built from"):  ${context:-$appdir}"
+    echo "$(L "Despliega si cambia" "Deploys when it changes"): $appdir ${watch[*]:-}${context:+ $(L "(y los manifiestos de la raíz)" "(and the root manifests)")}"
+    echo "Pipeline:  .github/workflows/andamio-$name.yml"
+    return
+  fi
+  [ -n "$appdir" ] || die "$(L "$name es la única app de su repo (sin carpeta): esto es para varias apps en un repo (andamio app create --dir)" \
+                               "$name is its repo's only app (no folder): this is for several apps in one repo (andamio app create --dir)")"
+  local missing; missing=$(L "falta el valor de" "missing value for")
+  local newdir=$appdir newctx=$context deploy=false w
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --dir) newdir=$(valid_dir "${2:?$missing --dir}"); shift ;;
+      --context) case ${2:?$missing --context} in
+                   .) newctx=. ;; -|none|ninguno) newctx="" ;;
+                   *) die "$(L "--context: . (la raíz) o - (su carpeta)" "--context: . (the root) or - (its folder)")" ;;
+                 esac; shift ;;
+      --watch-add) w=$(valid_watch "${2:?$missing --watch-add}"); shift
+                   printf '%s\n' "${watch[@]}" | grep -qx -- "$w" && die "$(L "Ya está: $w" "Already there: $w")"
+                   watch+=("$w") ;;
+      --watch-rm) w=$(valid_watch "${2:?$missing --watch-rm}"); shift
+                  printf '%s\n' "${watch[@]}" | grep -qx -- "$w" || die "$(L "No está: $w" "Not there: $w")"
+                  mapfile -t watch < <(printf '%s\n' "${watch[@]}" | grep -vx -- "$w" || true) ;;
+      *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
+    esac
+    shift
+  done
+  # Otra carpeta u otro contexto cambian lo que se construye: se despliega. Las rutas, no.
+  { [ "$newdir" != "$appdir" ] || [ "$newctx" != "$context" ]; } && deploy=true
+  no_uncommitted
+
+  local work; work=$(mktemp -d)
+  CLEANUP="${CLEANUP:-} $work"
+  # shellcheck disable=SC2064   # la lista se fija ahora, a propósito
+  trap "rm -rf ${CLEANUP}" EXIT
+  git clone -q --depth 1 --branch "$branch" "$(forge clone-url "$repo")" "$work/repo" || die "$(L "No pude clonar $repo ($branch) por SSH" "Couldn't clone $repo ($branch) over SSH")"
+  [ -f "$work/repo/$newdir/Dockerfile" ] \
+    || die "$(L "$repo no tiene $newdir/Dockerfile (agrégalo, o crea la app de nuevo con andamio app create para que te proponga uno)" \
+               "$repo has no $newdir/Dockerfile (add it, or create the app again with andamio app create to get one proposed)")"
+  local wf=$work/repo/.github/workflows/andamio-$name.yml sha
+  # La misma versión del pipeline que ya usa (actualizarla es andamio app ci-update).
+  sha=$(grep -m1 -oE 'app-build\.yml@[0-9a-f]{40}' "$wf" 2> /dev/null | cut -d@ -f2 || true)
+  [ -n "$sha" ] || sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*')")
+  local args=(--branch "$branch" --app "$name" --dir "$newdir" ${newctx:+--context "$newctx"})
+  for w in "${watch[@]}"; do [ -n "$w" ] && args+=(--watch "$w"); done
+  mkdir -p "$(dirname "$wf")"
+  forge ci-snippet "$INSTANCE_REPO" "$sha" "${args[@]}" > "$wf"
+
+  echo "$(L Carpeta Folder):   $appdir → $newdir"
+  echo "$(L "Se construye desde" "Built from"):  ${context:-$appdir} → ${newctx:-$newdir}"
+  echo "$(L "Rutas" "Paths"):     ${watch[*]:-$(L "(solo su carpeta)" "(only its folder)")}"
+  if git -C "$work/repo" diff --quiet && [ -z "$(git -C "$work/repo" status --porcelain)" ]; then
+    echo "✓ $(L "Nada que cambiar" "Nothing to change")"; return 0
+  fi
+  confirm "$(L "¿Cambiarlo? (sube su pipeline a $repo$($deploy && echo " y despliega"))" \
+               "Change it? (pushes its pipeline to $repo$($deploy && echo " and deploys"))")" ANDAMIO_SOURCE_OK
+
+  # El app.yml primero (local), después el repo de la app; si su push falla, nada queda a medias.
+  python3 - "$f" "$newdir" "$newctx" "${watch[@]}" <<'PY'
+import re, sys
+f, d, ctx, watch = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+lines = [l for l in open(f).read().split("\n") if not re.match(r"^(context|watch):", l)]
+lines = [f"dir: {d}" if re.match(r"^dir:", l) else l for l in lines]
+at = next(i + 1 for i, l in enumerate(lines) if l.startswith("dir:"))
+extra = ([f"context: {ctx}"] if ctx else []) + ([f"watch: [{', '.join(watch)}]"] if watch else [])
+lines[at:at] = extra
+open(f, "w").write("\n".join(lines))
+PY
+  local skip=" [skip ci]"; $deploy && skip=""
+  git -C "$work/repo" add ".github/workflows/andamio-$name.yml"
+  git -C "$work/repo" commit -qm "andamio: pipeline de $name ($newdir)$skip"
+  local via_pr=""
+  if ! git -C "$work/repo" push -q origin HEAD 2> /dev/null; then
+    # La rama solo acepta PRs: el pipeline nuevo va en uno (al mergearlo, rige la carpeta nueva).
+    local prb="andamio/source-$name"
+    if ! git -C "$work/repo" push -q -f origin "HEAD:refs/heads/$prb"; then
+      git -C "$INFRA" checkout -q -- "apps/$name/app.yml"
+      die "$(L "$repo rechazó el push: no cambié nada" "$repo rejected the push: nothing changed")"
+    fi
+    via_pr=$(L "Actualiza el pipeline de $name (carpeta y rutas que disparan su deploy). Al mergearlo, rige." \
+               "Updates $name's pipeline (folder and paths that trigger its deploy). It applies once merged." \
+             | forge pr-create "$repo" "$branch" "$prb" "andamio: $(L "pipeline de" "pipeline of") $name") \
+      || { git -C "$INFRA" checkout -q -- "apps/$name/app.yml"; die "$(L "Subí la rama $prb, pero no pude abrir el PR" "Pushed branch $prb, but couldn't open the PR")"; }
+  fi
+  git -C "$INFRA" add "apps/$name/app.yml"
+  git -C "$INFRA" commit -qm "feat(apps): $name source ($newdir)"
+  push_infra
+  if [ -n "$via_pr" ]; then
+    echo "✓ $(L "$branch solo acepta PRs: abrí uno con el pipeline nuevo" "$branch only takes PRs: opened one with the new pipeline")"
+    echo "  $via_pr"
+    L "  Mergéalo y rige$($deploy && echo " (y despliega)")." "  Merge it and it applies$($deploy && echo " (and deploys)")."; echo
+    return 0
+  fi
+  echo "✓ $(L "$name: pipeline al día en $repo" "$name: pipeline up to date in $repo")$($deploy && L ", desplegando" ", deploying")"
+  if $deploy; then
+    forge ci-watch "$repo" "$(git -C "$work/repo" rev-parse HEAD)" --workflow "andamio-$name.yml" || true
+  fi
 }
 
 # andamio app cron: tareas programadas (cron: en app.yml). Cada una, un timer de systemd en el
@@ -792,7 +1270,10 @@ app_cron() {
       echo
       if [ "$rc" = 0 ]; then echo "✓ $(L "$task terminó bien" "$task finished fine")"; else die "$(L "$task terminó con código $rc" "$task exited with code $rc")"; fi
       return ;;
-    add | rm) ;;
+    runs)
+      local task=${1:-}; [[ $task =~ ^[a-z][a-z0-9-]*$ ]] || usage
+      "$INFRA/bin/andamio" _cron runs "$f" "$name" "$task"; return ;;
+    add | rm | edit) ;;
     *) usage ;;
   esac
   no_uncommitted
@@ -812,6 +1293,21 @@ app_cron() {
     "$INFRA/bin/andamio" _cron add "$f" "$schedule" "$command" "$task"
     task=$(git -C "$INFRA" diff -U0 -- "apps/$name/app.yml" | sed -n 's/^+  - name: //p' | tail -n 1)
     msg="feat(apps): $name: cron add $task"
+  elif [ "$sub" = edit ]; then
+    local task=${1:-} schedule="" command=""; [ -n "$task" ] || usage
+    shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --schedule) schedule=${2:?$(L "falta el valor de --schedule" "missing value for --schedule")}; shift ;;
+        --command) command=${2:?$(L "falta el valor de --command" "missing value for --command")}; shift ;;
+        *) die "$(L "Opción desconocida" "Unknown option"): $1" ;;
+      esac
+      shift
+    done
+    [ -n "$schedule" ] || [ -n "$command" ] || die "$(L "Nada que cambiar: --schedule o --command" "Nothing to change: --schedule or --command")"
+    echo
+    "$INFRA/bin/andamio" _cron edit "$f" "$task" "$schedule" "$command"
+    msg="feat(apps): $name: cron edit $task"
   else
     local task=${1:-}; [ -n "$task" ] || usage
     "$INFRA/bin/andamio" _cron rm "$f" "$task"
@@ -827,27 +1323,140 @@ app_cron() {
 }
 
 app_logs() {
-  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local name=${1:-} service=app; [ -n "$name" ] || usage; valid_name "$name"
   [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
-  # El contenedor más reciente de la app, corriendo o no: con la app caída es cuando más
-  # se necesitan sus logs. -f los sigue mientras corra; si está apagada, muestra y sale.
-  ssh -t -q "$SERVER" "c=\$(docker ps -aq --filter label=com.docker.compose.project=$name --filter label=com.docker.compose.service=app --filter label=com.docker.compose.oneoff=False | head -n 1)
+  [ "${2:-}" = --worker ] && service=worker
+  [ -z "${2:-}" ] || [ "$2" = --worker ] || die "$(L "Opción desconocida" "Unknown option"): $2"
+  # El contenedor más reciente de la app (o de su worker), corriendo o no: con la app caída es
+  # cuando más se necesitan sus logs. -f los sigue mientras corra; si está apagada, muestra y sale.
+  ssh -t -q "$SERVER" "c=\$(docker ps -aq --filter label=com.docker.compose.project=$name --filter label=com.docker.compose.service=$service --filter label=com.docker.compose.oneoff=False | head -n 1)
 if [ -z \"\$c\" ]; then echo '$(L "$name no tiene contenedores (¿nunca se desplegó?)" "$name has no containers (never deployed?)")'; exit 1; fi
 docker ps -a --filter id=\$c --format '{{.Names}}: {{.Status}}'
 docker logs -f --tail 100 \$c"
 }
 
-app_rollback() {
+app_restart() {
   local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
-  # Penúltimo deploy exitoso, leído de la tabla deployments de la app.
-  local prev
-  prev=$(ssh -n "$SERVER" "cd /srv/andamio/infra/apps/$name && url=\$(grep '^DATABASE_URL=' .env | cut -d= -f2-) && \
-    docker run --rm --network data postgres:18.6-alpine psql -tA \"\$url\" -c \
-    \"SELECT commit_sha || ' ' || version FROM deployments WHERE status = 'success' ORDER BY id DESC OFFSET 1 LIMIT 1\"")
-  [ -n "$prev" ] || die "$(L "No hay un deploy exitoso anterior para volver" "There's no previous successful deploy to go back to")"
-  read -r sha version <<< "$prev"
-  confirm "$(L "¿Volver $name a $version (${sha:0:7})?" "Roll $name back to $version (${sha:0:7})?")"
-  ssh -n "$SERVER" "/srv/andamio/infra/scripts/deploy-app.sh $name $sha $version"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  grep -qx 'stopped: true' "$f" && die "$(L "$name está detenida: para volver, andamio app start $name" "$name is stopped: to bring it back, andamio app start $name")"
+  step "$(L "Reiniciando $name (misma versión; unos segundos sin responder)" "Restarting $name (same version; a few seconds without answering)")"
+  ssh -n "$SERVER" "cd /srv/andamio/infra/apps/$name && docker compose restart -t 15 && docker compose ps --format '{{.Name}}: {{.Status}}'" \
+    || die "$(L "No se pudo reiniciar (el detalle, arriba)" "Couldn't restart it (details above)")"
+  echo "✓ $(L "$name reiniciada" "$name restarted")"
+}
+
+app_deploy() {
+  local name=${1:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  local repo target sha title
+  local wf br; read -r repo br wf <<< "$(app_ci "$f" "$name")"
+  # Lo último de main que se construyó bien (su imagen existe): el mismo deploy sin caída de siempre.
+  target=$(forge ci-runs "$repo" 30 --branch "$br" ${wf:+--workflow "$wf"} | python3 -c '
+import json, sys
+for r in json.load(sys.stdin):
+    if r["conclusion"] == "success" and r.get("full"):
+        print(r["full"], r["title"].replace("\n", " ")[:80])
+        break')
+  [ -n "$target" ] || die "$(L "$name no tiene un build exitoso en main: haz push (o andamio app retry $name)" "$name has no successful build on main: push (or andamio app retry $name)")"
+  read -r sha title <<< "$target"
+  echo "$(L "Despliega" "Deploys"): ${sha:0:7}  «$title»"
+  confirm "$(L "¿Desplegar $name ahora?" "Deploy $name now?")" ANDAMIO_DEPLOY_OK
+  ssh -n "$SERVER" "/srv/andamio/infra/scripts/deploy-app.sh $name $sha ${sha:0:7}"
+}
+
+app_rollback() {
+  local name=${1:-} want=${2:-}; [ -n "$name" ] || usage; valid_name "$name"
+  local f=$INFRA/apps/$name/app.yml
+  [ -f "$f" ] || no_app "$name"
+  [ -z "$want" ] || [[ $want =~ ^[0-9a-f]{7,40}$ ]] \
+    || die "$(L "Commit inválido: $want (de 7 a 40 caracteres hexadecimales)" "Invalid commit: $want (7 to 40 hex characters)")"
+  local repo current target sha title
+  local wf br; read -r repo br wf <<< "$(app_ci "$f" "$name")"
+  # Los deploys salen de su CI (también en apps sin base); la versión que corre, del servidor.
+  current=$(ssh -n "$SERVER" "sed -n 's/^TAG=//p' /srv/andamio/infra/apps/$name/.env 2> /dev/null" || true)
+  target=$(forge ci-runs "$repo" 30 --branch "$br" ${wf:+--workflow "$wf"} | python3 -c '
+import json, sys
+want, current = sys.argv[1], sys.argv[2]
+for r in json.load(sys.stdin):
+    if r["conclusion"] != "success" or not r.get("full"):
+        continue
+    if (want and r["full"].startswith(want)) or (not want and r["full"] != current):
+        print(r["full"], r["title"].replace("\n", " ")[:80])
+        break' "$want" "$current")
+  if [ -z "$target" ]; then
+    [ -n "$want" ] && die "$(L "$want no es un deploy exitoso de $name (entre sus últimos 30)" "$want isn't a successful deploy of $name (among its last 30)")"
+    die "$(L "No hay un deploy exitoso anterior para volver" "There's no previous successful deploy to go back to")"
+  fi
+  read -r sha title <<< "$target"
+  [ "$sha" != "$current" ] || die "$(L "$name ya corre ${sha:0:7}" "$name already runs ${sha:0:7}")"
+  echo "$(L "Ahora" "Now"): ${current:0:7}   →   ${sha:0:7}  «$title»"
+  L "Ojo: el próximo push vuelve a desplegar lo último de main." "Note: the next push deploys main's latest again."
+  confirm "$(L "¿Volver $name a ${sha:0:7}?" "Roll $name back to ${sha:0:7}?")" ANDAMIO_ROLLBACK_OK
+  # El mismo deploy sin caída de siempre: si la imagen ya no está o no queda sana, sigue la actual.
+  ssh -n "$SERVER" "/srv/andamio/infra/scripts/deploy-app.sh $name $sha ${sha:0:7}"
+}
+
+# Deshacer un cambio de configuración de una app (un commit que solo tocó su app.yml, y su
+# compose generado): el cambio inverso de app.yml, el compose regenerado, un commit nuevo y
+# aplicar. Nunca secretos, ni crear o borrar una app. Si un cambio posterior tocó las mismas
+# líneas, no se puede deshacer solo y no toca nada.
+app_revert() {
+  local name=${1:-} want=${2:-}; [ -n "$name" ] && [ -n "$want" ] || usage; valid_name "$name"
+  [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+  [[ $want =~ ^[0-9a-f]{7,40}$ ]] || die "$(L "Commit inválido: $want" "Invalid commit: $want")"
+  no_uncommitted
+  local full files subject
+  full=$(git -C "$INFRA" rev-parse --verify -q "$want^{commit}") || die "$(L "No existe el commit $want en tu repo" "There's no commit $want in your repo")"
+  files=$(git -C "$INFRA" show --format= --name-status "$full")
+  # Solo M (modificado) de su app.yml y, si acaso, de su compose.yaml.
+  if ! grep -qx "M	apps/$name/app.yml" <<< "$files" || grep -vqxE "M	apps/$name/(app\.yml|compose\.yaml)" <<< "$files"; then
+    die "$(L "Ese commit no es un cambio de configuración de $name (solo se deshacen los que tocan únicamente su app.yml: RAM, dominios, tareas, CORS, acceso)" \
+             "That commit isn't a configuration change to $name (only the ones that touch just its app.yml can be undone: RAM, domains, tasks, CORS, access)")"
+  fi
+  subject=$(git -C "$INFRA" show -s --format=%s "$full")
+  echo "$(L "Deshacer" "Undo") ${full:0:7} «$subject»:"
+  git -C "$INFRA" show --format= -U0 "$full" -- "apps/$name/app.yml" | grep -E '^[-+][^-+]' | sed 's/^-/  + /; t; s/^+/  - /'
+  confirm "$(L "¿Deshacer este cambio de $name?" "Undo this change to $name?")" ANDAMIO_REVERT_OK
+  if ! git -C "$INFRA" show --format= "$full" -- "apps/$name/app.yml" | git -C "$INFRA" apply -R; then
+    die "$(L "Un cambio posterior tocó las mismas líneas de su app.yml: no se puede deshacer solo. No toqué nada." \
+             "A later change touched the same lines of its app.yml: it can't be undone by itself. Nothing was touched.")"
+  fi
+  step "$(L "Compose de $name" "$name's compose")"
+  (cd "$INFRA/ansible" && ansible-playbook apps.yml -e "andamio_only_app=$name" | grep -E 'fatal|ok=')
+  git -C "$INFRA" add "apps/$name"
+  git -C "$INFRA" commit -qm "revert(apps): $name: $(L deshacer undo) ${full:0:7} ($subject)"
+  app_apply "$name"
+}
+
+app_restore() {
+  local name=${1:-} snap=${2:-}; [ -n "$name" ] || usage; valid_name "$name"
+  [ -f "$INFRA/apps/$name/app.yml" ] || no_app "$name"
+  if [ -z "$snap" ]; then
+    "$INFRA/bin/andamio" backups list
+    echo
+    L "Elige uno y corre:  andamio app restore $name <respaldo>   (latest: el más nuevo)" \
+      "Pick one and run:  andamio app restore $name <backup>   (latest: the newest)"
+    exit 0
+  fi
+  [[ $snap == latest || $snap =~ ^[0-9a-f]{8,64}$ ]] \
+    || die "$(L "Respaldo inválido: $snap (su id, como sale en andamio backups list, o latest)" "Invalid backup: $snap (its id, as andamio backups list shows it, or latest)")"
+  L "Esto RESTAURA $name al respaldo $snap:
+  - su base (PostgreSQL o MariaDB) y sus carpetas persistentes vuelven a como estaban ese día
+  - lo que tiene ahora se guarda antes en /srv/andamio/archive/ (entra en el backup)
+  - la app se detiene unos segundos mientras tanto
+No toca: Redis, el código ni la versión desplegada, ni sus secretos.
+" "This RESTORES $name to backup $snap:
+  - its database (PostgreSQL or MariaDB) and persistent folders go back to how they were that day
+  - what it has now is saved first in /srv/andamio/archive/ (included in backups)
+  - the app stops for a few seconds meanwhile
+Left alone: Redis, the code and deployed version, and its secrets.
+"
+  local ok=""; read -rp "$(L "Para confirmar, escribe el nombre de la app: " "To confirm, type the app's name: ")" ok || true
+  [ "$ok" = "$name" ] || die "$(L Cancelado Cancelled)"
+  step "$(L "Servidor: restaurar (pide tu contraseña de sudo)" "Server: restore (asks for your sudo password)")"
+  "$INFRA/bin/andamio" _restore "$name" "$snap"
 }
 
 app_destroy() {
@@ -863,6 +1472,7 @@ app_destroy() {
   L "Esto DESTRUYE la app $name:
   - sus contenedores (web y worker) en el servidor
   - su base y su usuario de PostgreSQL (antes: respaldo en /srv/andamio/archive/, que entra en restic)
+  - su base y su usuario de MariaDB, si tiene (con el mismo respaldo antes)
   - sus claves y su usuario de Redis
   - sus carpetas persistentes (antes: archivadas en /srv/andamio/archive/)
   - apps/$name en este repo (revoca su llave de deploy y la quita del registro)
@@ -870,12 +1480,13 @@ No toca: el repo de la app, sus imágenes en el registro ni $PROJECTS/$name.
 " "This DESTROYS the app $name:
   - its containers (web and worker) on the server
   - its PostgreSQL database and user (first backed up to /srv/andamio/archive/, which restic includes)
+  - its MariaDB database and user, if it has one (with the same backup first)
   - its Redis keys and user
   - its persistent folders (first archived to /srv/andamio/archive/)
   - apps/$name in this repo (revokes its deploy key and removes it from the registry)
 Left alone: the app's repo, its images in the registry and $PROJECTS/$name.
 "
-  local ok; read -rp "$(L "Para confirmar, escribe el nombre de la app: " "To confirm, type the app's name: ")" ok
+  local ok=""; read -rp "$(L "Para confirmar, escribe el nombre de la app: " "To confirm, type the app's name: ")" ok || true
   [ "$ok" = "$name" ] || die "$(L Cancelado Cancelled)"
 
   step "$(L "Servidor: respaldo, contenedores, base y Redis" "Server: backup, containers, database and Redis")"
@@ -894,6 +1505,18 @@ if [ -n "$url" ]; then
   [ "$(gunzip -c "$out" | wc -c)" -gt 0 ] || { L "El respaldo quedó vacío; no sigo" "The backup came out empty; stopping"; exit 1; }
   L "Respaldo: $out ($(du -h "$out" | cut -f1))" "Backup: $out ($(du -h "$out" | cut -f1))"
 fi
+# MariaDB (mysql: true): su base, respaldada antes de apagar nada.
+mdb=""; muser=""
+murl=$(grep '^MYSQL_URL=' .env 2>/dev/null | cut -d= -f2- || true)
+if [ -n "$murl" ]; then
+  mdb=${murl##*/}; muser=$(sed -E 's#^mysql://([^:]+):.*#\1#' <<< "$murl")
+  [[ $mdb =~ ^[a-z0-9_]+$ && $muser =~ ^[a-z0-9_]+$ ]] || { L "MYSQL_URL inesperada; no sigo" "Unexpected MYSQL_URL; stopping"; exit 1; }
+  install -d -m 700 /srv/andamio/archive
+  out=/srv/andamio/archive/$name-mariadb-$(date +%Y%m%d-%H%M%S).sql.gz
+  docker exec mariadb sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump -uroot --single-transaction --routines --events --databases "$1"' _ "$mdb" | gzip > "$out"
+  [ "$(gunzip -c "$out" | wc -c)" -gt 0 ] || { L "El respaldo de MariaDB quedó vacío; no sigo" "The MariaDB backup came out empty; stopping"; exit 1; }
+  L "Respaldo de MariaDB: $out ($(du -h "$out" | cut -f1))" "MariaDB backup: $out ($(du -h "$out" | cut -f1))"
+fi
 L "Apagando contenedores" "Stopping containers"
 # TAG de relleno: una app nunca desplegada no tiene TAG y compose se negaría a leer el archivo.
 TAG=destroy docker compose --profile migrate down --remove-orphans
@@ -903,6 +1526,13 @@ DROP DATABASE IF EXISTS "$dbname" WITH (FORCE);
 DROP ROLE IF EXISTS "$role";
 SQL
   L "PostgreSQL: base $dbname y usuario $role borrados" "PostgreSQL: database $dbname and user $role dropped"
+fi
+if [ -n "$mdb" ]; then
+  docker exec -i mariadb sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot' <<SQL
+DROP DATABASE IF EXISTS \`$mdb\`;
+DROP USER IF EXISTS '$muser'@'%';
+SQL
+  L "MariaDB: base $mdb y usuario $muser borrados" "MariaDB: database $mdb and user $muser dropped"
 fi
 if grep -q '^REDIS_URL=' .env 2>/dev/null; then
   n=$(docker exec redis sh -c "redis-cli --no-auth-warning --scan --pattern '$name:*' | xargs -r redis-cli --no-auth-warning DEL | awk '{s += \$1} END {print s + 0}'")
@@ -923,11 +1553,11 @@ REMOTE
   step "$(L "Quitar apps/$name de este repo" "Removing apps/$name from this repo")"
   git -C "$INFRA" rm -rq "apps/$name"
   git -C "$INFRA" commit -qm "feat(apps): $(L destruir destroy) $name (andamio app destroy)"
-  git -C "$INFRA" push -q
+  push_infra
 
   step "$(L "Servidor: revocar llave, quitar del registro y de Redis (pide tu contraseña de sudo)" \
             "Server: revoke the key, remove it from the registry and from Redis (asks for your sudo password)")"
-  "$INFRA/bin/andamio" _apply
+  "$INFRA/bin/andamio" _apply --registry   # solo el registro: sin la app, su llave y su usuario se van
 
   echo
   L "✓ $name destruida. Si ya no quieres su repo, archívalo (o bórralo, irreversible) en
@@ -945,8 +1575,14 @@ case ${1:-} in
   set) shift; app_set "$@" ;;
   logs) shift; app_logs "$@" ;;
   rollback) shift; app_rollback "$@" ;;
+  restore) shift; app_restore "$@" ;;
+  restart) shift; app_restart "$@" ;;
+  deploy) shift; app_deploy "$@" ;;
+  revert) shift; app_revert "$@" ;;
+  sql) shift; [ -n "${1:-}" ] || usage; valid_name "$1"; exec "$INFRA/bin/andamio" _sql "$@" ;;
   destroy) shift; app_destroy "$@" ;;
   secret) shift; app_secret "$@" ;;
+  source|fuente) shift; app_source "$@" ;;
   apply | aplicar) shift; app_apply "$@" ;;
   stop|start) app_state "$@" ;;
   domain) shift; app_list_edit domains "$@" ;;
@@ -954,5 +1590,6 @@ case ${1:-} in
   volume | volumen) shift; app_list_edit volumes "$@" ;;
   cron) shift; app_cron "$@" ;;
   ci-update) shift; app_ci_update "$@" ;;
+  retry | reintentar) shift; app_retry "$@" ;;
   *) usage ;;
 esac

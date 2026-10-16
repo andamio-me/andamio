@@ -178,7 +178,8 @@ use `--domain` (or later `app domain add`).
 
 Useful flags: `--port` (default: the Dockerfile's `EXPOSE`), `--public` (reachable from the
 internet), `--db` (PostgreSQL), `--redis`, `--host <sub>` or `--host @` (root domain),
-`--mem 512m`, `--volume /data` (a folder that persists across deploys and is backed up).
+`--mem 512m`, `--volume /data` (a folder that persists across deploys and is backed up),
+`--env-file .env.production` (the variables it needs to start, encrypted before the first deploy).
 
 Before registering anything, `app create` checks your code: it warns about a committed
 `.env`, listening on `localhost`, a different fixed port or files that would be lost on
@@ -333,9 +334,12 @@ with its fix; exit code 1 if there are problems.
 andamio ui
 ```
 
-Your apps in the browser: status, RAM, version, tasks, deploys and live logs. It runs **on your
-machine** (`127.0.0.1` only, with a key that changes every time) and talks to the server over
-SSH: there's no panel on the server to attack. For now, view only.
+Your server's live plan and your apps in the browser: status, RAM, version, tasks, deploys
+and live logs. With clicks: stop and start, change RAM, CPU, port or access, secrets,
+tasks, domains, CORS and folders, and retry a deploy; each action shows and runs the same CLI
+command. It runs **on your machine** (`127.0.0.1`
+only, with a key that changes every time) and talks to the server over SSH: there's no panel
+on the server to attack.
 
 ### Backups
 
@@ -435,8 +439,10 @@ needed: they run on your machine and in CI, on every push.
 - [ ] Ansible task names in English (today they're in Spanish)
 - [x] Guided backups (`andamio backups`)
 - [x] Automated tests in CI (`tools/tests.sh`)
-- [x] Local browser panel, view only (`andamio ui`)
-- [ ] Local panel with actions (stop, RAM, secrets, tasks) and a desktop app
+- [x] Local browser panel (`andamio ui`): live plan and the day-to-day actions
+- [x] Panel: backups, alerts and security on the plan; recent deploys
+- [x] Panel: create an app (repo, review, configuration)
+- [ ] Panel as a desktop app (Tauri)
 - [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request
 

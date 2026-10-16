@@ -1,5 +1,6 @@
 # Llave de deploy de una app: si falta apps/<app>/deploy_key.pub, genera un par
 # ed25519, sube la privada como secret DEPLOY_SSH_KEY del repo de la app (bin/forge) y
+# (con varias apps en un repo, dir: en app.yml, cada una con la suya: DEPLOY_SSH_KEY_<APP>)
 # guarda solo la pública. La privada nunca queda en disco. Incluido por apps.yml.
 # Además fija las variables de CI DEPLOY_* (a dónde desplegar) en cada corrida.
 # Rotar: borrar deploy_key.pub, correr apps.yml y luego ./hl aplicar andamio.
@@ -7,6 +8,10 @@
 - name: "{{ app_name }}: definición"
   ansible.builtin.set_fact:
     app_def: "{{ lookup('ansible.builtin.file', repo ~ '/apps/' ~ app_name ~ '/app.yml') | from_yaml }}"
+
+- name: "{{ app_name }}: nombre del secreto de la llave"
+  ansible.builtin.set_fact:
+    app_key_secret: "{{ ('DEPLOY_SSH_KEY_' ~ (app_name | upper | replace('-', '_'))) if app_def.dir is defined else 'DEPLOY_SSH_KEY' }}"
 
 - name: "{{ app_name }}: ¿tiene llave de deploy?"
   ansible.builtin.stat:
@@ -43,8 +48,8 @@
             -f {{ app_key_tmp.path }}/key
           changed_when: true
 
-        - name: "{{ app_name }}: privada -> secret DEPLOY_SSH_KEY de {{ app_repo }}"
-          ansible.builtin.shell: "{{ repo }}/bin/forge secret-set {{ app_repo }} DEPLOY_SSH_KEY < {{ app_key_tmp.path }}/key"
+        - name: "{{ app_name }}: privada -> secret {{ app_key_secret }} de {{ app_repo }}"
+          ansible.builtin.shell: "{{ repo }}/bin/forge secret-set {{ app_repo }} {{ app_key_secret }} < {{ app_key_tmp.path }}/key"
           changed_when: true
 
         - name: "{{ app_name }}: guardar solo la pública"

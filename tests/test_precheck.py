@@ -91,3 +91,38 @@ def test_precheck_exit_codes(make_repo, env):
     good = make_repo("buena", {"server.js": CLEAN_NODE})
     assert subprocess.run([andamio, "_precheck", str(bad), "3000", "0"], env=env, capture_output=True).returncode == 2
     assert subprocess.run([andamio, "_precheck", str(good), "3000", "0"], env=env, capture_output=True).returncode == 0
+
+
+def test_config_keys_ending_in_db_are_not_sqlite(andamio, make_repo):
+    """config.get('redis.db') es una clave de configuración, no un archivo SQLite."""
+    code = CLEAN_NODE + "const db = config.get<number>('redis.db', 0);\nconst m = conf['mongo.db'];\n"
+    assert not has(findings(andamio, make_repo, {"server.js": code, "package.json": "{}"}), "SQLite")
+    assert has(findings(andamio, make_repo, {"server.js": CLEAN_NODE + "new Database('data.db');\n", "package.json": "{}"}), "SQLite")
+
+
+def test_dockerfile_eol_npm_size_and_dockerignore(andamio, make_repo):
+    """Un Dockerfile propio: imagen sin soporte, npm en la imagen final, base pesada, una sola
+    etapa con npm install y COPY . sin .dockerignore. Todo aviso, nada grave."""
+    df = "FROM node:18\nWORKDIR /app\nCOPY . .\nRUN npm install\nCMD [\"npm\", \"start\"]\n"
+    found = findings(andamio, make_repo, {"server.js": CLEAN_NODE, "Dockerfile": df})
+    for word in ("node:18", "npm start", "slim", "devDependencies", ".dockerignore"):
+        assert has(found, word, serious=False), word
+    assert has(findings(andamio, make_repo, {"server.js": CLEAN_NODE, "Dockerfile": "FROM python:3.12-slim-bullseye\n"}), "bookworm")
+
+
+@pytest.mark.parametrize("kind", ["node", "python", "go", "static"])
+def test_generated_dockerfiles_pass_their_own_review(andamio, make_repo, kind):
+    text = (andamio.DOCKERFILES / f"{kind}.Dockerfile").read_text()
+    for k, v in {"NODE": "24", "PY": "3.13", "GO": "1.26"}.items():
+        text = text.replace("{{" + k + "}}", v)
+    repo = make_repo(f"gen{next(_n)}", {"Dockerfile": text, ".dockerignore": ".git\n"})
+    assert andamio.dockerfile_findings(repo) == []
+
+
+def test_redis_without_url_or_prefix(andamio, make_repo):
+    """andamio da Redis solo como REDIS_URL (usuario propio) y con claves «<app>:»."""
+    bad = CLEAN_NODE + "const Redis = require('ioredis');\nnew Redis({ host: process.env.REDIS_HOST });\n"
+    found = findings(andamio, make_repo, {"server.js": bad})
+    assert has(found, "REDIS_URL", serious=False) and has(found, "NOPERM", serious=False)
+    good = CLEAN_NODE + "const Redis = require('ioredis');\nnew Redis(process.env.REDIS_URL, { keyPrefix: 'web:' });\n"
+    assert not has(findings(andamio, make_repo, {"server.js": good}), "Redis")

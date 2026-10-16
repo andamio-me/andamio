@@ -46,6 +46,15 @@ It shows you the change (`resources.mem: 256m → 512m`), asks and applies it: a
 same image, no deploy. If you change the port, your app has to listen on the new one; if you
 changed the code for that, `git push` (that deploys).
 
+With PostgreSQL, also its database limits, so it doesn't hog the one it shares with the other
+apps:
+
+```bash
+andamio app set myapp --db-connections 20 --db-timeout 30s   # 0 = no limit
+```
+
+See [PostgreSQL and Redis](/en/docs/server/services/#limit-an-app).
+
 ## Live logs
 
 ```bash
@@ -65,10 +74,52 @@ it until you `start` it. It frees its memory and CPU.
 ## Roll back
 
 ```bash
-andamio app rollback myapp
+andamio app rollback myapp            # to the previous successful deploy
+andamio app rollback myapp 1a2b3c4    # to that commit (one of its successful deploys)
 ```
 
-Goes back to the previous successful deploy.
+It's the usual zero-downtime deploy: if that version doesn't come up healthy, the current one
+keeps running. The database doesn't go back (for that, [restore from a backup](#restore-from-a-backup)),
+and the next push to `main` deploys the latest again. In the [panel](/en/docs/apps/panel/),
+each deploy has **Roll back here**.
+
+## Restore from a backup
+
+```bash
+andamio app restore myapp             # the list of available backups
+andamio app restore myapp 4f3e2d1c    # its database and folders, as in that backup (or latest)
+```
+
+Before touching anything it takes that app's database out of the backup and tests it in a
+temporary PostgreSQL (or MariaDB); if the backup doesn't have it, it stops without changing
+anything. From MariaDB only that app's database comes in: not the users nor the other apps'
+databases. If it works, it saves the current data in `/srv/andamio/archive/`,
+stops the app for a few seconds, replaces its database and persistent folders and starts it
+again. It doesn't touch Redis, the deployed code or the secrets. It asks you to type the
+app's name to confirm.
+
+## Query its database (read-only)
+
+```bash
+andamio app sql myapp                                # read-only psql
+andamio app sql myapp "SELECT count(*) FROM users"   # one query
+```
+
+It runs as `<app>_ro`, a user that can only read (`SELECT`) that app's database, in a read-only
+transaction and with 5 seconds max per query: neither a mistake nor something malicious can
+change data. It only gets in from inside the PostgreSQL container (no password, no network
+access). In the [panel](/en/docs/apps/panel/), **Database**.
+
+## Undo a configuration change
+
+```bash
+andamio app revert myapp 1a2b3c4
+```
+
+Undoes that commit if it was a configuration change to the app (the ones that touch only its
+`app.yml`: RAM, domains, tasks, CORS, access): a new commit with the reverse change, then
+apply. Never secrets, nor creating or deleting an app. If a later change touched the same lines,
+it does nothing and tells you. In the [panel](/en/docs/apps/panel/), **History → Undo**.
 
 ## Apply changes
 

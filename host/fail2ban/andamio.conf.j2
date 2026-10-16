@@ -1,0 +1,19 @@
+# fail2ban de andamio: aunque SSH solo acepta llaves, los bots siguen probando. Tras 3 intentos
+# fallidos en 10 min, esa IP queda bloqueada 1 h; si reincide, cada vez más (hasta 1 semana).
+[DEFAULT]
+backend = systemd
+banaction = nftables
+banaction_allports = nftables[type=allports]
+bantime = 1h
+findtime = 10m
+maxretry = 3
+bantime.increment = true
+bantime.maxtime = 1w
+# Nunca a ti por la VPN ni al propio servidor.
+ignoreip = 127.0.0.1/8 ::1 10.8.0.0/24
+
+[sshd]
+enabled = true
+port = {{ andamio_ssh_port }}
+# aggressive: también los que cortan antes de autenticarse (escáneres) y llaves rechazadas.
+mode = aggressive

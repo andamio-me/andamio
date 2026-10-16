@@ -20,6 +20,16 @@ git clone https://github.com/Geovani29/andamio.git ~/andamio
 
 ## 2. `andamio setup`
 
+Lo primero que pregunta es qué quieres hacer:
+
+- **Solo blindar mi VPS.** Instala lo justo (git, ssh y Ansible), crea tu copia de andamio
+  **solo en tu máquina** (por ejemplo `~/mi-andamio`) y sigue directo con
+  [`andamio seguridad`](/es/docs/start/server/#solo-blindar-el-vps-andamio-seguridad). Sin
+  cuenta de GitHub ni repos. Si un día quieres la plataforma, corre `andamio setup` dentro
+  de tu copia: la conecta con GitHub (un repo privado nuevo, con lo que ya hiciste) y sigues
+  con `andamio init`.
+- **andamio completo.** Lo de abajo.
+
 Corre una vez y pregunta antes de instalar cada cosa:
 
 1. Instala **git, gh, sops, age y Ansible** con sus colecciones. sops se verifica contra su

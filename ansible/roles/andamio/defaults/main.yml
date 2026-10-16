@@ -52,9 +52,69 @@ andamio_stacks:
   - stacks/uptime-kuma
   - stacks/whoami
 
+# PostgreSQL y Redis compartidos por todas las apps (andamio servicios): memoria, CPU y ajustes.
+# La memoria va como 512m o 2g. shared_buffers no se elige: es el 25 % de la memoria de
+# PostgreSQL. La de Redis es para datos (maxmemory): el contenedor tiene 1.5× para el fork del AOF.
+andamio_postgres_mem: 1g
+andamio_postgres_cpus: 1.5
+andamio_postgres_max_connections: 100
+andamio_postgres_work_mem: 4MB
+# El motor: redis (Redis 8), valkey (su continuación libre, BSD) o dragonfly (varios núcleos;
+# guarda cada minuto, no cada segundo). Cambiarlo copia los datos (scripts/redis-engine.sh).
+andamio_redis_engine: redis
+andamio_redis_mem: 256m
+andamio_redis_cpus: 0.5
+andamio_redis_policy: noeviction   # BullMQ y otras colas la necesitan: con *-lru, Redis borraría trabajos
+
+# MariaDB (apps con mysql: true): solo corre si alguna app la usa. innodb_buffer_pool (su caché)
+# es el 40 % de su memoria.
+andamio_mariadb_mem: 512m
+andamio_mariadb_cpus: 1
+andamio_mariadb_max_connections: 100
+# ¿Alguna app la usa? (se lee de apps/*/app.yml en tu WSL, donde corre Ansible)
+# (fileglob no sirve aquí: no acepta comodines en las carpetas, apps/*/app.yml daría siempre vacío.)
+andamio_mariadb_needed: >-
+  {{ lookup('ansible.builtin.pipe', "grep -lsE '^mysql:[[:space:]]*true' '" ~ playbook_dir ~ "'/../apps/*/app.yml || true")
+     | length > 0 }}
+andamio_mariadb_mem_mb: "{{ (andamio_mariadb_mem[:-1] | int) * (1024 if andamio_mariadb_mem[-1] | lower == 'g' else 1) }}"
+
+andamio_postgres_mem_mb: "{{ (andamio_postgres_mem[:-1] | int) * (1024 if andamio_postgres_mem[-1] | lower == 'g' else 1) }}"
+andamio_redis_mem_mb: "{{ (andamio_redis_mem[:-1] | int) * (1024 if andamio_redis_mem[-1] | lower == 'g' else 1) }}"
+# Dragonfly pide 256 MB por hilo: tantos hilos como quepan en su memoria, sin pasar de su CPU.
+andamio_dragonfly_threads: >-
+  {{ [[(andamio_redis_mem_mb | int) // 256,
+       ([andamio_redis_cpus | float, ansible_facts['processor_vcpus']] | min) | round(0, 'ceil') | int] | min, 1] | max }}
+# Lo que stacks/data/compose.yaml lee de su .env (la CPU, nunca más que las del servidor).
+andamio_data_env: |
+  POSTGRES_CPUS={{ [andamio_postgres_cpus | float, ansible_facts['processor_vcpus']] | min }}
+  POSTGRES_MEM={{ andamio_postgres_mem_mb }}m
+  POSTGRES_SHARED_BUFFERS={{ (andamio_postgres_mem_mb | int) // 4 }}MB
+  POSTGRES_MAX_CONNECTIONS={{ andamio_postgres_max_connections }}
+  POSTGRES_WORK_MEM={{ andamio_postgres_work_mem }}
+  REDIS_CPUS={{ [andamio_redis_cpus | float, ansible_facts['processor_vcpus']] | min }}
+  REDIS_MAXMEMORY={{ andamio_redis_mem_mb }}mb
+  REDIS_MEM={{ (andamio_redis_mem_mb | int) * 3 // 2 }}m
+  REDIS_POLICY={{ andamio_redis_policy }}
+  COMPOSE_PROFILES={{ ([andamio_redis_engine] + (['mariadb'] if andamio_mariadb_needed | bool else [])) | join(',') }}
+  MARIADB_MEM={{ andamio_mariadb_mem_mb }}m
+  MARIADB_BUFFER_POOL={{ (andamio_mariadb_mem_mb | int) * 2 // 5 }}M
+  MARIADB_MAX_CONNECTIONS={{ andamio_mariadb_max_connections }}
+  MARIADB_CPUS={{ [andamio_mariadb_cpus | float, ansible_facts['processor_vcpus']] | min }}
+  DRAGONFLY_THREADS={{ andamio_dragonfly_threads }}
+  DRAGONFLY_CACHE_MODE={{ 'true' if andamio_redis_policy.startswith('allkeys') else 'false' }}
+
 # Stacks que necesitan su base en el Postgres compartido: se levantan después de
 # crearla (ver tasks/main.yml). La contraseña sale de POSTGRES_PASSWORD de su secrets.sops.env.
 andamio_db_stacks: []   # p. ej. { stack: stacks/x, db: x }
+
+# /srv/andamio/archive (lo que guardan app destroy y app restore antes de tocar nada): pasados
+# estos días se borra en el respaldo diario. Para entonces ya está en los respaldos mensuales.
+andamio_archive_days: 90
+
+# Límite de peticiones por IP en todas las apps públicas (Traefik): frena bots y abusos sin
+# tocar a un usuario normal (una página pesada pide 50 a 100 recursos de golpe; el burst los cubre).
+andamio_rate_average: 100   # por segundo, sostenido
+andamio_rate_burst: 300     # de golpe
 
 # Cuota de Seafile (GB): tope de lo que guardo en el disco del VPS (ADR 0019).
 andamio_seafile_quota_gb: 30

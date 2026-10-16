@@ -12,6 +12,16 @@
     port: "{{ andamio_ssh_port }}"
     proto: tcp
 
+# bootstrap.yml deja el 22 abierto mientras se mueve SSH; aquí se cierra (la regla "deny 22"
+# de abajo no alcanzaría: en UFW gana la primera regla que coincide).
+- name: Sin el 22 temporal del bootstrap
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    delete: true
+  when: andamio_ssh_port | string != "22"
+
 - name: Reglas
   community.general.ufw:
     rule: "{{ item.rule }}"

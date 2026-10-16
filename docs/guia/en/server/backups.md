@@ -13,14 +13,15 @@ Without backups, your data only lives on the VPS. This command sets them up, gui
    Wasabi, MinIO).
 2. **Tests the destination** from your server.
 3. **Runs the first backup** right away.
-4. **Tests the restore:** loads the database backup into a temporary PostgreSQL and compares
-   it with production, without touching it.
+4. **Tests the restore:** loads the databases' backup into a temporary PostgreSQL (and a
+   temporary MariaDB, if some app uses it) and compares it with production, without touching
+   it. If a dump doesn't load or is missing databases or tables, the test fails.
 
 From then on, every night at 03:30 UTC.
 
 ## What's backed up
 
-Your apps' databases (a consistent PostgreSQL dump), Redis, the platform's files and what's
+Your apps' databases (a consistent dump of PostgreSQL and, if some app uses it, MariaDB), Redis, the platform's files and what's
 needed to rebuild the server: the SSH configuration, the VPN and the server's secrets.
 
 ## How they're protected
@@ -37,7 +38,35 @@ needed to rebuild the server: the SSH configuration, the VPN and the server's se
 `andamio status` tells you when the last backup ran and whether it worked. With Telegram on,
 it notifies you every night.
 
-## Restore
+## Back up now and see the ones there are
+
+```bash
+andamio backups now     # the same as every night, with its output live
+andamio backups list    # the ones there are: date, how long it took and size
+```
+
+In the [panel](/en/docs/apps/panel/), **See backups** shows the same.
+
+## Restore one app
+
+To take a single app back to an earlier day (its database and folders) without touching the
+rest: `andamio app restore <app> <backup>`. See [Managing apps](/en/docs/apps/manage/#restore-from-a-backup).
+
+## The archive of deleted things
+
+Before deleting an app (`andamio app destroy`) or restoring it, andamio saves what it had in
+`/srv/andamio/archive/`: its database and folders. That folder is included in the daily backup,
+and **anything older than 90 days is deleted by itself** in each night's backup: by then it's in
+the monthly backups, which last 6 more months. In the panel, **Backups → Archive** shows what's
+there, how much it takes and when each item goes.
+
+The days are set in your configuration (`andamio_archive_days: 90`; with `0`, nothing is deleted).
+
+Deleting an app doesn't take it out of the backups that already exist: it stays in them until the
+retention deletes them (7 daily, 4 weekly, 6 monthly). That way an accidental delete can be
+undone.
+
+## Restore the whole server
 
 If the server disappears:
 

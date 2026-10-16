@@ -151,3 +151,18 @@ def test_app_cron_cli_rejections(fake_copy, env):
     r = run("add", "web", "@daily", "python x.py", "--otra")
     assert r.returncode != 0 and "Opción desconocida" in r.stderr
     assert git(fake_copy, "status", "--porcelain") == ""
+
+
+def test_edit_changes_schedule_or_command_only(fake_copy, env):
+    yml = fake_copy / "apps/web/app.yml"
+    (fake_copy / "ansible/group_vars/all.yml").open("a").write("andamio_timezone: UTC\n")
+    assert cron_cli(fake_copy, env, "add", str(yml), "@daily", "python a.py", "a").returncode == 0
+    r = cron_cli(fake_copy, env, "edit", str(yml), "a", "0 4 * * *", "")
+    assert r.returncode == 0 and "@daily  →  0 4 * * *" in r.stdout
+    r = cron_cli(fake_copy, env, "edit", str(yml), "a", "", "python b.py --todo")
+    assert r.returncode == 0
+    from conftest import load_andamio
+    assert load_andamio().cron_entries(yml.read_text()) == [{"name": "a", "schedule": "0 4 * * *", "command": "python b.py --todo"}]
+    assert "Nada que cambiar" in cron_cli(fake_copy, env, "edit", str(yml), "a", "0 4 * * *", "").stderr
+    assert "No hay una tarea zz" in cron_cli(fake_copy, env, "edit", str(yml), "zz", "@daily", "").stderr
+    assert "minuto" in cron_cli(fake_copy, env, "edit", str(yml), "a", "61 * * * *", "").stderr

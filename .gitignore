@@ -17,3 +17,8 @@ stacks/proxy/dynamic/tls.yml
 # Python
 __pycache__/
 stacks/monitoring/grafana/provisioning/alerting/contact-points.yml
+
+# andamio de escritorio: lo compilado y lo que se genera (íconos desde desktop/icon.png, esquemas de Tauri)
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/icons/

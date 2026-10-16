@@ -42,7 +42,7 @@ Los avisos llegan por **ntfy**: una app gratuita (Android, iOS o el navegador) q
 notificaciones de un "tema" **sin crear cuenta**. `andamio alertas` inventa un tema largo y
 aleatorio, te dice cómo suscribirte (con un código QR) y manda una de prueba desde el
 servidor. Si prefieres, usa tu propio servidor ntfy. Con Telegram activado, llegan también
-ahí.
+ahí. También se configura desde el panel (`andamio ui`, Ajustes).
 
 `andamio estado` te avisa si nadie te está alertando.
 
@@ -56,6 +56,18 @@ Con el nivel `completo`, por la VPN:
 
 ## Alertas por Telegram
 
-Con `andamio_telegram: true` y el token del bot y tu chat en `host/sops/telegram-env.sops`:
-avisos de deploys fallidos y del backup, un resumen diario del servidor, y un bot que
-responde `/system`. Las alertas de Grafana también llegan ahí, con el nivel `completo`.
+```bash
+andamio telegram              # guiado: tu bot, tu chat, cifrado en tu repo y aplicado
+andamio telegram prueba       # un aviso de prueba
+andamio telegram desactivar   # sin avisos, sin resumen diario y sin bot
+```
+
+1. En Telegram, abre @BotFather, mándale `/newbot` y pega el token que te da (no se muestra).
+   andamio lo comprueba con Telegram.
+2. Abre tu bot y toca **Iniciar**: andamio encuentra tu chat solo (no hace falta buscar IDs).
+3. Se cifra en `host/sops/telegram-env.sops`, se sube y se aplica en tu servidor; te llega un
+   mensaje de prueba.
+
+Desde ahí: avisos de deploys fallidos, del backup y de tareas que fallan, un resumen diario
+del servidor, y un bot que responde `/system`. Las alertas de Grafana también llegan ahí, con
+el nivel `completo`. En el [panel](/es/docs/apps/panel/): **Ajustes → Configurar Telegram**.

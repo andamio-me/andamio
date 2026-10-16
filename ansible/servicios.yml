@@ -1,0 +1,21 @@
+# PostgreSQL, Redis y MariaDB compartidos: aplica su configuración (andamio servicios) sin repasar
+# el resto de la plataforma. Reescribe stacks/data/.env y, si cambió, los recrea: las apps pierden
+# la base y Redis unos segundos y se reconectan solas. Las tareas están en el rol
+# (roles/andamio/tasks/services.yml), donde se ven sus valores por defecto.
+#   ansible-playbook servicios.yml
+
+- name: PostgreSQL, Redis y MariaDB
+  hosts: servers
+  become: true
+  gather_facts: true
+  gather_subset: [hardware]
+  tasks:
+    - name: Repo de andamio al día
+      ansible.builtin.include_role:
+        name: andamio
+        tasks_from: repo.yml
+
+    - name: Servicios de datos con su configuración
+      ansible.builtin.include_role:
+        name: andamio
+        tasks_from: services.yml

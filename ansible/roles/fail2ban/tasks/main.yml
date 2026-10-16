@@ -1,0 +1,35 @@
+# Bloquea las IPs que insisten contra SSH (andamio estado lo revisa).
+- name: fail2ban instalado
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+
+# jail.local y jail.d/defaults-debian.conf de una instalación a mano: andamio.conf manda.
+- name: Sin configuraciones a mano que compitan
+  ansible.builtin.file:
+    path: /etc/fail2ban/jail.local
+    state: absent
+  notify: Reiniciar fail2ban
+
+- name: Configuración de andamio
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../host/fail2ban/andamio.conf.j2"
+    dest: /etc/fail2ban/jail.d/andamio.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar fail2ban
+
+- name: fail2ban activo al arrancar
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Aplicar la configuración ahora
+  ansible.builtin.meta: flush_handlers
+
+- name: La celda de SSH está activa
+  ansible.builtin.command: fail2ban-client status sshd
+  changed_when: false
+  when: not ansible_check_mode   # en --check, fail2ban puede no estar instalado todavía

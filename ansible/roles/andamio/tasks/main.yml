@@ -104,21 +104,15 @@
 # descifran en tu WSL con tu llave age. El servidor nunca tiene la llave.
 # (Las apps tienen el suyo en app.yml de este rol.)
 
-- name: .env de cada stack (desde sops)
-  ansible.builtin.copy:
-    # Comillas dobles: así YAML convierte \n en salto de línea (en >- quedaría literal).
-    # Al final, lo no secreto que necesitan los stacks (group_vars/all.yml).
-    content: "{{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item ~ '/secrets.sops.env',
-      input_type='dotenv', output_type='dotenv') ~ '\nANDAMIO_HOSTNAME=' ~ andamio_hostname ~ '\n'
-      ~ ('COMPOSE_PROFILES=completo\n' if item == 'stacks/monitoring' and andamio_monitoring_level == 'completo' else '')
-      ~ ('POSTGRES_CPUS=' ~ ([1.5, ansible_facts['processor_vcpus']] | min) ~ '\n' if item == 'stacks/data' else '') }}"
-    dest: "{{ andamio_infra }}/{{ item }}/.env"
-    owner: "{{ andamio_user }}"
-    group: "{{ andamio_user }}"
-    mode: "0600"
+- name: Motor de Redis
+  when: "'stacks/data' in andamio_stacks_active"
+  ansible.builtin.include_tasks: redis-engine.yml
+
+- name: .env de cada stack
+  ansible.builtin.include_tasks: stack-env.yml
   loop: "{{ andamio_stacks_active + (andamio_db_stacks | map(attribute='stack')) }}"
-  no_log: true   # nunca mostrar secretos, ni en errores
-  diff: false
+  loop_control:
+    loop_var: andamio_stack
 
 # --- Acceso: tu llave + llaves de deploy con comando forzado ---
 
@@ -196,6 +190,22 @@
     enabled: true
   loop: "{{ andamio_enabled_units }}"
 
+# andamio telegram desactivar: el bot y el resumen se apagan, y sin telegram.env nadie avisa por ahí.
+- name: Telegram apagado
+  when: not (andamio_telegram | bool)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: [andamio-telegram-bot.service, andamio-daily-summary.timer]
+  failed_when: false
+
+- name: Sin credenciales de Telegram en el servidor
+  when: not (andamio_telegram | bool)
+  ansible.builtin.file:
+    path: /etc/andamio/telegram.env
+    state: absent
+
 # --- Docker: login, redes y stacks ---
 
 - name: Login en el registro de imágenes hecho
@@ -223,124 +233,10 @@
   register: andamio_networks
   changed_when: "'creada' in andamio_networks.stdout"
 
-- name: Buscar apps (apps/*/app.yml en el repo de tu WSL)
-  delegate_to: localhost
-  become: false
-  run_once: true
-  ansible.builtin.find:
-    paths: "{{ playbook_dir }}/../apps"
-    patterns: app.yml
-    recurse: true
-    depth: 2
-  register: andamio_apps_found
-
-- name: Nombres de las apps
-  ansible.builtin.set_fact:
-    andamio_app_names: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
-
-# También la usa andamio-container-health.service (StateDirectory).
-- name: Carpeta del textfile de node-exporter
-  ansible.builtin.file:
-    path: /var/lib/node_exporter/textfile
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Registro de apps para Prometheus (textfile de node-exporter)
-  ansible.builtin.template:
-    src: apps.prom.j2
-    dest: /var/lib/node_exporter/textfile/apps.prom
-    owner: root
-    group: root
-    mode: "0644"
-    trim_blocks: true
-    lstrip_blocks: true
-
-# --- Llaves de deploy: una por app (apps/<app>/deploy_key.pub) ---
-# sshd las lee de /etc/ssh/deploy_keys/<usuario> (host/ssh/00-andamio-hardening.conf).
-# El archivo se reescribe completo: borrar un .pub revoca esa llave.
-
-- name: Llaves de deploy de las apps
-  ansible.builtin.set_fact:
-    andamio_deploy_keys: >-
-      {{ (andamio_deploy_keys | default([]))
-         + ([{'app': item, 'key': lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore')}]
-            if lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore') else []) }}
-  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
-
-- name: Directorio de llaves de deploy (solo root escribe)
-  ansible.builtin.file:
-    path: /etc/ssh/deploy_keys
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Llaves de deploy autorizadas
-  ansible.builtin.template:
-    src: deploy-keys.j2
-    dest: /etc/ssh/deploy_keys/{{ andamio_user }}
-    owner: root
-    group: root
-    mode: "0644"
-
-# Después de escribir el archivo de arriba: nunca queda una app sin llave.
-- name: Sin llaves de deploy en ~/.ssh/authorized_keys (ahora viven en deploy_keys)
-  ansible.builtin.lineinfile:
-    path: /home/{{ andamio_user }}/.ssh/authorized_keys
-    regexp: 'deploy-app\.sh'
-    state: absent
-
-# --- Redis: un usuario por app (REDIS_URL en su secrets.sops.env) ---
-# Va antes de los stacks: Redis no arranca si falta su aclfile.
-
-- name: Usuarios de Redis de las apps
-  vars:
-    andamio_redis_match: >-
-      {{ lookup('community.sops.sops', playbook_dir ~ '/../apps/' ~ item ~ '/secrets.sops.env',
-                input_type='dotenv', output_type='dotenv')
-         | regex_search('^REDIS_URL=redis://([a-z0-9-]+):([A-Za-z0-9]+)@', '\1', '\2', multiline=True)
-         | default([], true) }}
-  ansible.builtin.set_fact:
-    andamio_redis_users: >-
-      {{ (andamio_redis_users | default([]))
-         + ([{'name': andamio_redis_match[0], 'hash': andamio_redis_match[1] | hash('sha256')}]
-            if andamio_redis_match | length == 2 else []) }}
-  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
-  no_log: true
-
-- name: Usuario admin de Redis (REDIS_PASSWORD de stacks/data)
-  ansible.builtin.set_fact:
-    andamio_redis_default_hash: >-
-      {{ lookup('community.sops.sops', playbook_dir ~ '/../stacks/data/secrets.sops.env',
-                input_type='dotenv', output_type='dotenv')
-         | regex_search('^REDIS_PASSWORD=(.+)$', '\1', multiline=True) | first | hash('sha256') }}
-    andamio_redis_users: "{{ andamio_redis_users | default([]) }}"
-  no_log: true
-
-# 999 = usuario redis dentro de la imagen oficial.
-- name: Carpeta del aclfile de Redis
-  ansible.builtin.file:
-    path: "{{ andamio_infra }}/stacks/data/redis-acl"
-    state: directory
-    owner: "999"
-    group: "999"
-    mode: "0700"
-
-- name: Sin el aclfile viejo (montado como archivo suelto)
-  ansible.builtin.file:
-    path: "{{ andamio_infra }}/stacks/data/users.acl"
-    state: absent
-
-- name: aclfile de Redis
-  ansible.builtin.template:
-    src: redis-users.acl.j2
-    dest: "{{ andamio_infra }}/stacks/data/redis-acl/users.acl"
-    owner: "999"
-    group: "999"
-    mode: "0600"
-  notify: Recargar usuarios de Redis
+# El registro de apps (Prometheus, llaves de deploy, usuarios de Redis, tareas de apps
+# borradas). Va antes de los stacks: Redis no arranca si falta su aclfile.
+- name: Registro de apps
+  ansible.builtin.include_tasks: registry.yml
 
 # Archivos de Seafile: dentro de /srv/andamio para que entren al backup diario.
 # 0711: se puede atravesar pero no listar. El nginx del contenedor corre como
@@ -493,6 +389,28 @@
   register: andamio_up
   changed_when: andamio_up.stderr is search('Creat|Recreat|Start')
 
+# Sin su archivo de usuarios, un motor de Redis podría quedar sin clave (Dragonfly lo haría si
+# no tuviera DFLY_requirepass). Si responde sin pedirla, el apply falla: que no pase en silencio.
+# MariaDB solo corre si alguna app la usa: borrada la última (o quitado su mysql: true), se apaga.
+# `up` ya no la levanta (su profile no está), pero tampoco la apaga. Su volumen queda.
+- name: MariaDB apagada (ninguna app la usa)
+  when: "'stacks/data' in andamio_stacks_active and not (andamio_mariadb_needed | bool)"
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker rm -f mariadb
+  register: andamio_mariadb_off
+  changed_when: "'mariadb' in andamio_mariadb_off.stdout"
+  failed_when: false
+
+- name: Redis pide clave
+  when: "'stacks/data' in andamio_stacks_active"
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker exec redis sh -c 'unset REDISCLI_AUTH; redis-cli ping'
+  register: andamio_redis_noauth
+  changed_when: false
+  failed_when: "'NOAUTH' not in (andamio_redis_noauth.stdout ~ andamio_redis_noauth.stderr)"
+
 # Al bajar de completo a mínimo, `up` deja de levantarlos pero no los apaga. Sus volúmenes
 # (logs, gráficas, monitores) quedan: al volver a completo regresan con su historial.
 - name: Monitoreo mínimo, sin Grafana, Loki, Alloy ni Uptime Kuma
@@ -567,20 +485,3 @@
   loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
   loop_control:
     loop_var: andamio_app_name
-
-# Las tareas programadas de una app borrada (andamio app destroy) no se quedan corriendo.
-- name: Tareas programadas en el servidor
-  ansible.builtin.find:
-    paths: /etc/systemd/system
-    patterns: andamio-cron-*.timer
-  register: andamio_cron_all
-
-- name: Tareas programadas de apps que ya no existen
-  ansible.builtin.set_fact:
-    andamio_cron_remove: >-
-      {{ andamio_cron_all.files | map(attribute='path') | map('basename') | map('regex_replace', '\.timer$', '')
-         | reject('regex', '^andamio-cron-(' ~ (andamio_app_names | join('|')) ~ ')\.') | list }}
-
-- name: Quitarlas
-  ansible.builtin.include_tasks: cron-remove.yml
-  when: andamio_cron_remove | length > 0

@@ -41,7 +41,8 @@ And another notice when it's resolved. Apps you stopped with `andamio app stop` 
 Notices arrive through **ntfy**: a free app (Android, iOS or the browser) that receives
 notifications from a "topic" **without an account**. `andamio alerts` makes up a long random
 topic, tells you how to subscribe (with a QR code) and sends a test one from the server. If
-you prefer, use your own ntfy server. With Telegram on, they arrive there too.
+you prefer, use your own ntfy server. With Telegram on, they arrive there too. You can also
+set it up from the panel (`andamio ui`, Settings).
 
 `andamio status` warns you if nobody is alerting you.
 
@@ -55,7 +56,18 @@ With the `completo` level, through the VPN:
 
 ## Telegram alerts
 
-With `andamio_telegram: true` and the bot's token and your chat in
-`host/sops/telegram-env.sops`: notices of failed deploys and of the backup, a daily server
-summary, and a bot that answers `/system`. Grafana's alerts go there too, with the
-`completo` level.
+```bash
+andamio telegram          # guided: your bot, your chat, encrypted in your repo and applied
+andamio telegram test     # a test notice
+andamio telegram off      # no notices, no daily summary and no bot
+```
+
+1. In Telegram, open @BotFather, send it `/newbot` and paste the token it gives you (it isn't
+   shown). andamio checks it with Telegram.
+2. Open your bot and tap **Start**: andamio finds your chat by itself (no IDs to look up).
+3. It's encrypted in `host/sops/telegram-env.sops`, pushed and applied on your server; a test
+   message reaches you.
+
+From then on: notices of failed deploys, of the backup and of failing tasks, a daily server
+summary, and a bot that answers `/system`. Grafana's alerts go there too, with the `completo`
+level. In the [panel](/en/docs/apps/panel/): **Settings → Set up Telegram**.

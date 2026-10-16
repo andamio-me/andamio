@@ -7,12 +7,22 @@ description: Lo que andamio deja hecho en tu servidor, cómo revisarlo y sus lí
 
 Sin que lo pidas, `andamio servidor` deja:
 
-- **Tu propio usuario**, con sudo y contraseña. Root no puede entrar.
-- **SSH solo con llave**, en un puerto distinto del 22.
+- **Tu propio usuario**, con sudo y contraseña. Root no puede entrar, y su contraseña (la que
+  manda el proveedor) queda bloqueada, también para la consola web.
+- **SSH solo con llave**, en un puerto distinto del 22, con pocos intentos por conexión y
+  sin reenvíos que un servidor no usa.
 - **Firewall UFW:** entra solo tu puerto SSH, HTTP/HTTPS y la VPN.
-- **Parches de seguridad automáticos**, y fuera snapd y los servicios que no se usan.
-- **Docker** con logs rotados; el socket solo a través de un proxy de solo lectura.
-- **Traefik** con HTTPS automático y cabeceras de seguridad.
+- **Protegido desde el primer minuto:** las contraseñas de SSH y el firewall se apagan y se
+  encienden apenas se crea tu usuario, no al final; el VPS no queda expuesto ni si algo
+  falla a mitad de camino.
+- **fail2ban:** la IP que insiste contra SSH queda bloqueada (1 hora, y más si reincide).
+- **Parches de seguridad automáticos**, el kernel con parámetros de red endurecidos, y fuera
+  snapd y los servicios que no se usan.
+- **Docker** con logs rotados; el socket solo a través de un proxy de solo lectura. Un
+  puerto publicado queda en `127.0.0.1` salvo que digas otra cosa, y ningún contenedor puede
+  ganar privilegios con `sudo` o `su`.
+- **Traefik** con HTTPS automático, cabeceras de seguridad y un límite de peticiones por IP
+  (100 por segundo, 300 de golpe: `andamio_rate_average` y `andamio_rate_burst`).
 - **VPN WireGuard:** lo privado responde solo a través de ella.
 
 Y cada app nueva:
@@ -32,7 +42,7 @@ andamio estado
 
 Un chequeo de seguridad y salud. **No cambia nada.**
 
-- **Desde el servidor:** SSH (solo llave, sin root, tu puerto), firewall, parches
+- **Desde el servidor:** SSH (solo llave, sin root, tu puerto, fail2ban), firewall, parches
   automáticos y pendientes, disco, reloj, último backup, certificados, contenedores con
   problemas, aislamiento (contenedores privilegiados, el socket de Docker, puertos
   publicados que se saltan el firewall) y la VPN.
@@ -60,7 +70,7 @@ Cada problema trae su arreglo. Sale con código 1 si hay problemas, así que sir
   aparece en los registros públicos de certificados. Usa el modo `cloudflare` si te importa.
 - **Tu cuenta de GitHub.** Quien la controle puede subir código que se despliega. Protégela
   con 2FA.
-- **Puertos que publiques tú.** Un `-p` de Docker fuera de andamio se salta el firewall.
-  `andamio estado` lo detecta.
+- **Puertos que publiques tú.** Un `-p 0.0.0.0:...` de Docker se salta el firewall (sin la
+  IP queda local). `andamio estado` lo detecta.
 - **La red entre apps.** Las apps comparten la red del proxy; lo que las aísla son los
   usuarios de base y de Redis.

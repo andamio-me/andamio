@@ -2,6 +2,7 @@
 #   1. Completa sus secretos cifrados (DOMAIN, DATABASE_URL...) si faltan.
 #   2. Genera apps/<app>/compose.yaml.
 #   ansible-playbook apps.yml
+#   ansible-playbook apps.yml -e andamio_only_app=<app>    (solo esa: lo que usa `andamio app ...`)
 # Después: commit + push y `ansible-playbook site.yml -K --tags andamio`.
 - name: Preparar las apps
   hosts: localhost
@@ -19,15 +20,30 @@
         depth: 2
       register: apps_found
 
+    # Con andamio_only_app (lo pasa `andamio app ...` cuando cambia una sola), solo esa app: las
+    # demás no cambiaron y repasarlas cuesta (descifrar sus secretos, consultar GitHub por cada una).
+    - name: Apps a preparar
+      ansible.builtin.set_fact:
+        apps_todo: >-
+          {{ apps_found.files | selectattr('path', 'search', '/apps/' ~ andamio_only_app ~ '/app.yml$') | list
+             if andamio_only_app | default('') | length > 0 else apps_found.files }}
+
+    # MariaDB: su clave de root, la primera vez que una app la usa.
+    - name: Clave de root de MariaDB
+      when: >-
+        query('ansible.builtin.file', *(apps_found.files | map(attribute='path')))
+        | select('search', '(?m)^mysql:\s*true') | list | length > 0
+      ansible.builtin.include_tasks: tasks/data-secrets.yml
+
     - name: Secretos de cada app
       ansible.builtin.include_tasks: tasks/app-secrets.yml
-      loop: "{{ apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+      loop: "{{ apps_todo | map(attribute='path') | map('dirname') | map('basename') | sort }}"
       loop_control:
         loop_var: app_name
 
     - name: Llave de deploy de cada app
       ansible.builtin.include_tasks: tasks/app-deploy-key.yml
-      loop: "{{ apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+      loop: "{{ apps_todo | map(attribute='path') | map('dirname') | map('basename') | sort }}"
       loop_control:
         loop_var: app_name
 
@@ -40,6 +56,6 @@
         lstrip_blocks: true
       vars:
         app: "{{ lookup('ansible.builtin.file', item.path) | from_yaml }}"
-      loop: "{{ apps_found.files }}"
+      loop: "{{ apps_todo }}"
       loop_control:
         label: "{{ item.path | dirname | basename }}"

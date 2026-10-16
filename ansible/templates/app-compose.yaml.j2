@@ -1,8 +1,14 @@
-{# Imagen en el registro (andamio_registry) = el repo de la app (app.repo, o dueño/nombre). #}
-{% set image = app.image | default((andamio_registry | default('ghcr.io')) ~ '/' ~ (app.repo | default(andamio_github_owner ~ '/' ~ app.name) | lower)) -%}
+{# Imagen en el registro (andamio_registry) = el repo de la app (app.repo, o dueño/nombre). Con
+   varias apps en un repo (dir: en app.yml), cada una tiene la suya: dueño/<nombre de la app>. #}
+{% set repo_path = app.repo | default(andamio_github_owner ~ '/' ~ app.name) | lower -%}
+{% set image = app.image | default((andamio_registry | default('ghcr.io')) ~ '/'
+               ~ ((repo_path.split('/')[0] ~ '/' ~ app.name) if app.dir is defined else repo_path)) -%}
 {% set apex = app.host == '@' -%}
-{# Dominio raíz (host "@"): sirve DOMAIN y www.DOMAIN; el router toma el nombre de la app. #}
-{% set router = app.name if apex else app.host -%}
+{# Dominio raíz (host "@"): sirve DOMAIN y www.DOMAIN; el router toma el nombre de la app. Con
+   path: (p. ej. /api, el back bajo el dominio del front) también: dos apps comparten el host. #}
+{% set router = app.name if apex or app.path is defined else app.host -%}
+{# Con path:, solo esas rutas. Traefik prefiere la regla más larga: gana sobre la del front. #}
+{% set path_rule = (' && PathPrefix(`' ~ app.path ~ '`)') if app.path is defined else '' -%}
 {# Middlewares del router: solo VPN (access: vpn) y CORS (cors: [orígenes]). #}
 {% set mws = (['vpn-only@file'] if app.access | default('vpn') == 'vpn' else [])
              + ([router ~ '-cors@docker'] if app.cors | default([]) else []) -%}
@@ -34,9 +40,10 @@ services:
       - traefik.enable=true
       - traefik.docker.network=proxy
 {% if apex %}
-      - traefik.http.routers.{{ router }}.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)
+{# Sin path: la misma regla de siempre (un cambio de texto recrearía el contenedor). #}
+      - traefik.http.routers.{{ router }}.rule={{ '(' if path_rule }}Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`){{ ')' if path_rule }}{{ path_rule }}
 {% else %}
-      - traefik.http.routers.{{ router }}.rule=Host(`{{ app.host }}.${DOMAIN}`)
+      - traefik.http.routers.{{ router }}.rule=Host(`{{ app.host }}.${DOMAIN}`){{ path_rule }}
 {% endif %}
       - traefik.http.routers.{{ router }}.entrypoints=websecure
 {% if mws %}
@@ -47,7 +54,7 @@ services:
       # Dominios propios (domains: en app.yml): otro router, con su certificado de Let's
       # Encrypt por HTTP-01 (el comodín del servidor no los cubre). Mismas protecciones.
       - traefik.http.routers.{{ router }}.service={{ router }}
-      - traefik.http.routers.{{ router }}-own.rule={% for d in domains %}Host(`{{ d }}`){{ ' || ' if not loop.last }}{% endfor %}
+      - traefik.http.routers.{{ router }}-own.rule={{ '(' if path_rule }}{% for d in domains %}Host(`{{ d }}`){{ ' || ' if not loop.last }}{% endfor %}{{ ')' if path_rule }}{{ path_rule }}
 
       - traefik.http.routers.{{ router }}-own.entrypoints=websecure
       - traefik.http.routers.{{ router }}-own.tls.certresolver=le

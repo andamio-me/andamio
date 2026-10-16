@@ -23,6 +23,20 @@ on:
           "secrets: inherit" en el ci.yml de la app. Los de ejecución van con andamio app secret.
         type: string
         default: ""
+      dir:
+        description: >-
+          Carpeta de la app dentro del repo, donde está su Dockerfile (vacío = la raíz). Para
+          varias apps en un repo (p. ej. frontend/ y backend/).
+        type: string
+        default: ""
+      context:
+        description: Desde dónde se construye la imagen (vacío = dir). "." si usa archivos compartidos de la raíz
+        type: string
+        default: ""
+      deploy_key:
+        description: Nombre del secreto con la llave de deploy (varias apps en un repo, una por app)
+        type: string
+        default: DEPLOY_SSH_KEY
       migrate:
         description: Construir también la imagen de migraciones (target "migrate")
         type: boolean
@@ -74,9 +88,26 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # gitleaks revisa todo el historial
+      # Varias apps en un repo (front y back): cada una en su carpeta (dir), con su Dockerfile.
+      # context: desde dónde se construye (la raíz si usa archivos compartidos). Vacíos = la raíz.
+      - name: Carpeta de la app
+        id: where
+        env:
+          DIR: ${{ inputs.dir }}
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          for v in "$DIR" "$CONTEXT"; do
+            if [[ ! $v =~ ^[A-Za-z0-9._/-]*$ || $v == *..* || $v == /* ]]; then
+              echo "::error::Carpeta inválida: $v (relativa al repo, sin ..)"; exit 1
+            fi
+          done
+          dir=${DIR%/}; dir=${dir:-.}
+          ctx=${CONTEXT%/}; ctx=${ctx:-$dir}
+          [ -f "$dir/Dockerfile" ] || { echo "::error title=Falta el Dockerfile::No hay $dir/Dockerfile en el repo"; exit 1; }
+          { echo "dir=$dir"; echo "context=$ctx"; echo "dockerfile=$dir/Dockerfile"; } >> "$GITHUB_OUTPUT"
       - name: Secretos (gitleaks)
         env:
           GITLEAKS_VERSION: 8.30.1
@@ -115,34 +146,45 @@ jobs:
       - name: Etapa "test" del Dockerfile (cualquier lenguaje)
         env:
           SECRET_FLAGS: ${{ steps.bs.outputs.flags }}
+          DOCKERFILE: ${{ steps.where.outputs.dockerfile }}
+          CONTEXT: ${{ steps.where.outputs.context }}
         run: |
-          if grep -qiE '^[[:space:]]*FROM[[:space:]].+[[:space:]]AS[[:space:]]+test[[:space:]]*$' Dockerfile; then
+          if grep -qiE '^[[:space:]]*FROM[[:space:]].+[[:space:]]AS[[:space:]]+test[[:space:]]*$' "$DOCKERFILE"; then
             # shellcheck disable=SC2086   # SECRET_FLAGS son varios argumentos a propósito
-            DOCKER_BUILDKIT=1 docker build --target test --progress plain --build-arg GIT_SHA="$GITHUB_SHA" $SECRET_FLAGS .
+            DOCKER_BUILDKIT=1 docker build --target test --progress plain --build-arg GIT_SHA="$GITHUB_SHA" $SECRET_FLAGS -f "$DOCKERFILE" "$CONTEXT"
           else
             echo "El Dockerfile no tiene etapa \"test\": sin tests en imagen."
           fi
 
+      # pnpm: el de la carpeta de la app (o el de la raíz si la app está en la raíz).
       - name: pnpm
-        if: hashFiles('pnpm-lock.yaml') != ''
+        if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
         uses: pnpm/action-setup@v6
-      - if: hashFiles('pnpm-lock.yaml') != ''
-        uses: actions/setup-node@v5
+        with:
+          package_json_file: ${{ steps.where.outputs.dir }}/package.json
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
-      - if: hashFiles('pnpm-lock.yaml') != ''
+          cache-dependency-path: ${{ steps.where.outputs.dir }}/pnpm-lock.yaml
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        working-directory: ${{ steps.where.outputs.dir }}
         run: pnpm install --frozen-lockfile
-      - if: hashFiles('pnpm-lock.yaml') != ''
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        working-directory: ${{ steps.where.outputs.dir }}
         run: pnpm run --if-present lint
-      - if: hashFiles('pnpm-lock.yaml') != ''
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        working-directory: ${{ steps.where.outputs.dir }}
         run: pnpm run --if-present typecheck
-      - if: hashFiles('pnpm-lock.yaml') != ''
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        working-directory: ${{ steps.where.outputs.dir }}
         run: pnpm run --if-present test
 
+  # Corre a la vez que la revisión (antes la esperaba): los tests no frenan el build, frenan el
+  # deploy (needs: [check, build]). Lo que frena publicar sigue aquí: secretos y vulnerabilidades.
   build:
     name: Construir y publicar imágenes
-    needs: check
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
@@ -151,7 +193,36 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # gitleaks revisa todo el historial antes de publicar una imagen
+      # Varias apps en un repo (front y back): cada una en su carpeta (dir), con su Dockerfile.
+      # context: desde dónde se construye (la raíz si usa archivos compartidos). Vacíos = la raíz.
+      - name: Carpeta de la app
+        id: where
+        env:
+          DIR: ${{ inputs.dir }}
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          for v in "$DIR" "$CONTEXT"; do
+            if [[ ! $v =~ ^[A-Za-z0-9._/-]*$ || $v == *..* || $v == /* ]]; then
+              echo "::error::Carpeta inválida: $v (relativa al repo, sin ..)"; exit 1
+            fi
+          done
+          dir=${DIR%/}; dir=${dir:-.}
+          ctx=${CONTEXT%/}; ctx=${ctx:-$dir}
+          [ -f "$dir/Dockerfile" ] || { echo "::error title=Falta el Dockerfile::No hay $dir/Dockerfile en el repo"; exit 1; }
+          { echo "dir=$dir"; echo "context=$ctx"; echo "dockerfile=$dir/Dockerfile"; } >> "$GITHUB_OUTPUT"
+      - name: Secretos (gitleaks)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "$GITLEAKS_SHA256  $f" | sha256sum -c -
+          tar xzf "$f" -C "$RUNNER_TEMP" gitleaks && rm "$f"
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact .
 
       - name: Nombres y tags
         id: meta
@@ -200,7 +271,8 @@ jobs:
       - name: Imagen de la app (sin publicar)
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ${{ steps.where.outputs.context }}
+          file: ${{ steps.where.outputs.dockerfile }}
           target: ${{ inputs.target }}
           build-args: GIT_SHA=${{ github.sha }}
           secret-files: ${{ steps.bs.outputs.files }}
@@ -209,12 +281,24 @@ jobs:
           cache-from: type=gha,scope=${{ inputs.image }}
           cache-to: type=gha,mode=max,scope=${{ inputs.image }}
 
+      # La base de vulnerabilidades de Trivy, guardada entre corridas (se renueva a diario): bajarla
+      # en cada deploy son decenas de segundos.
+      - name: Fecha (para la caché de Trivy)
+        id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Caché de la base de Trivy
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.day.outputs.day }}
+          restore-keys: trivy-db-
+
       - name: Escaneo de vulnerabilidades (Trivy)
         env:
           IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}:${{ steps.meta.outputs.tag }}
         # Corta el pipeline con CRITICAL o HIGH que ya tengan versión corregida.
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME/.cache/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" image \
             --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --scanners vuln --no-progress "$IMAGE" && exit 0
           # Lo más común: el gestor de paquetes de la imagen base (npm, pip, ...) trae sus
           # propias vulnerabilidades y en producción no se usa.
@@ -234,7 +318,8 @@ jobs:
         if: inputs.migrate
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ${{ steps.where.outputs.context }}
+          file: ${{ steps.where.outputs.dockerfile }}
           target: migrate
           build-args: GIT_SHA=${{ github.sha }}
           secret-files: ${{ steps.bs.outputs.files }}
@@ -250,7 +335,7 @@ jobs:
         env:
           IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$HOME/.cache/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" image \
             --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 --scanners vuln --no-progress "$IMAGE"
 
       - name: Publicar la imagen de migraciones
@@ -259,9 +344,15 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.registry }}/${{ inputs.image }}-migrate:${{ steps.meta.outputs.tag }}
         run: docker push "$IMAGE"
 
+      # Trivy (en Docker, como root) deja su caché de root: se le devuelve al runner para que
+      # actions/cache pueda guardarla al final del job.
+      - name: Caché de Trivy legible
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.cache/trivy 2> /dev/null || true
+
   deploy:
     name: Desplegar en el VPS
-    needs: build
+    needs: [check, build]
     if: inputs.deploy && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions: {}
@@ -286,7 +377,7 @@ jobs:
 
       - name: Configurar SSH
         env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KEY: ${{ secrets[inputs.deploy_key] }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key

@@ -1,3 +1,26 @@
+# Lo común de los motores de Redis (abajo).
+x-kv: &kv
+  container_name: redis
+  restart: unless-stopped
+  environment:
+    REDISCLI_AUTH: ${REDIS_PASSWORD}   # para que redis-cli (y el healthcheck) se autentiquen solos
+  # Usuarios en redis-acl/users.acl (lo genera Ansible: admin "default" + uno por app). Carpeta,
+  # no archivo suelto: Ansible reemplaza users.acl (archivo nuevo) y un bind mount de archivo
+  # seguiría viendo el viejo; ACL LOAD no vería los cambios.
+  networks:
+    - data
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: ${REDIS_MEM:-384m}     # los datos (maxmemory) + margen para guardar en disco
+  memswap_limit: ${REDIS_MEM:-384m}
+  cpus: ${REDIS_CPUS:-0.5}
+  pids_limit: 100
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+
 services:
   postgres:
     image: postgres:18.6-alpine
@@ -7,7 +30,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: postgres
-    command: postgres -c shared_buffers=256MB -c max_connections=100
+    # Memoria, CPU y ajustes: andamio servicios (group_vars), por el .env que escribe Ansible.
+    command: >
+      postgres
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      -c work_mem=${POSTGRES_WORK_MEM:-4MB}
     shm_size: 256m              # Docker da 64 MB por defecto; PostgreSQL lo usa en consultas paralelas
     volumes:
       - pgdata:/var/lib/postgresql   # PG18+: ya no es /var/lib/postgresql/data
@@ -15,8 +43,8 @@ services:
       - data
     security_opt:
       - no-new-privileges:true
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: ${POSTGRES_MEM:-1g}
+    memswap_limit: ${POSTGRES_MEM:-1g}
     cpus: ${POSTGRES_CPUS:-1.5}   # Ansible: mínimo entre 1.5 y las CPUs del servidor (en 1 vCPU, Docker rechaza más)
     pids_limit: 300
     healthcheck:
@@ -25,37 +53,98 @@ services:
       timeout: 5s
       retries: 5
 
+  # El motor de Redis: uno de estos tres, según andamio_redis_engine (COMPOSE_PROFILES en el .env).
+  # Hablan el mismo protocolo y usan el mismo archivo de usuarios: las apps lo ven siempre como
+  # "redis" (REDIS_URL no cambia). Cada uno tiene su volumen: sus archivos no son compatibles, y
+  # cambiar de motor copia las claves (scripts/redis-engine.sh).
   redis:
+    <<: *kv
+    profiles: [redis]
     image: redis:8.10.2-alpine
-    container_name: redis
-    restart: unless-stopped
-    # Usuarios en users.acl (lo genera Ansible: admin "default" + uno por app).
     command: >
       redis-server
       --aclfile /etc/redis/acl/users.acl
       --appendonly yes
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-    environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD}   # para que redis-cli (y el healthcheck) se autentiquen solos
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy ${REDIS_POLICY:-noeviction}
     volumes:
       - redisdata:/data
-      # Carpeta, no archivo suelto: Ansible reemplaza users.acl (archivo nuevo) y un
-      # bind mount de archivo seguiría viendo el viejo; ACL LOAD no vería los cambios.
       - ./redis-acl:/etc/redis/acl:ro
+
+  # Valkey: la continuación libre (BSD) de Redis, de la Linux Foundation. Mismas opciones.
+  valkey:
+    <<: *kv
+    profiles: [valkey]
+    image: valkey/valkey:9.0.6-alpine
+    command: >
+      valkey-server
+      --aclfile /etc/redis/acl/users.acl
+      --appendonly yes
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy ${REDIS_POLICY:-noeviction}
+    volumes:
+      - valkeydata:/data
+      - ./redis-acl:/etc/redis/acl:ro
+
+  # Dragonfly: usa varios núcleos y menos memoria con muchos datos. Sin AOF: guarda una foto
+  # cada minuto (y al apagarse). Pide 256 MB por hilo; allow-undeclared-keys es para BullMQ
+  # (los permisos de cada app siguen valiendo dentro de los scripts). Su imagen trae un
+  # /etc/redis cerrado a su usuario: los usuarios van en /acl. Y si no pudiera leerlos, arrancaría
+  # sin clave: DFLY_requirepass (la del admin) hace que igual la pida.
+  dragonfly:
+    <<: *kv
+    profiles: [dragonfly]
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+      DFLY_requirepass: ${REDIS_PASSWORD}
+    command: >
+      dragonfly
+      --aclfile /acl/users.acl
+      --dir /data --dbfilename dump --df_snapshot_format=false --snapshot_cron "* * * * *"
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --cache_mode=${DRAGONFLY_CACHE_MODE:-false}
+      --proactor_threads=${DRAGONFLY_THREADS:-1}
+      --default_lua_flags=allow-undeclared-keys
+      --logtostderr
+    volumes:
+      - dragonflydata:/data
+      - ./redis-acl:/acl:ro
+
+  # MariaDB (compatible con MySQL): para las apps con mysql: true en app.yml. Solo corre si alguna
+  # la usa (el profile mariadb lo agrega Ansible a COMPOSE_PROFILES). Una base y un usuario por
+  # app, como PostgreSQL. Sin puerto publicado: solo en la red data.
+  mariadb:
+    profiles: [mariadb]
+    image: mariadb:11.8.9
+    container_name: mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_AUTO_UPGRADE: "1"   # al subir de versión, ajusta las tablas del sistema solo
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL:-192M}
+      --max-connections=${MARIADB_MAX_CONNECTIONS:-100}
+      --skip-name-resolve
+      --local-infile=0
+    volumes:
+      - mariadbdata:/var/lib/mysql
     networks:
       - data
     security_opt:
       - no-new-privileges:true
-    mem_limit: 384m             # 256 MB de datos + margen para el fork del AOF
-    memswap_limit: 384m
-    cpus: 0.5
-    pids_limit: 100
+    mem_limit: ${MARIADB_MEM:-512m}
+    memswap_limit: ${MARIADB_MEM:-512m}
+    cpus: ${MARIADB_CPUS:-1}
+    pids_limit: 300
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
 networks:
   data:
@@ -64,3 +153,6 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  valkeydata:
+  dragonflydata:
+  mariadbdata:

@@ -7,12 +7,22 @@ description: What andamio sets up on your server, how to check it and its limits
 
 Without asking, `andamio server` leaves:
 
-- **Your own user**, with sudo and a password. Root can't log in.
-- **Key-only SSH**, on a port other than 22.
+- **Your own user**, with sudo and a password. Root can't log in, and its password (the one
+  your provider sends) is locked, on the web console too.
+- **Key-only SSH**, on a port other than 22, with few tries per connection and no
+  forwarding a server doesn't use.
 - **UFW firewall:** only your SSH port, HTTP/HTTPS and the VPN get in.
-- **Automatic security patches**, and snapd and unused services removed.
-- **Docker** with rotated logs; the socket only through a read-only proxy.
-- **Traefik** with automatic HTTPS and security headers.
+- **Protected from the first minute:** SSH passwords go off and the firewall goes on as soon
+  as your user exists, not at the end; the VPS isn't exposed even if something fails
+  halfway.
+- **fail2ban:** an IP that keeps trying SSH gets blocked (1 hour, longer if it comes back).
+- **Automatic security patches**, the kernel with hardened network settings, and snapd and
+  unused services removed.
+- **Docker** with rotated logs; the socket only through a read-only proxy. A published port
+  stays on `127.0.0.1` unless you say otherwise, and no container can gain privileges with
+  `sudo` or `su`.
+- **Traefik** with automatic HTTPS, security headers and a per-IP request limit (100 per
+  second, 300 at once: `andamio_rate_average` and `andamio_rate_burst`).
 - **WireGuard VPN:** private things answer only through it.
 
 And every new app gets:
@@ -31,7 +41,7 @@ andamio status
 
 A security and health check. **It changes nothing.**
 
-- **From the server:** SSH (keys only, no root, your port), firewall, automatic and pending
+- **From the server:** SSH (keys only, no root, your port, fail2ban), firewall, automatic and pending
   patches, disk, clock, last backup, certificates, containers with problems, isolation
   (privileged containers, the Docker socket, published ports that bypass the firewall) and
   the VPN.
@@ -60,7 +70,7 @@ scripts.
   the public certificate logs. Use the `cloudflare` mode if that matters to you.
 - **Your GitHub account.** Whoever controls it can push code that gets deployed. Protect it
   with 2FA.
-- **Ports you publish yourself.** A Docker `-p` outside andamio bypasses the firewall.
-  `andamio status` detects it.
+- **Ports you publish yourself.** A Docker `-p 0.0.0.0:...` bypasses the firewall (without the IP it
+  stays local). `andamio status` detects it.
 - **The network between apps.** Apps share the proxy network; what isolates them are the
   database and Redis users.

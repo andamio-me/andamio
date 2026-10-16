@@ -49,12 +49,13 @@ as the port. It's yours: change it as needed afterwards.
 
 ## What `app create` does
 
-1. Checks your app's repo and, if needed, generates the Dockerfile.
+1. Asks for your sudo password at the start (if it will be remembered), so it doesn't stop you
+   halfway. Then checks your app's repo and, if needed, generates the Dockerfile.
 2. **Pre-check:** looks for what would make the first deploy fail or lose data (see below).
 3. Creates `apps/myapp/app.yml` in your copy, its encrypted secrets and a **deploy key**
    that can only deploy that app.
 4. If you asked for `--db` or `--redis`, prepares its user and database.
-5. Pushes your copy and applies it on the server (asks for your sudo password).
+5. Pushes your copy and applies it on the server: only that app and the app registry, not everything.
 6. Offers to push to your app's repo what it's missing: the Dockerfile and
    `.github/workflows/andamio.yml`.
 7. That push is the **first deploy**, and it follows it in your terminal: secrets, tests,
@@ -71,8 +72,13 @@ the line:
 | Listens on `localhost` | **Serious:** inside the container nobody else reaches it. Make it listen on `0.0.0.0` |
 | A fixed port different from the one that will be used | Read the port from `PORT`, or create the app with `--port` |
 | Stores files or a SQLite database | In a container they're lost on every deploy: use `--volume /data` or `--db` |
+| Redis without `REDIS_URL`, or without a key prefix | andamio gives Redis only as `REDIS_URL`, with its own user that can only use `myapp:…` keys: read `REDIS_URL` and set that prefix (`keyPrefix` in ioredis, `prefix` in BullMQ) |
+| An unsupported base image (Node < 22 or odd, Python ≤ 3.9, Debian buster or bullseye) | It no longer gets patches, and the pipeline's scan may stop the deploy |
+| npm in the final image | Trivy often finds CVEs in it that stop the deploy: remove it in the last stage and start with `node`, not `npm start` |
+| A heavy final image (`node:22`, `python:3.13` without `-slim` or `-alpine`), or a single stage with `npm install` | Every deploy pushes and pulls more; with `-slim`/`-alpine` and several stages it's several times smaller |
+| `COPY .` without `.dockerignore` | Everything goes into the image, `.git` (your history) included |
 
-If something is serious, it asks whether to go on anyway. What only runs on your machine (the
+The Dockerfiles andamio generates pass their own pre-check. If something is serious, it asks whether to go on anyway. What only runs on your machine (the
 `if __name__ == "__main__":` block when the container starts with uvicorn or gunicorn)
 doesn't count.
 
@@ -85,11 +91,13 @@ doesn't count.
 | `--health /path` | Health route: the new version has to answer `200` before getting traffic |
 | `--port 3000` | Your app's port (default: the Dockerfile's `EXPOSE`) |
 | `--db` | Its own PostgreSQL database and user (`DATABASE_URL`) |
+| `--mysql` | Its own MariaDB database and user, MySQL-compatible (`MYSQL_URL`, plus Laravel's `DB_*`). See [PostgreSQL, MariaDB and Redis](/en/docs/server/services/#mariadb-mysql) |
 | `--redis` | Its own Redis user, limited to its keys (`REDIS_URL`) |
 | `--host api` | Another subdomain: `api.yourdomain.com`. `--host @` is the root domain |
 | `--domain app.yourcompany.com` | A domain of your own, besides yours |
 | `--cors https://myapp.vercel.app` | Lets that frontend call your app |
 | `--volume /data` | A folder that persists across deploys and is backed up. Repeatable. See [Manage an app](/en/docs/apps/manage/#persistent-folders) |
+| `--env-file .env.production` | The variables the app needs to start (`KEY=value`), encrypted with its secrets **before the first deploy**. The plain text is never pushed. With `-`, read from standard input |
 | `--mem 512m` | Memory limit (default 256m) |
 
 See [Domains and URLs](/en/docs/apps/domains/) and [Backend only](/en/docs/apps/backend-only/).

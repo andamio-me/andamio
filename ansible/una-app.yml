@@ -1,7 +1,8 @@
 # Aplica una sola app en el servidor: baja la configuración y corre solo sus tareas (.env,
 # base, arranque), sin tocar el resto de la plataforma. Lo usan `andamio app secret`,
 # `app apply <app>`, `app domain` y `app cors`; el apply completo es site.yml.
-#   ansible-playbook una-app.yml -e andamio_app_name=<app>
+#   ansible-playbook una-app.yml -e andamio_app_name=<app> [-e andamio_apps_registry=true]
+#   ansible-playbook una-app.yml -e andamio_apps_registry=true     (solo el registro: tras borrar una)
 
 - name: Una app
   hosts: servers
@@ -13,7 +14,16 @@
         name: andamio
         tasks_from: repo.yml
 
+    # Crear, borrar, apagar o encender una app cambia el registro (llaves, Redis, Prometheus):
+    # andamio_apps_registry=true lo reescribe, con todas las apps. Sin app (al borrarla): solo eso.
+    - name: Registro de apps
+      when: andamio_apps_registry | default(false) | bool
+      ansible.builtin.include_role:
+        name: andamio
+        tasks_from: registry.yml
+
     - name: La app
+      when: andamio_app_name | default('') | length > 0
       ansible.builtin.include_role:
         name: andamio
         tasks_from: app.yml

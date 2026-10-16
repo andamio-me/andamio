@@ -4,6 +4,13 @@
   community.general.timezone:
     name: "{{ base_timezone }}"
 
+# La contraseña de root que manda el proveedor deja de servir (también en su consola web):
+# se administra con tu usuario y sudo. bootstrap.yml ya lo hace; aquí, para servidores viejos.
+- name: Contraseña de root bloqueada
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
 - name: Paquetes base
   ansible.builtin.apt:
     name: "{{ base_packages }}"

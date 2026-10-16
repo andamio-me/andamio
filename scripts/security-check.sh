@@ -3,9 +3,12 @@
 # y le suma las pruebas desde Internet). Corre como root. Una línea por resultado:
 #   OK|área|qué           WARN|área|qué|arreglo           FAIL|área|qué|arreglo
 #   LISTEN|tcp|puerto     (puertos que escuchan fuera de localhost; andamio los prueba desde afuera)
-# Variables: SSH_PORT, BACKUPS (true/false), ANDAMIO_LANG (es/en).
+# Variables: SSH_PORT, BACKUPS (true/false), ANDAMIO_LANG (es/en), SOLO (seguridad: andamio seguridad,
+# sin plataforma: sin backups, certificados, contenedores, alertas ni VPN).
 set -uo pipefail
-LNG=en; [[ ${ANDAMIO_LANG:-} == es* ]] && LNG=es
+# Con sudo el entorno se pierde: entonces vale el idioma de /etc/andamio/andamio.env.
+LNG=en; lang=${ANDAMIO_LANG:-$(sed -n 's/^ANDAMIO_LANG=//p' /etc/andamio/andamio.env 2> /dev/null || true)}
+[[ ${lang:-} == es* ]] && LNG=es
 L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 [ "$(id -u)" = 0 ] || { echo "FAIL|andamio|$(L "El chequeo necesita sudo" "The check needs sudo")|"; exit 1; }
 SSH_PORT=${SSH_PORT:-22}
@@ -30,6 +33,22 @@ if [ "$(sshv permitrootlogin)" = no ]; then ok SSH "$(L "root no puede entrar" "
 else fail SSH "$(L "root puede entrar por SSH" "root can log in over SSH")" "$REAPPLY"; fi
 if ss -H -tln "sport = :$SSH_PORT" | grep -q .; then ok SSH "$(L "Escucha en tu puerto ($SSH_PORT)" "Listens on your port ($SSH_PORT)")"
 else fail SSH "$(L "No escucha en el puerto $SSH_PORT de tu configuración" "Doesn't listen on port $SSH_PORT from your configuration")" "$REAPPLY"; fi
+if [ "$(sshv maxauthtries)" -le 4 ] 2> /dev/null && [ "$(sshv x11forwarding)" = no ] && [ "$(sshv allowagentforwarding)" = no ]; then
+  ok SSH "$(L "Pocos intentos por conexión, sin reenvíos innecesarios" "Few tries per connection, no needless forwarding")"
+else
+  warn SSH "$(L "SSH permite muchos intentos por conexión o reenvíos que no se usan" "SSH allows many tries per connection or forwarding nobody uses")" "$REAPPLY"
+fi
+if [ "$(passwd -S root 2> /dev/null | awk '{ print $2 }')" = L ]; then
+  ok SSH "$(L "Contraseña de root bloqueada (tampoco sirve en la consola del proveedor)" "root password locked (it doesn't work on the provider's console either)")"
+else
+  warn SSH "$(L "root tiene contraseña: sirve en la consola web del proveedor" "root has a password: it works on the provider's web console")" "$REAPPLY"
+fi
+if systemctl is-active --quiet fail2ban && fail2ban-client status sshd > /dev/null 2>&1; then
+  banned=$(fail2ban-client status sshd 2> /dev/null | sed -n 's/.*Currently banned:[[:space:]]*//p')
+  ok SSH "$(L "fail2ban bloquea a quien insiste (${banned:-0} IPs bloqueadas ahora)" "fail2ban blocks whoever insists (${banned:-0} IPs blocked now)")"
+else
+  fail SSH "$(L "Sin fail2ban: nadie frena a los bots que prueban SSH" "No fail2ban: nothing stops bots probing SSH")" "$REAPPLY"
+fi
 
 # --- Firewall ---
 ufw=$(ufw status verbose 2> /dev/null)
@@ -70,6 +89,9 @@ elif [ "$disk" -ge 80 ]; then warn "$A_DISK" "$(L "Disco al $disk%" "Disk at $di
 else ok "$A_DISK" "$(L "Disco al $disk%" "Disk at $disk%")"; fi
 if [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ]; then ok "$A_TIME" "$(L "Reloj sincronizado" "Clock synchronized")"
 else warn "$A_TIME" "$(L "Reloj sin sincronizar (afecta certificados y logs)" "Clock not synchronized (affects certificates and logs)")" "sudo timedatectl set-ntp true"; fi
+
+# Lo de la plataforma (andamio servidor). andamio seguridad solo blinda: no lo revisa.
+if [ "${SOLO:-}" != seguridad ]; then
 
 # --- Backups ---
 journal=$(L "journalctl -u andamio-backup -n 50 $ONSERVER" "journalctl -u andamio-backup -n 50 $ONSERVER")
@@ -112,6 +134,13 @@ fi
 bad=$(docker ps --format '{{.Names}} {{.Status}}' | grep -E 'unhealthy|Restarting' | cut -d' ' -f1 | paste -sd' ' -)
 if [ -z "$bad" ]; then ok "$A_CT" "$(L "$(docker ps -q | wc -l) corriendo, ninguno con problemas" "$(docker ps -q | wc -l) running, none with problems")"
 else fail "$A_CT" "$(L "Con problemas: $bad" "With problems: $bad")" "docker logs <$(L nombre name)> $ONSERVER"; fi
+# Docker seguro por defecto (daemon.json): puertos locales y sin escalar privilegios.
+dj=/etc/docker/daemon.json
+if [ "$(jq -r '.ip // empty' "$dj" 2> /dev/null)" = 127.0.0.1 ] && [ "$(jq -r '."no-new-privileges" // false' "$dj" 2> /dev/null)" = true ]; then
+  ok "$A_ISO" "$(L "Docker publica en 127.0.0.1 por defecto y sin escalar privilegios" "Docker publishes on 127.0.0.1 by default, with no privilege escalation")"
+else
+  warn "$A_ISO" "$(L "Docker publica en todas las interfaces por defecto (se salta UFW)" "Docker publishes on all interfaces by default (it bypasses UFW)")" "$REAPPLY"
+fi
 iso=0
 while IFS='|' read -r name priv pid sock ports; do
   name=${name#/}
@@ -156,6 +185,8 @@ else
   warn VPN "$(L "WireGuard no está activo: los paneles privados no son alcanzables" "WireGuard isn't active: private panels can't be reached")" \
     "sudo systemctl start wg-quick@wg0"
 fi
+
+fi   # fin de lo de la plataforma
 
 # --- Puertos que escuchan fuera de localhost (andamio los prueba desde Internet) ---
 ss -H -tln | awk '{ print $4 }' | grep -vE '^(127\.|\[::1\]|.*%lo)' | sed 's/.*://' | sort -un \

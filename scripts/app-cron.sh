@@ -77,5 +77,16 @@ Si sigue fallando, no vuelvo a avisar hasta que ande." "Try it by hand: andamio 
 If it keeps failing, I won't notify again until it works.")" "$tail_out"
   fi
 fi
+# Las últimas 5 corridas programadas, con su salida (sin colores, hasta 300 líneas): las ve
+# `andamio app cron runs` y el panel. Solo el usuario de andamio puede leerlas (pueden traer datos).
+if [ "$manual" != --manual ] && [ -n "${STATE_DIRECTORY:-}" ]; then
+  runs=$STATE_DIRECTORY/$app.$name.runs
+  grp=${ANDAMIO_USER:-root}
+  install -d -m 750 -g "$grp" "$runs" 2> /dev/null || install -d -m 750 "$runs"
+  { printf '%s %s %s\n' "$rc" "$start" "$secs"; sed 's/\x1b\[[0-9;]*m//g' "$out" | tail -n 300 | cut -c1-500; } > "$runs/$start.log"
+  chgrp "$grp" "$runs/$start.log" 2> /dev/null || true
+  chmod 640 "$runs/$start.log"
+  find "$runs" -name '*.log' -printf '%f\n' | sort -rn | tail -n +6 | sed "s|^|$runs/|" | xargs -r rm -f
+fi
 rm -f "$out"
 exit "$rc"

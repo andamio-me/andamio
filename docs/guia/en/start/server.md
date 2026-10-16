@@ -10,6 +10,30 @@ andamio server
 You can run it as many times as you want: it resumes where it stopped, and it's also how you
 re-apply everything after a change.
 
+## Only lock down the VPS: `andamio security`
+
+If for now you only want the VPS safe (or you'll set up the platform later):
+
+```bash
+andamio security
+```
+
+It asks three things (the IP, your user and the new SSH port) and does the same as
+`andamio server`'s lockdown, without installing anything else:
+
+1. Creates your SSH key if you don't have one, and warns you it'll be your only way in (keep it).
+2. Checks the server's fingerprint and installs your key with the password or `.pem` your
+   provider gave you (once).
+3. **Before moving SSH, it tests that the new port reaches the server.** If your provider's
+   firewall blocks it, it stops and tells you where to open it: you don't get locked out.
+4. Creates your user and, in the same step, turns off passwords and root and turns on the firewall.
+5. Checks it from outside: root and the other users get refused with a password, and `22`
+   no longer answers.
+6. Automatic patches, strict sshd, fail2ban, and the server's security check.
+
+When you want the platform: `andamio init` fills in what's missing (domain, repo, HTTPS)
+without asking the above again, and then `andamio server`.
+
 ## Before: two checks at your provider
 
 1. **Its firewall.** Azure, AWS, Oracle and Google Cloud (and some Hetzner or DigitalOcean
@@ -32,7 +56,8 @@ re-apply everything after a change.
    key. It asks which provider you use, to know its initial user.
 2. **Installs your SSH key** and verifies the fingerprint.
 3. **Creates your user** for operations and asks for a new sudo password (twice).
-4. **Hardens it:** key-only SSH on your port, no root login, UFW firewall, automatic
+4. **Hardens it:** key-only SSH on your port, no root login and its password locked, UFW
+   firewall (all three as soon as your user exists, before going on), fail2ban, automatic
    security patches and unused services removed.
 5. **Installs Docker** (rotated logs; the socket only through a read-only proxy).
 6. **Sets up the WireGuard VPN** and generates your first device's configuration.
@@ -66,5 +91,7 @@ to fix each problem. See [Security](/en/docs/server/security/).
 ## Your sudo password
 
 Commands that change the server ask for it **once** and remember it for 15 idle minutes, in
-memory only (never on disk). `andamio forget` wipes it right away; `ANDAMIO_SUDO_MINUTES=0`
-turns remembering off.
+memory only (never on disk). In the panel, **Settings → Sudo password** picks how long: 15 min,
+1 h, 4 h or 8 h (a preference of your machine, in `~/.config/andamio`), and **Forget now** wipes
+it. In the terminal, `andamio forget` does the same; `ANDAMIO_SUDO_MINUTES` overrides the setting
+(`0` turns remembering off).

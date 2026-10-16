@@ -13,14 +13,15 @@ Sin backups, tus datos solo viven en el VPS. Este comando lo deja configurado, g
    Cloudflare R2, Wasabi, MinIO).
 2. **Prueba el destino** desde tu servidor.
 3. **Hace el primer backup** en el momento.
-4. **Prueba la restauración:** carga el respaldo de la base en un PostgreSQL temporal y lo
-   compara con producción, sin tocarla.
+4. **Prueba la restauración:** carga el respaldo de las bases en un PostgreSQL temporal (y en
+   un MariaDB temporal, si alguna app lo usa) y lo compara con producción, sin tocarla. Si un
+   dump no carga o le faltan bases o tablas, la prueba falla.
 
 Desde ahí, cada noche a las 03:30 UTC.
 
 ## Qué se respalda
 
-Las bases de tus apps (un dump consistente de PostgreSQL), Redis, los archivos de la
+Las bases de tus apps (un dump consistente de PostgreSQL y, si alguna app lo usa, de MariaDB), Redis, los archivos de la
 plataforma y lo necesario para reconstruir el servidor: la configuración de SSH, la VPN y
 los secretos del servidor.
 
@@ -38,7 +39,35 @@ los secretos del servidor.
 `andamio estado` te dice cuándo fue el último backup y si salió bien. Con Telegram activado,
 te avisa cada noche.
 
-## Restaurar
+## Respaldar ahora y ver los que hay
+
+```bash
+andamio backups now     # el mismo de cada noche, con su salida en vivo
+andamio backups list    # los que hay: fecha, cuánto tardó y tamaño
+```
+
+En el [panel](/es/docs/apps/panel/), **Ver respaldos** muestra lo mismo.
+
+## Restaurar una app
+
+Para volver una sola app a un día anterior (su base y sus carpetas), sin tocar el resto:
+`andamio app restore <app> <respaldo>`. Ver [Gestionar apps](/es/docs/apps/manage/#restaurar-desde-un-respaldo).
+
+## El archivo de lo borrado
+
+Antes de borrar una app (`andamio app destroy`) o de restaurarla, andamio guarda lo que tenía
+en `/srv/andamio/archive/`: su base y sus carpetas. Esa carpeta entra en el respaldo diario, y
+**lo que tiene más de 90 días se borra solo** en el respaldo de cada noche: para entonces ya está
+en los respaldos mensuales, que duran 6 meses más. En el panel, **Respaldos → Archivo** muestra
+qué hay, cuánto ocupa y cuándo se borra cada cosa.
+
+Los días se cambian en tu configuración (`andamio_archive_days: 90`; con `0`, no se borra nada).
+
+Borrar una app no la saca de los respaldos que ya existen: sigue en ellos hasta que la retención
+los vaya borrando (7 diarios, 4 semanales, 6 mensuales). Así un borrado por error se puede
+deshacer.
+
+## Restaurar el servidor entero
 
 Si el servidor desaparece:
 

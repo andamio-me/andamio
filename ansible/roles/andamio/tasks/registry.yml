@@ -1,0 +1,157 @@
+# El registro de apps: lo que se escribe UNA vez con TODAS las apps (no por app). Lo usan
+# main.yml (el apply completo) y una-app.yml (crear, borrar, apagar o encender una app: el
+# registro y esa app, sin repasar el resto de la plataforma).
+#  - el registro de apps para Prometheus (textfile de node-exporter),
+#  - las llaves de deploy autorizadas (una por app; borrar la app revoca la suya),
+#  - los usuarios de Redis (aclfile),
+#  - y, de las apps que ya no existen, sus tareas programadas.
+
+# Sin facts (una-app.yml no los junta): el nivel de monitoreo se calcula aquí con la memoria.
+- name: Memoria del servidor (para el nivel de monitoreo)
+  when: andamio_monitoring_level is not defined and andamio_monitoring == 'auto'
+  ansible.builtin.setup:
+    gather_subset: ["!all", "!min", hardware]
+    filter: ansible_memtotal_mb
+
+- name: Nivel de monitoreo
+  when: andamio_monitoring_level is not defined
+  ansible.builtin.set_fact:
+    andamio_monitoring_level: >-
+      {{ andamio_monitoring if andamio_monitoring != 'auto'
+         else ('completo' if ansible_facts['memtotal_mb'] >= 2900 else 'minimo') }}
+
+- name: Buscar apps (apps/*/app.yml en el repo de tu WSL)
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../apps"
+    patterns: app.yml
+    recurse: true
+    depth: 2
+  register: andamio_apps_found
+
+- name: Nombres de las apps
+  ansible.builtin.set_fact:
+    andamio_app_names: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+
+# También la usa andamio-container-health.service (StateDirectory).
+- name: Carpeta del textfile de node-exporter
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Registro de apps para Prometheus (textfile de node-exporter)
+  ansible.builtin.template:
+    src: apps.prom.j2
+    dest: /var/lib/node_exporter/textfile/apps.prom
+    owner: root
+    group: root
+    mode: "0644"
+    trim_blocks: true
+    lstrip_blocks: true
+
+# --- Llaves de deploy: una por app (apps/<app>/deploy_key.pub) ---
+# sshd las lee de /etc/ssh/deploy_keys/<usuario> (host/ssh/00-andamio-hardening.conf).
+# El archivo se reescribe completo: borrar un .pub revoca esa llave.
+
+- name: Llaves de deploy de las apps
+  ansible.builtin.set_fact:
+    andamio_deploy_keys: >-
+      {{ (andamio_deploy_keys | default([]))
+         + ([{'app': item, 'key': lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore')}]
+            if lookup('ansible.builtin.file', playbook_dir ~ '/../apps/' ~ item ~ '/deploy_key.pub', errors='ignore') else []) }}
+  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+
+- name: Directorio de llaves de deploy (solo root escribe)
+  ansible.builtin.file:
+    path: /etc/ssh/deploy_keys
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Llaves de deploy autorizadas
+  ansible.builtin.template:
+    src: deploy-keys.j2
+    dest: /etc/ssh/deploy_keys/{{ andamio_user }}
+    owner: root
+    group: root
+    mode: "0644"
+
+# Después de escribir el archivo de arriba: nunca queda una app sin llave.
+- name: Sin llaves de deploy en ~/.ssh/authorized_keys (ahora viven en deploy_keys)
+  ansible.builtin.lineinfile:
+    path: /home/{{ andamio_user }}/.ssh/authorized_keys
+    regexp: 'deploy-app\.sh'
+    state: absent
+
+# --- Redis: un usuario por app (REDIS_URL en su secrets.sops.env) ---
+# Va antes de los stacks: Redis no arranca si falta su aclfile.
+
+- name: Usuarios de Redis de las apps
+  vars:
+    andamio_redis_match: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../apps/' ~ item ~ '/secrets.sops.env',
+                input_type='dotenv', output_type='dotenv')
+         | regex_search('^REDIS_URL=redis://([a-z0-9-]+):([A-Za-z0-9]+)@', '\1', '\2', multiline=True)
+         | default([], true) }}
+  ansible.builtin.set_fact:
+    andamio_redis_users: >-
+      {{ (andamio_redis_users | default([]))
+         + ([{'name': andamio_redis_match[0], 'hash': andamio_redis_match[1] | hash('sha256')}]
+            if andamio_redis_match | length == 2 else []) }}
+  loop: "{{ andamio_apps_found.files | map(attribute='path') | map('dirname') | map('basename') | sort }}"
+  no_log: true
+
+- name: Usuario admin de Redis (REDIS_PASSWORD de stacks/data)
+  ansible.builtin.set_fact:
+    andamio_redis_default_hash: >-
+      {{ lookup('community.sops.sops', playbook_dir ~ '/../stacks/data/secrets.sops.env',
+                input_type='dotenv', output_type='dotenv')
+         | regex_search('^REDIS_PASSWORD=(.+)$', '\1', multiline=True) | first | hash('sha256') }}
+    andamio_redis_users: "{{ andamio_redis_users | default([]) }}"
+  no_log: true
+
+# 999 = usuario redis dentro de la imagen oficial.
+- name: Carpeta del aclfile de Redis
+  ansible.builtin.file:
+    path: "{{ andamio_infra }}/stacks/data/redis-acl"
+    state: directory
+    owner: "999"
+    group: "999"
+    mode: "0700"
+
+- name: Sin el aclfile viejo (montado como archivo suelto)
+  ansible.builtin.file:
+    path: "{{ andamio_infra }}/stacks/data/users.acl"
+    state: absent
+
+- name: aclfile de Redis
+  ansible.builtin.template:
+    src: redis-users.acl.j2
+    dest: "{{ andamio_infra }}/stacks/data/redis-acl/users.acl"
+    owner: "999"
+    group: "999"
+    mode: "0600"
+  notify: Recargar usuarios de Redis
+
+# Las tareas programadas de una app borrada (andamio app destroy) no se quedan corriendo.
+- name: Tareas programadas en el servidor
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: andamio-cron-*.timer
+  register: andamio_cron_all
+
+- name: Tareas programadas de apps que ya no existen
+  ansible.builtin.set_fact:
+    andamio_cron_remove: >-
+      {{ andamio_cron_all.files | map(attribute='path') | map('basename') | map('regex_replace', '\.timer$', '')
+         | reject('regex', '^andamio-cron-(' ~ (andamio_app_names | join('|')) ~ ')\.') | list }}
+
+- name: Quitarlas
+  ansible.builtin.include_tasks: cron-remove.yml
+  when: andamio_cron_remove | length > 0

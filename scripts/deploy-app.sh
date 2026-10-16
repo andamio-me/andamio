@@ -31,13 +31,18 @@ notify() {
   [ -r /etc/andamio/telegram.env ] || { echo "⚠ $(L "Sin aviso: no puedo leer" "No notice: can't read") /etc/andamio/telegram.env" >&2; return 0; }
   ( set -a; . /etc/andamio/telegram.env; set +a; echo "$1" | "$INFRA/scripts/telegram-send.sh" ) || true
 }
-record() {  # registra el deploy en la tabla deployments de la app y en el registro central
+record() {  # registra el deploy en la tabla deployments de la app (si la tiene) y en el registro central
   # Apps sin base (sin DATABASE_URL) no registran: grep sin resultado no debe cortar el script (set -e).
   # Los valores ya están validados arriba (APP, SHA, VERSION); el estado es fijo.
+  # Solo si la app tiene su propia tabla deployments (la plantilla de andamio la trae): la base de
+  # una app cualquiera no se toca, y no deja un ERROR en el log del deploy.
   local url
   url=$(grep '^DATABASE_URL=' .env | cut -d= -f2- || true)
-  [ -z "$url" ] || docker run --rm --network data postgres:18.6-alpine psql -q "$url" \
-    -c "INSERT INTO deployments (version, commit_sha, status) VALUES ('$VERSION', '$SHA', '$1')" || true
+  [ -z "$url" ] || docker run --rm --network data postgres:18.6-alpine psql -q "$url" -c "DO \$\$BEGIN
+      IF to_regclass('public.deployments') IS NOT NULL THEN
+        INSERT INTO deployments (version, commit_sha, status) VALUES ('$VERSION', '$SHA', '$1');
+      END IF;
+    END\$\$;" > /dev/null 2>&1 || true
   # Registro central: la base del dashboard junta los deploys de todas las apps.
   # El dashboard ya quedó registrado arriba (su tabla ES el registro central).
   [ -n "$DASH" ] && [ "$APP" != "$DASH" ] || return 0

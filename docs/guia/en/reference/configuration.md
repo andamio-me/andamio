@@ -31,6 +31,7 @@ andamio_telegram: false
 | `andamio_tls` | `http` (Let's Encrypt per app), `cloudflare` (wildcard via DNS) or `custom` (your certificate). See [HTTPS and certificates](/en/docs/server/certificate/) |
 | `andamio_acme_email` | Your email for Let's Encrypt notices |
 | `andamio_monitoring` | `auto`, `minimo` or `completo`. See [Monitoring](/en/docs/server/monitoring/) |
+| `andamio_postgres_*`, `andamio_redis_*` | PostgreSQL and Redis memory, CPU and settings (set by `andamio services`). See [PostgreSQL and Redis](/en/docs/server/services/) |
 | `andamio_backups` | `andamio backups` sets it to `true`. See [Backups](/en/docs/server/backups/) |
 | `andamio_telegram` | `true` with the bot and the chat in `host/sops/telegram-env.sops` |
 | `andamio_forge` | `github`. Everything about the forge goes through `bin/forge`: adding GitLab is implementing that file |

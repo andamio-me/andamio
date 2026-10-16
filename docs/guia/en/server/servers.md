@@ -37,5 +37,5 @@ which apps it has: it's almost always that you're in another copy's folder.
 
 ## Your sudo password
 
-Each server has its own, and andamio remembers them separately (15 idle minutes, in memory
+Each server has its own, and andamio remembers them separately (15 idle minutes by default, in memory
 only). `andamio forget` wipes them all.

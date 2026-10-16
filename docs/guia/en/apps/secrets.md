@@ -40,8 +40,18 @@ And re-runs that deploy without you going to GitHub.
 
 ## Several at once
 
-Each `secret set` restarts the app. For several, save them without applying and apply once
-at the end:
+From a `.env` file (one `KEY=value` per line; `export` and quotes are fine, lines with `#` are
+ignored): all are checked before touching anything, they're encrypted together and the app
+restarts only once. The commit carries only the names.
+
+```bash
+andamio app secret import myapp .env.production
+```
+
+In the panel: **Variables → Paste several**, paste the `.env` or choose the file, and see which
+are new, which replace one and which have a problem, with the values hidden.
+
+Another way: save them one by one without applying and apply once at the end:
 
 ```bash
 andamio app secret set myapp STRIPE_KEY --later
@@ -57,7 +67,7 @@ andamio app secret rm myapp STRIPE_KEY         # remove it
 cat key.txt | andamio app secret set myapp STRIPE_KEY   # the value from a file
 ```
 
-`DOMAIN`, `DATABASE_URL`, `REDIS_URL` and `TAG` are set by andamio and can't be changed by
+`DOMAIN`, `DATABASE_URL`, `MYSQL_URL`, `REDIS_URL` and `TAG` are set by andamio and can't be changed by
 hand.
 
 ## Why not GitHub Secrets

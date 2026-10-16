@@ -1,0 +1,38 @@
+# PostgreSQL, Redis y MariaDB compartidos (stacks/data) con su configuración: lo que aplica
+# `andamio servicios` (servicios.yml), sin repasar el resto de la plataforma. Va dentro del rol para
+# ver sus valores por defecto (andamio_infra, andamio_mariadb_needed...).
+
+- name: Motor de Redis (si cambió, copia los datos al nuevo)
+  ansible.builtin.include_tasks: redis-engine.yml
+
+- name: .env de stacks/data
+  ansible.builtin.include_tasks: stack-env.yml
+  vars:
+    andamio_stack: stacks/data
+    andamio_monitoring_level: ""
+
+- name: PostgreSQL, Redis y MariaDB con su configuración
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker compose up -d --wait
+  args:
+    chdir: "{{ andamio_infra }}/stacks/data"
+  register: andamio_data_up
+  changed_when: andamio_data_up.stderr is search('Recreat|Creat|Start')
+
+- name: MariaDB apagada si ninguna app la usa (su volumen queda)
+  when: not (andamio_mariadb_needed | bool)
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker rm -f mariadb
+  register: andamio_mariadb_off
+  changed_when: "'mariadb' in andamio_mariadb_off.stdout"
+  failed_when: false
+
+- name: Redis pide clave (sin su archivo de usuarios, un motor podría quedar abierto)
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker exec redis sh -c 'unset REDISCLI_AUTH; redis-cli ping'
+  register: andamio_redis_noauth
+  changed_when: false
+  failed_when: "'NOAUTH' not in (andamio_redis_noauth.stdout ~ andamio_redis_noauth.stderr)"

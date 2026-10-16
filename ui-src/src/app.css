@@ -1,0 +1,223 @@
+/*
+ * Panel de andamio: la misma base que ejemplo.com (neutros fríos, un azul) y sus dos objetos:
+ * la cianotipia (el plano azul de obra) y la terminal. Sigue el tema del sistema; la
+ * cianotipia y la terminal son iguales en ambos (son objetos, no superficie).
+ */
+:root {
+  --canvas: oklch(0.975 0.004 260);
+  --surface: oklch(0.995 0.002 260);
+  --sunken: oklch(0.955 0.006 260);
+  --line: oklch(0.905 0.008 260);
+  --ink: oklch(0.22 0.02 262);
+  --muted: oklch(0.5 0.018 262);
+  --accent: oklch(0.52 0.19 262);
+  --accent-ink: oklch(0.985 0.005 262);
+  --ok: oklch(0.56 0.14 155);
+  --warn: oklch(0.62 0.15 70);
+  --bad: oklch(0.55 0.2 25);
+  /* Series de las gráficas (validadas para daltonismo: tools de dataviz, 2026-10-11). */
+  /* Los mismos tonos como texto: un paso más oscuros en claro, para pasar 4.5:1 sobre sus fondos tenues. */
+  --ok-text: oklch(0.46 0.13 155);
+  --warn-text: oklch(0.5 0.13 65);
+  --bad-text: oklch(0.5 0.2 25);
+  --chart-1: oklch(0.52 0.19 262);
+  --chart-2: oklch(0.66 0.16 55);
+
+  --term: oklch(0.2 0.02 262);
+  --term-ink: oklch(0.93 0.01 262);
+  --term-muted: oklch(0.68 0.02 262);
+  --term-ok: oklch(0.78 0.13 155);
+  --term-warn: oklch(0.83 0.13 80);
+  --term-bad: oklch(0.72 0.16 25);
+  --term-info: oklch(0.76 0.11 245);
+  --term-debug: oklch(0.76 0.1 305);
+  --term-ctx: oklch(0.8 0.09 195);
+
+  /* Cianotipia: cobalto profundo, líneas de tiza azulada. */
+  --print: oklch(0.36 0.125 262);
+  --print-deep: oklch(0.31 0.11 262);
+  --chalk: oklch(0.95 0.025 255);
+  --chalk-dim: oklch(0.8 0.05 258);
+
+  --sans: "Instrument Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --radius: 8px;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
+  --page: 1180px;
+  color-scheme: light;
+}
+
+/* Oscuro: el del sistema, salvo que en Ajustes elijas claro; o porque elegiste oscuro. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: oklch(0.175 0.01 262);
+    --surface: oklch(0.215 0.012 262);
+    --sunken: oklch(0.195 0.011 262);
+    --line: oklch(0.305 0.014 262);
+    --ink: oklch(0.945 0.006 262);
+    --muted: oklch(0.71 0.015 262);
+    --accent: oklch(0.7 0.15 262);
+    --accent-ink: oklch(0.17 0.02 262);
+    --ok: oklch(0.75 0.14 155);
+    --warn: oklch(0.8 0.13 80);
+    --bad: oklch(0.7 0.17 25);
+    --ok-text: var(--ok);
+    --warn-text: var(--warn);
+    --bad-text: var(--bad);
+    --chart-1: oklch(0.66 0.15 262);
+    --chart-2: oklch(0.66 0.15 58);
+    --term: oklch(0.13 0.012 262);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: oklch(0.175 0.01 262);
+  --surface: oklch(0.215 0.012 262);
+  --sunken: oklch(0.195 0.011 262);
+  --line: oklch(0.305 0.014 262);
+  --ink: oklch(0.945 0.006 262);
+  --muted: oklch(0.71 0.015 262);
+  --accent: oklch(0.7 0.15 262);
+  --accent-ink: oklch(0.17 0.02 262);
+  --ok: oklch(0.75 0.14 155);
+  --warn: oklch(0.8 0.13 80);
+  --bad: oklch(0.7 0.17 25);
+  --ok-text: var(--ok);
+  --warn-text: var(--warn);
+  --bad-text: var(--bad);
+  --chart-1: oklch(0.66 0.15 262);
+  --chart-2: oklch(0.66 0.15 58);
+  --term: oklch(0.13 0.012 262);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+/* Con una ventana abierta, la página de atrás no se mueve (y sin el salto de la barra de scroll). */
+html { scrollbar-gutter: stable; }
+html:has(dialog[open]) { overflow: hidden; }
+html, body { margin: 0; }
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font: 15px/1.5 var(--sans);
+  font-feature-settings: "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+code, kbd, .mono { font-family: var(--mono); font-size: 0.9em; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+::selection { background: color-mix(in oklch, var(--accent) 25%, transparent); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* Botones: uno solo en todo el panel, con sus estados. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  min-height: 34px; padding: 0 var(--space-4);
+  font: 500 14px/1 var(--sans); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+  cursor: pointer; white-space: nowrap;
+  transition: border-color 150ms var(--ease), background-color 150ms var(--ease);
+}
+.btn:hover:not(:disabled) { border-color: color-mix(in oklch, var(--muted) 60%, var(--line)); }
+.btn:active:not(:disabled) { background: var(--sunken); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover:not(:disabled) { background: color-mix(in oklch, var(--accent) 88%, var(--ink)); }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.quiet:hover:not(:disabled) { color: var(--ink); border-color: var(--line); }
+.btn.small { min-height: 28px; padding: 0 var(--space-3); font-size: 13px; }
+/* Con el dedo (pantallas táctiles): botones más grandes, fáciles de acertar. */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+  .btn.small { min-height: 40px; padding: 0 var(--space-4); }
+}
+
+/* Etiquetas de estado y acceso. */
+.tag {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1;
+  padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+}
+.tag.public { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 40%, var(--line)); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; display: inline-block; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+
+/* La cuadrícula del papel de plano: dos escalas, como el papel milimetrado. */
+.blueprint {
+  background-color: var(--print);
+  background-image:
+    linear-gradient(oklch(1 0 0 / 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 0.09) 1px, transparent 1px),
+    linear-gradient(oklch(1 0 0 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 0.035) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+  color: var(--chalk);
+}
+.blueprint :focus-visible { outline-color: var(--chalk); }
+
+/* Único movimiento decorativo: las líneas del plano se dibujan una vez al cargar. */
+@media (prefers-reduced-motion: no-preference) {
+  .draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw 900ms var(--ease) forwards;
+    animation-delay: calc(var(--i, 0) * 70ms + 150ms);
+  }
+}
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* Formularios en el lugar (secretos, tareas, listas): una sola forma para todos. */
+.form {
+  display: grid; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-3);
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.form .fields { display: grid; gap: var(--space-3) var(--space-4); grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.form label { display: grid; gap: 5px; font-size: 13px; color: var(--muted); }
+.form input {
+  font: 14px var(--sans); color: var(--ink); background: var(--canvas); border: 1px solid var(--line);
+  border-radius: 6px; padding: 7px 10px; width: 100%;
+}
+.form input.mono { font-family: var(--mono); font-size: 13px; }
+.form input:focus-visible { outline: 3px solid color-mix(in oklch, var(--accent) 28%, transparent); outline-offset: 0; border-color: var(--accent); }
+.form input[aria-invalid="true"] { border-color: var(--bad); }
+.form .help { font-size: 12.5px; color: var(--muted); }
+.form .help.error { color: var(--bad-text); }
+.form .help.ok { color: var(--ok-text); }
+.form .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.form .note { margin: 0; font-size: 13px; color: var(--muted); }
+.form .warnbox {
+  margin: 0; padding: var(--space-3); border-radius: 8px; font-size: 13.5px;
+  background: color-mix(in oklch, var(--warn) 12%, var(--surface)); border: 1px solid color-mix(in oklch, var(--warn) 40%, var(--line));
+}
+.form label.check { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+.form label.check input { width: auto; }
+
+/* Secciones del detalle: un solo patrón. Título y una línea de qué es, la acción a la
+   derecha; el contenido en una caja con filas (y el formulario de agregar, como primera fila). */
+.shead { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-3); }
+.shead h2 { margin: 0; }
+.desc { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); max-width: 72ch; }
+.box { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.btn.danger:hover:not(:disabled) { color: var(--bad-text); border-color: color-mix(in oklch, var(--bad) 40%, var(--line)); background: color-mix(in oklch, var(--bad) 6%, transparent); }
+/* Un formulario como primera fila de una caja (sin caja propia: nada de cajas dentro de cajas). */
+.form.flat { margin: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--sunken); }
+.form.flat input { background: var(--surface); }
+
+/* Campos secretos enmascarados sin type="password" (lib/secret.ts): el navegador no ofrece guardarlos. */
+.secret-field { -webkit-text-security: disc; }

@@ -9,3 +9,19 @@ AllowUsers {{ andamio_user }}
 # Llaves personales en ~/.ssh/authorized_keys; las de deploy de cada app (con
 # comando forzado) en /etc/ssh/deploy_keys/<usuario>, generado por Ansible.
 AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/deploy_keys/%u
+
+# Menos margen para los bots: pocos intentos por conexión, poco tiempo para autenticarse y un
+# tope de conexiones a medio abrir (desde 10 empieza a rechazar al azar; en 60, todas).
+# 4 intentos y no 3: un agente SSH con varias llaves gasta uno por llave.
+MaxAuthTries 4
+LoginGraceTime 20
+MaxStartups 10:30:60
+# Sesiones colgadas se cierran solas (sin respuesta durante 10 min).
+ClientAliveInterval 300
+ClientAliveCountMax 2
+# Nada que un servidor necesite: ventanas gráficas, reenviar tu agente SSH al servidor, ni
+# túneles desde el servidor hacia ti. Los túneles hacia el servidor (-L) sí: el panel los usa.
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding local
+PermitTunnel no

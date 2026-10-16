@@ -30,8 +30,11 @@ services:
       - socket-proxy
     env_file: .env            # CF_DNS_API_TOKEN (desde secrets.sops.env)
     ports:
-      - "80:80"
-      - "443:443"
+      # Explícito en todas las interfaces: Docker publica en 127.0.0.1 por defecto (daemon.json).
+      - "0.0.0.0:80:80"
+      - "[::]:80:80"
+      - "0.0.0.0:443:443"
+      - "[::]:443:443"
       - "127.0.0.1:8080:8080"   # dashboard: solo por túnel SSH
     volumes:
       - ./traefik.yml:/etc/traefik/traefik.yml:ro

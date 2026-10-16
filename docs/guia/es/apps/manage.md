@@ -46,6 +46,15 @@ Te muestra el cambio (`resources.mem: 256m → 512m`), pregunta y lo aplica: un 
 misma imagen, sin deploy. Si cambias el puerto, tu app tiene que escuchar en el nuevo; si para
 eso cambiaste el código, haz `git push` (eso despliega).
 
+Con PostgreSQL, también los límites de su base, para que no acapare la que comparte con las
+demás apps:
+
+```bash
+andamio app set miapp --db-connections 20 --db-timeout 30s   # 0 = sin límite
+```
+
+Ver [PostgreSQL y Redis](/es/docs/server/services/#limitar-una-app).
+
 ## Logs en vivo
 
 ```bash
@@ -65,10 +74,51 @@ despliega hasta que hagas `start`. Libera su memoria y su CPU.
 ## Volver atrás
 
 ```bash
-andamio app rollback miapp
+andamio app rollback miapp            # al deploy exitoso anterior
+andamio app rollback miapp 1a2b3c4    # a ese commit (uno de sus deploys exitosos)
 ```
 
-Vuelve al deploy exitoso anterior.
+Es el mismo deploy sin caída de siempre: si esa versión no queda sana, sigue la actual. La
+base no vuelve atrás (para eso, [restaurar desde un respaldo](#restaurar-desde-un-respaldo)),
+y el próximo push a `main` despliega lo último otra vez. En el [panel](/es/docs/apps/panel/),
+cada deploy tiene **Volver a esta**.
+
+## Restaurar desde un respaldo
+
+```bash
+andamio app restore miapp             # la lista de respaldos que hay
+andamio app restore miapp 4f3e2d1c    # su base y sus carpetas, como en ese respaldo (o latest)
+```
+
+Antes de tocar nada saca la base de esa app del respaldo y la prueba en un PostgreSQL (o
+MariaDB) temporal; si el respaldo no la tiene, se detiene sin cambiar nada. De MariaDB entra
+solo la base de esa app: ni los usuarios ni las bases de las demás. Si sirve, guarda lo de ahora en `/srv/andamio/archive/`, detiene la app unos
+segundos, reemplaza su base y sus carpetas persistentes y la vuelve a encender. No toca Redis,
+el código desplegado ni los secretos. Pide escribir el nombre de la app para confirmar.
+
+## Consultar su base (solo lectura)
+
+```bash
+andamio app sql miapp                                   # psql de solo lectura
+andamio app sql miapp "SELECT count(*) FROM usuarios"   # una consulta
+```
+
+Corre como `<app>_ro`, un usuario que solo puede leer (`SELECT`) la base de esa app, en una
+transacción de solo lectura y con 5 segundos como máximo por consulta: ni un error ni algo
+malicioso puede cambiar datos. Entra solo desde dentro del contenedor de PostgreSQL (no tiene
+contraseña ni acceso por red). En el [panel](/es/docs/apps/panel/), **Base de datos**.
+
+## Deshacer un cambio de configuración
+
+```bash
+andamio app revert miapp 1a2b3c4
+```
+
+Deshace ese commit si fue un cambio de configuración de la app (los que tocan solo su
+`app.yml`: RAM, dominios, tareas, CORS, acceso): un commit nuevo con el cambio inverso, y
+aplicar. Nunca secretos, ni crear o borrar una app. Si un cambio posterior tocó las mismas
+líneas, no hace nada y te lo dice. En el [panel](/es/docs/apps/panel/), **Historial →
+Deshacer**.
 
 ## Aplicar cambios
 

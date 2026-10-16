@@ -5,7 +5,8 @@
 # 1. Línea base en vivo: huellas de todos los archivos de Seafile y conteos de las bases.
 # 2. restic check (con una muestra de datos) y restore del último snapshot a $T.
 # 3. Copias temporales en una red interna propia (drill-*), sin Traefik ni puertos:
-#    PostgreSQL y MariaDB con los dumps restaurados, y Seafile con sus archivos.
+#    PostgreSQL y MariaDB con los dumps restaurados (también el MariaDB de las apps, si alguna
+#    lo usa), y Seafile con sus archivos.
 # 4. Compara copia contra producción y limpia todo al salir (también si falla).
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Correr con sudo"; exit 1; }
@@ -19,7 +20,7 @@ PG_IMAGE=$(docker inspect postgres --format '{{.Config.Image}}')
 REDIS_IMAGE=$(docker inspect seafile-redis --format '{{.Config.Image}}')
 
 cleanup() {
-  docker rm -f drill-pg drill-maria drill-redis drill-seafile > /dev/null 2>&1 || true
+  docker rm -f drill-pg drill-maria drill-mariadb drill-redis drill-seafile > /dev/null 2>&1 || true
   docker network rm "$NET" > /dev/null 2>&1 || true
   rm -rf "$T"
 }
@@ -79,6 +80,18 @@ done
 docker exec -i drill-pg psql -q -U postgres -d postgres < "$T/var/backups/andamio/postgres.sql" > /dev/null 2>&1
 docker exec -i drill-maria mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" < "$T/var/backups/andamio/seafile-mysql.sql"
 docker exec drill-maria mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES" < /dev/null
+# MariaDB de las apps (si alguna la usa): su dump en otro MariaDB temporal, con la clave de root de
+# producción (el dump trae sus usuarios). Por entorno, nunca en la línea de comandos.
+APPS_MD=no
+if [ -s "$T/var/backups/andamio/mariadb.sql" ] && docker ps --format '{{.Names}}' | grep -qx mariadb; then
+  APPS_MD=yes
+  MYSQL_PWD=$(docker exec mariadb printenv MARIADB_ROOT_PASSWORD)
+  MARIADB_ROOT_PASSWORD=$MYSQL_PWD
+  export MYSQL_PWD MARIADB_ROOT_PASSWORD
+  docker run -d --name drill-mariadb --network "$NET" -e MARIADB_ROOT_PASSWORD "$(docker inspect mariadb --format '{{.Config.Image}}')" > /dev/null
+  for _ in $(seq 1 90); do docker exec drill-mariadb healthcheck.sh --connect --innodb_initialized < /dev/null > /dev/null 2>&1 && break; sleep 1; done
+  docker exec -i -e MYSQL_PWD drill-mariadb mariadb -uroot < "$T/var/backups/andamio/mariadb.sql"
+fi
 phase bases
 
 echo "==> 4. Seafile temporal con los archivos restaurados"
@@ -108,6 +121,13 @@ DRILL_FILES=$(seafile_hashes drill-seafile)
 check "archivos de Seafile" "$(printf '%s\n' "$BASE_FILES" | grep -c .)" "$(printf '%s\n' "$DRILL_FILES" | grep -c .)"
 check "huellas idénticas" yes "$([ "$BASE_FILES" = "$DRILL_FILES" ] && echo yes || echo no)"
 if [ "$BASE_FILES" != "$DRILL_FILES" ]; then diff <(printf '%s\n' "$BASE_FILES") <(printf '%s\n' "$DRILL_FILES") | head -n 10; fi
+if [ "$APPS_MD" = yes ]; then
+  md_counts() {  # md_counts <contenedor>: tablas por base, sin las del sistema
+    docker exec -e MYSQL_PWD "$1" mariadb -uroot -N -B -e "SELECT CONCAT(TABLE_SCHEMA, ':', COUNT(*)) FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA NOT IN ('mysql', 'sys', 'performance_schema', 'information_schema') GROUP BY TABLE_SCHEMA ORDER BY 1" < /dev/null | tr '\n' ' '
+  }
+  check "MariaDB de las apps (tablas por base)" "$(md_counts mariadb)" "$(md_counts drill-mariadb)"
+fi
 phase compare
 
 echo

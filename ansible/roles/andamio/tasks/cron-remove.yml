@@ -17,7 +17,8 @@
     {{ andamio_cron_remove | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.timer') | list
        + andamio_cron_remove | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.service') | list
        + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/etc/andamio/cron/\1.cmd') | list
-       + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/var/lib/andamio-cron/\1') | list }}
+       + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/var/lib/andamio-cron/\1') | list
+       + andamio_cron_remove | map('regex_replace', '^andamio-cron-(.*)$', '/var/lib/andamio-cron/\1.runs') | list }}
 
 - name: "Tareas quitadas: systemd al día"
   ansible.builtin.systemd_service:
