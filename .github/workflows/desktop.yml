@@ -55,8 +55,10 @@ jobs:
           - { os: macos, runner: macos-15, args: "--target universal-apple-darwin --bundles app,dmg" }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    # Los defaults del job reemplazan a los del workflow: el shell va de nuevo (en Windows sería PowerShell).
     defaults:
       run:
+        shell: bash
         working-directory: desktop
     env:
       V: ${{ needs.version.outputs.v }}
