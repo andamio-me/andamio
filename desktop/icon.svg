@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- El ícono de andamio de escritorio: la marca de ejemplo.com (dos postes, tres tablones y la
+       diagonal que los arriostra) sobre un cuadrado redondeado. Fuente de los íconos (tauri icon). -->
+  <rect width="1024" height="1024" rx="232" fill="#151821"/>
+  <g transform="translate(176 176) scale(28)" fill="none" stroke-linecap="round">
+    <path d="M6 3v18M18 3v18" stroke="#eef1f7" stroke-width="2"/>
+    <path d="M4 7h16M4 13h16M4 19h16" stroke="#eef1f7" stroke-width="2"/>
+    <path d="M6 13l12-6" stroke="#7aa7ff" stroke-width="1.6"/>
+  </g>
+</svg>

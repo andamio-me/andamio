@@ -347,6 +347,13 @@ command. It runs **on your machine** (`127.0.0.1`
 only, with a key that changes every time) and talks to the server over SSH: there's no panel
 on the server to attack.
 
+Rather have it in its own window? The **desktop app** opens the same panel without a terminal
+and updates itself, checking each version's signature. Download it from
+[Releases](https://github.com/andamio-me/andamio/releases/latest): Windows (with andamio
+inside WSL), macOS (Apple Silicon and Intel) and Linux (AppImage or `.deb`). It's not signed by
+Apple or Microsoft yet: macOS asks you to allow it once in System Settings → Privacy & Security,
+and Windows SmartScreen warns the first time.
+
 ### Backups
 
 ```bash
@@ -456,7 +463,7 @@ needed: they run on your machine and in CI, on every push.
 - [x] Local browser panel (`andamio ui`): live plan and the day-to-day actions
 - [x] Panel: backups, alerts and security on the plan; recent deploys
 - [x] Panel: create an app (repo, review, configuration)
-- [ ] Panel as a desktop app (Tauri)
+- [x] Panel as a desktop app (Tauri): Windows, macOS and Linux
 - [ ] Guided Telegram alerts (`andamio telegram`)
 - [ ] Preview environments per pull request
 

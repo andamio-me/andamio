@@ -354,6 +354,13 @@ el mismo comando de la CLI. Corre **en tu
 máquina** (solo `127.0.0.1`, con una clave que cambia cada vez) y habla con el servidor por
 SSH: en el servidor no hay ningún panel que atacar.
 
+¿Lo prefieres en su propia ventana? La **app de escritorio** abre el mismo panel sin terminal y
+se actualiza sola, verificando la firma de cada versión. Descárgala desde
+[Releases](https://github.com/andamio-me/andamio/releases/latest): Windows (con andamio dentro de
+WSL), macOS (Apple Silicon e Intel) y Linux (AppImage o `.deb`). Todavía no la firman Apple ni
+Microsoft: macOS te pide permitirla una vez en Ajustes del Sistema → Privacidad y seguridad, y
+SmartScreen de Windows avisa la primera vez.
+
 ### Backups
 
 ```bash
@@ -467,7 +474,7 @@ servidor ni cuentas: corren en tu máquina y en el CI, en cada push.
 - [x] Panel local en el navegador (`andamio ui`): plano vivo y las acciones del día a día
 - [x] Panel: backups, alertas y seguridad en el plano; deploys recientes
 - [x] Panel: crear una app (repo, revisión, configuración)
-- [ ] Panel como app de escritorio (Tauri)
+- [x] Panel como app de escritorio (Tauri): Windows, macOS y Linux
 - [ ] Alertas por Telegram guiadas (`andamio telegram`)
 - [ ] Entornos de preview por pull request
 

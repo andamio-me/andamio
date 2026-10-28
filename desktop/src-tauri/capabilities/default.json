@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "La ventana solo muestra la página de arranque y el panel: ninguna API de la app queda a su alcance.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

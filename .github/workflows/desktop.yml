@@ -1,0 +1,193 @@
+# andamio de escritorio: compila los instaladores de Windows, Linux y macOS (Tauri), firmados para
+# el actualizador, y los publica como un release de este repo con latest.json (lo que lee el
+# actualizador de la app). Corre al subir un tag desktop-vX.Y.Z (o a mano, sin publicar).
+# Solo en el repo público de andamio: ahí los minutos de Actions son gratis y cualquiera puede ver
+# que el instalador sale de este código. La llave privada que firma las actualizaciones está en sus
+# secretos, nunca en el código.
+# macOS: firma ad-hoc (sin cuenta de Apple Developer): la primera vez se abre desde Ajustes del
+# Sistema → Privacidad y seguridad → "Abrir igualmente". Windows: sin certificado, SmartScreen avisa.
+name: desktop
+
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    if: github.repository == 'andamio-me/andamio'
+    runs-on: ubuntu-24.04
+    outputs:
+      v: ${{ steps.v.outputs.v }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: La versión del tag es la de la app
+        id: v
+        run: |
+          v=$(jq -r .version desktop/src-tauri/tauri.conf.json)
+          if [[ $GITHUB_REF == refs/tags/desktop-v* && ${GITHUB_REF#refs/tags/desktop-v} != "$v" ]]; then
+            echo "::error::El tag dice ${GITHUB_REF#refs/tags/desktop-v} y tauri.conf.json dice $v"; exit 1
+          fi
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, runner: windows-2025, args: "--bundles nsis" }
+          # La glibc más vieja que se pueda: el AppImage corre en distribuciones de esa en adelante.
+          - { os: linux, runner: ubuntu-22.04, args: "--bundles appimage,deb" }
+          # Universal: un solo .app para Apple Silicon e Intel.
+          - { os: macos, runner: macos-15, args: "--target universal-apple-darwin --bundles app,dmg" }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      V: ${{ needs.version.outputs.v }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Dependencias de Linux (WebKitGTK y el empaquetado)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev \
+            libssl-dev patchelf file > /dev/null
+
+      - name: Rust para Apple Silicon e Intel
+        if: matrix.os == 'macos'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # Lo compilado de las dependencias de Rust, entre corridas: la primera tarda ~10 min, las demás ~3.
+      # Se restaura aquí y se guarda al final aunque falle un paso posterior (no hay que recompilar todo).
+      - id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: desktop-${{ matrix.os }}-${{ hashFiles('desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: desktop-${{ matrix.os }}-
+
+      - name: Íconos (desde icon.png)
+        run: npx --yes @tauri-apps/cli@2 icon icon.png
+
+      # La caché trae target/ de la compilación anterior, con sus instaladores viejos adentro: se
+      # borran, o latest.json podía apuntar (firmado y todo) al de la versión anterior.
+      - name: Sin instaladores de compilaciones anteriores
+        run: rm -rf src-tauri/target/release/bundle src-tauri/target/universal-apple-darwin/release/bundle
+
+      - name: Compilar (firmado para el actualizador)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          NO_STRIP: "true"   # linuxdeploy (AppImage) no entiende las secciones de los binutils nuevos
+        run: npx --yes @tauri-apps/cli@2 build ${{ matrix.args }}
+
+      # Nombres fijos (sin versión): la landing enlaza a releases/latest/download/<nombre>. Solo los de
+      # esta versión; si falta uno, mejor fallar que publicar otro.
+      - name: Instaladores con su nombre de descarga
+        run: |
+          out=$GITHUB_WORKSPACE/out; mkdir -p "$out"
+          b=src-tauri/target/release/bundle
+          case ${{ matrix.os }} in
+            windows)
+              cp "$b/nsis/andamio_${V}_x64-setup.exe" "$out/andamio-windows-x64-setup.exe"
+              cp "$b/nsis/andamio_${V}_x64-setup.exe.sig" "$out/andamio-windows-x64-setup.exe.sig" ;;
+            linux)
+              cp "$b/appimage/andamio_${V}_amd64.AppImage" "$out/andamio-linux-x86_64.AppImage"
+              cp "$b/appimage/andamio_${V}_amd64.AppImage.sig" "$out/andamio-linux-x86_64.AppImage.sig"
+              cp "$b/deb/andamio_${V}_amd64.deb" "$out/andamio-linux-amd64.deb" ;;
+            macos)
+              b=src-tauri/target/universal-apple-darwin/release/bundle
+              cp "$b/dmg/andamio_${V}_universal.dmg" "$out/andamio-macos.dmg"
+              cp "$b/macos/andamio.app.tar.gz" "$out/andamio-macos.app.tar.gz"
+              cp "$b/macos/andamio.app.tar.gz.sig" "$out/andamio-macos.app.tar.gz.sig" ;;
+          esac
+          ls -l "$out"
+
+      - name: Guardar la caché de compilación
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: desktop-${{ matrix.os }}-${{ hashFiles('desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/Cargo.lock') }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.os }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Un solo release con todo, y latest.json: versión, dónde bajar cada una y su firma.
+  release:
+    needs: [version, build]
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.version.outputs.v }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: latest.json
+        working-directory: dist
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/desktop-v$V"
+          sig() { tr -d '\n' < "$1.sig"; }
+          jq -n --arg v "$V" --arg url "$url" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win "$(sig andamio-windows-x64-setup.exe)" \
+            --arg lin "$(sig andamio-linux-x86_64.AppImage)" \
+            --arg mac "$(sig andamio-macos.app.tar.gz)" '{
+              version: $v, notes: "andamio de escritorio \($v)", pub_date: $date,
+              platforms: {
+                "windows-x86_64": { signature: $win, url: "\($url)/andamio-windows-x64-setup.exe" },
+                "linux-x86_64":   { signature: $lin, url: "\($url)/andamio-linux-x86_64.AppImage" },
+                "darwin-aarch64": { signature: $mac, url: "\($url)/andamio-macos.app.tar.gz" },
+                "darwin-x86_64":  { signature: $mac, url: "\($url)/andamio-macos.app.tar.gz" }
+              }
+            }' > latest.json
+          cat latest.json
+
+      - name: Release desktop-v${{ env.V }}
+        working-directory: dist
+        run: |
+          gh release create "desktop-v$V" -R "$GITHUB_REPOSITORY" --title "andamio de escritorio $V" --notes "$(cat <<EOF
+          El panel de andamio en su propia ventana. Necesita andamio instalado en tu máquina (en Windows, dentro de WSL). La app busca versiones nuevas sola y verifica su firma antes de instalarlas.
+
+          - **Windows:** andamio-windows-x64-setup.exe (SmartScreen avisa: "Más información" → "Ejecutar de todas formas").
+          - **macOS** (Apple Silicon e Intel): andamio-macos.dmg. La primera vez: Ajustes del Sistema → Privacidad y seguridad → "Abrir igualmente".
+          - **Linux:** andamio-linux-x86_64.AppImage (se actualiza sola; chmod +x) o andamio-linux-amd64.deb.
+          EOF
+          )" ./*

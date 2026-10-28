@@ -1,0 +1,11 @@
+# gitleaks: sus reglas de siempre, más lo revisado a mano que NO es un secreto.
+[extend]
+useDefault = true
+
+# La llave PÚBLICA del actualizador de andamio de escritorio (minisign, en base64): va dentro de la
+# app para verificar las firmas de las versiones nuevas. La privada vive en los secretos del repo.
+[[allowlists]]
+description = "Llave pública del actualizador de escritorio"
+paths = ['''desktop/src-tauri/tauri\.conf\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"pubkey":\s*"[A-Za-z0-9+/=]+",?\s*$''']

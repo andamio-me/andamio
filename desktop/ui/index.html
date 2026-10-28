@@ -1,0 +1,149 @@
+<!doctype html>
+<!-- La página de arranque de andamio de escritorio: se ve mientras el panel arranca en WSL y, si
+     no pudo, dice por qué con un botón para reintentar. Cuando el panel está, la app navega a él. -->
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>andamio</title>
+  <style>
+    :root {
+      --bg: oklch(0.985 0.004 262); --ink: oklch(0.22 0.02 262); --muted: oklch(0.52 0.02 262);
+      --line: oklch(0.9 0.008 262); --accent: oklch(0.55 0.17 262); --bad: oklch(0.55 0.19 25);
+      --surface: oklch(1 0 0);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: oklch(0.17 0.012 262); --ink: oklch(0.94 0.01 262); --muted: oklch(0.68 0.02 262);
+        --line: oklch(0.3 0.015 262); --accent: oklch(0.72 0.14 262); --bad: oklch(0.72 0.16 25);
+        --surface: oklch(0.21 0.014 262);
+      }
+    }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg); color: var(--ink); display: grid; place-items: center;
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { width: min(520px, calc(100vw - 48px)); display: grid; gap: 16px; justify-items: center; text-align: center; }
+    svg { color: var(--ink); }
+    h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+    p { margin: 0; color: var(--muted); }
+    .bar { width: 160px; height: 3px; border-radius: 999px; background: var(--line); overflow: hidden; }
+    .bar span { display: block; width: 40%; height: 100%; border-radius: inherit; background: var(--accent); }
+    @media (prefers-reduced-motion: no-preference) {
+      .bar span { animation: slide 1.2s cubic-bezier(0.65, 0, 0.35, 1) infinite alternate; }
+    }
+    @keyframes slide { from { transform: translateX(-10%); } to { transform: translateX(160%); } }
+    /* Nada de style="…" en los elementos: la CSP de la app los bloquea (lleva hashes, y con ellos
+       'unsafe-inline' no vale). Todo el estilo va aquí. */
+    .starting { display: grid; gap: 14px; justify-items: center; }
+    .error { display: none; width: 100%; text-align: left; gap: 12px; }
+    .error h1 { color: var(--bad); }
+    pre {
+      margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+      color: var(--ink); font: 13px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap;
+      overflow-wrap: anywhere; max-height: 50vh; overflow: auto;
+    }
+    button {
+      justify-self: start; font: 500 14px system-ui, sans-serif; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--accent); background: var(--accent); color: var(--bg);
+    }
+    button:focus-visible { outline: 3px solid color-mix(in oklch, var(--accent) 35%, transparent); outline-offset: 2px; }
+    body.failed .starting { display: none; }
+    body.failed .error { display: grid; }
+    /* La actualización: barra con el avance real de la descarga (no la animada del arranque). */
+    .update { display: none; gap: 14px; justify-items: center; }
+    body.updating .starting { display: none; }
+    body.updating .update { display: grid; }
+    .bar.real span { width: 0%; animation: none; transition: width 0.3s cubic-bezier(0.25, 1, 0.5, 1); }
+    .bar.real { width: 240px; }
+    #percent { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <main>
+    <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M6 3v18M18 3v18" /><path d="M4 7h16M4 13h16M4 19h16" /><path d="M6 13l12-6" stroke-width="1.5" />
+    </svg>
+    <div class="starting">
+      <h1 id="starting">Arrancando el panel…</h1>
+      <div class="bar" role="progressbar" aria-label="andamio"><span></span></div>
+      <p id="hint">andamio corre en tu máquina y habla con tu servidor por SSH.</p>
+    </div>
+    <div class="update" aria-live="polite">
+      <h1 id="updating">Actualizando andamio de escritorio</h1>
+      <div class="bar real" role="progressbar" aria-label="andamio" aria-valuemin="0" aria-valuemax="100"><span id="fill"></span></div>
+      <p><span id="phase">Descargando la versión nueva…</span> <span id="percent"></span></p>
+    </div>
+    <div class="error" role="alert">
+      <h1 id="failed">No se pudo abrir el panel</h1>
+      <pre id="message"></pre>
+      <button type="button" id="retry">Reintentar</button>
+    </div>
+  </main>
+  <script>
+    const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+    const $ = (id) => document.getElementById(id);
+    let t = {};
+    invoke("texts").then((x) => {
+      t = x;
+      document.documentElement.lang = x.retry === "Reintentar" ? "es" : "en";
+      for (const k of ["starting", "hint", "failed", "retry", "updating"]) $(k).textContent = x[k];
+    });
+    const started = Date.now();
+    const mb = (n) => (n / 1048576).toFixed(1) + " MB";
+    // La ventana llega aquí con #update cuando aceptaste una versión nueva.
+    async function pollUpdate() {
+      const s = await invoke("update_status").catch(() => null);
+      if (s && s.error) {
+        $("failed").textContent = t.updateFailed || "No se pudo actualizar";
+        $("retry").textContent = t.back || "Volver al panel";
+        $("message").textContent = s.error;
+        document.body.classList.replace("updating", "failed");
+        return;
+      }
+      if (s && s.phase === "installing") {
+        $("phase").textContent = t.installing || "Instalando…";
+        $("percent").textContent = "";
+        $("fill").style.width = "100%";
+      } else if (s) {
+        $("phase").textContent = t.downloading || "Descargando la versión nueva…";
+        if (s.total) {
+          const p = Math.min(100, Math.round((s.done / s.total) * 100));
+          $("fill").style.width = p + "%";
+          $("fill").parentElement.setAttribute("aria-valuenow", p);
+          $("percent").textContent = `${p}% · ${mb(s.done)} de ${mb(s.total)}`;
+        } else if (s.done) {
+          $("percent").textContent = mb(s.done);
+        }
+      }
+      setTimeout(pollUpdate, 300);
+    }
+    async function poll() {
+      const err = await invoke("startup_error").catch(() => null);
+      if (err) {
+        $("message").textContent = err;
+        document.body.classList.add("failed");
+        return;
+      }
+      if (Date.now() - started > 25000 && t.slow) $("hint").textContent = t.slow;
+      setTimeout(poll, 400);
+    }
+    const updating = location.hash === "#update";
+    $("retry").addEventListener("click", () => {
+      document.body.classList.remove("failed");
+      if (updating) {
+        invoke("back_to_panel");
+        return;
+      }
+      invoke("retry").then(() => setTimeout(poll, 400));
+    });
+    if (updating) {
+      document.body.classList.add("updating");
+      pollUpdate();
+    } else {
+      poll();
+    }
+  </script>
+</body>
+</html>
