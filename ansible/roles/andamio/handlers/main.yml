@@ -14,9 +14,3 @@
   ansible.builtin.systemd_service:
     name: andamio-telegram-bot.service
     state: restarted
-
-- name: Reiniciar Seafile
-  become: true
-  become_user: "{{ andamio_user }}"
-  ansible.builtin.command: docker restart seafile
-  changed_when: true

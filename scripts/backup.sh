@@ -39,22 +39,14 @@ if docker ps --format '{{.Names}}' | grep -qx mariadb; then
   mv "$STAGING/mariadb.sql.tmp" "$STAGING/mariadb.sql"
 fi
 
-echo "==> Seafile (MariaDB, dump coherente)"
-# Los archivos de Seafile ya están en /srv/andamio/data/seafile; su base, en un
-# volumen de Docker: se respalda con un dump (copiar archivos de una base viva no sirve).
-if docker ps --format '{{.Names}}' | grep -qx seafile-mysql; then
-  docker exec seafile-mysql sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases --single-transaction --routines'     > "$STAGING/seafile-mysql.sql.tmp"
-  mv "$STAGING/seafile-mysql.sql.tmp" "$STAGING/seafile-mysql.sql"
-fi
-
-# Vaultwarden: su base SQLite (con WAL) copiada en vivo podría quedar a medias. En pausa un
-# instante (no recibe peticiones, sus archivos quietos) se copia la carpeta entera, coherente.
-if docker ps --format '{{.Names}}' | grep -qx vaultwarden; then
-  echo "==> Vaultwarden (copia coherente)"
-  docker pause vaultwarden > /dev/null
-  tar czf "$STAGING/vaultwarden.tgz" -C /srv/andamio/data/vaultwarden . || true
-  docker unpause vaultwarden > /dev/null
-fi
+# Stacks propios que necesitan una copia coherente (una base viva, archivos que cambian): su
+# stacks/<stack>/backup-hook.sh deja lo suyo en la carpeta de staging. Cada uno revisa si su
+# contenedor corre; si un hook falla, falla el backup (y avisa).
+for hook in /srv/andamio/infra/stacks/*/backup-hook.sh; do
+  [ -f "$hook" ] || continue
+  echo "==> $(basename "$(dirname "$hook")") (backup-hook.sh)"
+  bash "$hook" "$STAGING"
+done
 
 # Solo en el nivel de monitoreo completo (en el mínimo no hay Uptime Kuma).
 if docker volume inspect uptime-kuma_kuma_data > /dev/null 2>&1; then

@@ -1,7 +1,7 @@
 # Runbook: restaurar desde backup
 
-Antes de necesitarlo de verdad: `sudo scripts/restore-drill.sh` prueba el último
-backup contra producción sin tocarla (ADR 0020). Última prueba: 2026-10-08, 72 s.
+Antes de necesitarlo de verdad: `andamio backups` (o `sudo scripts/restore-check.sh` en el
+servidor) prueba que el último backup se lee y que sus bases cargan, sin tocar producción.
 
 Requisitos: contraseña de restic y credenciales de B2 (gestor de contraseñas).
 
@@ -40,18 +40,18 @@ docker compose -f /srv/andamio/infra/stacks/data/compose.yaml start redis
 (Con AOF activo, Redis carga el AOF si existe. Para forzar el RDB, mover antes
 `appendonlydir/` fuera del volumen.)
 
-## 5. Seafile (archivos + MariaDB)
-Los archivos vienen en `/tmp/restore/srv/andamio/data/seafile` y la base en
-`/tmp/restore/var/backups/andamio/seafile-mysql.sql`. Con el stack `seafile` detenido:
+## 5. Stacks propios
+Sus carpetas (`andamio_data_dirs`) vienen en `/tmp/restore/srv/andamio/data/<stack>`, y lo que
+dejó su `backup-hook.sh` (un dump, un `.tgz`), en `/tmp/restore/var/backups/andamio`. Con el
+stack detenido:
 ~~~bash
-docker compose -f /srv/andamio/infra/stacks/seafile/compose.yaml down
-sudo rsync -a --delete /tmp/restore/srv/andamio/data/seafile/ /srv/andamio/data/seafile/
-docker compose -f /srv/andamio/infra/stacks/seafile/compose.yaml up -d seafile-mysql
-sudo cat /tmp/restore/var/backups/andamio/seafile-mysql.sql   | docker exec -i seafile-mysql sh -c 'mariadb -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"'
-docker compose -f /srv/andamio/infra/stacks/seafile/compose.yaml up -d
+docker compose -f /srv/andamio/infra/stacks/<stack>/compose.yaml down
+sudo rsync -a --delete /tmp/restore/srv/andamio/data/<stack>/ /srv/andamio/data/<stack>/
+docker compose -f /srv/andamio/infra/stacks/<stack>/compose.yaml up -d
 ~~~
-Esperar a MariaDB por TCP (`-h 127.0.0.1`): durante su inicialización corre un
-servidor temporal que rechaza la contraseña de root.
+Si su hook dejó un `.tgz` (una copia coherente de la carpeta), úsalo en vez de la carpeta:
+`sudo tar xzf /tmp/restore/var/backups/andamio/<stack>.tgz -C /srv/andamio/data/<stack>`.
+Una base: cargar su dump con el cliente de su motor, como PostgreSQL en el paso 3.
 
 ## 6. Limpiar
 ~~~bash

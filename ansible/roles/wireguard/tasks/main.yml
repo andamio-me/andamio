@@ -98,7 +98,7 @@
     state: started
     enabled: true
 
-# Docker arranca después de la VPN: así puede publicar puertos en 10.8.0.1 (DNS de AdGuard).
+# Docker arranca después de la VPN: así puede publicar puertos en 10.8.0.1 (p. ej. un DNS propio).
 - name: Carpeta de overrides de docker.service
   ansible.builtin.file:
     path: /etc/systemd/system/docker.service.d

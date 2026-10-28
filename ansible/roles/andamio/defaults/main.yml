@@ -111,34 +111,41 @@ andamio_db_stacks: []   # p. ej. { stack: stacks/x, db: x }
 # estos días se borra en el respaldo diario. Para entonces ya está en los respaldos mensuales.
 andamio_archive_days: 90
 
-# Vaultwarden (stack propio): registro de cuentas abierto solo mientras creas la tuya.
-andamio_vaultwarden_signups: false
+# Stacks propios (los tuyos, además de los de la plataforma), declarados en tu config:
+# - andamio_data_dirs: sus carpetas en /srv/andamio/data (entran al backup diario), p. ej.
+#   { name: mi-stack, owner: "1000", mode: "0750" } (dueño root y modo 0700 si no se dicen).
+# - andamio_stack_env: lo no secreto que su .env necesita, además de sus secretos de sops,
+#   p. ej. { stacks/mi-stack: { MI_VARIABLE: valor } }.
+# - andamio_extra_units: units de host/systemd/ que se instalan y activan (p. ej. un firewall).
+# - Un backup coherente (pausar, dump): stacks/<stack>/backup-hook.sh, que scripts/backup.sh
+#   corre antes de subir, con la carpeta de staging como argumento.
+andamio_data_dirs: []
+andamio_stack_env: {}
+andamio_extra_units: []
 
 # Límite de peticiones por IP en todas las apps públicas (Traefik): frena bots y abusos sin
 # tocar a un usuario normal (una página pesada pide 50 a 100 recursos de golpe; el burst los cubre).
 andamio_rate_average: 100   # por segundo, sostenido
 andamio_rate_burst: 300     # de golpe
 
-# Cuota de Seafile (GB): tope de lo que guardo en el disco del VPS (ADR 0019).
-andamio_seafile_quota_gb: 30
-
 # Apps: cada carpeta apps/<app>/ con un app.yml (se buscan en tasks/main.yml y
 # se levantan después de los stacks).
 
 # Units: la salud de contenedores siempre; backup y Telegram si están activados.
-# DNS que wg-add-client pone a los clientes nuevos de la VPN: AdGuard, si su stack está activo (ADR 0033).
-andamio_vpn_dns: "{{ '10.8.0.1' if 'stacks/adguard' in andamio_stacks else '' }}"
+# DNS que wg-add-client pone a los clientes nuevos de la VPN (p. ej. 10.8.0.1, un DNS propio
+# en la VPN). Vacío: el de la red del cliente.
+andamio_vpn_dns: ""
 andamio_units: >-
   {{ ['andamio-container-health.service', 'andamio-container-health.timer']
      + (['andamio-backup.service', 'andamio-backup.timer'] if andamio_backups | bool else [])
      + (['andamio-daily-summary.service', 'andamio-daily-summary.timer',
          'andamio-telegram-bot.service'] if andamio_telegram | bool else [])
-     + (['andamio-honeypot-fw.service'] if 'stacks/honeypot' in andamio_stacks else []) }}
+     + andamio_extra_units }}
 andamio_enabled_units: >-
   {{ ['andamio-container-health.timer']
      + (['andamio-backup.timer'] if andamio_backups | bool else [])
      + (['andamio-daily-summary.timer', 'andamio-telegram-bot.service'] if andamio_telegram | bool else [])
-     + (['andamio-honeypot-fw.service'] if 'stacks/honeypot' in andamio_stacks else []) }}
+     + andamio_extra_units }}
 # Zona horaria de las tareas programadas de las apps (cron: en app.yml). La pone
 # `andamio app cron add` la primera vez (la de tu máquina); el servidor sigue en UTC.
 andamio_timezone: UTC

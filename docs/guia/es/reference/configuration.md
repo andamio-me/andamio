@@ -40,6 +40,27 @@ andamio_telegram: false
 | `andamio_repo` | Tu copia de andamio: de ahí baja el servidor su configuración |
 | `andamio_provider`, `andamio_provider_user` | Dónde está el VPS y el usuario que te dio el proveedor (los deja `andamio seguridad`; solo se usan para entrar la primera vez) |
 | `andamio_rate_average`, `andamio_rate_burst` | Límite de peticiones por IP en las apps públicas: por segundo sostenido (100) y de golpe (300) |
+| `andamio_pipeline` | El repo del pipeline de tus apps (`andamio-me/andamio`, lo deja `setup`). Sin él, el de tu copia |
+| `andamio_vpn_dns` | El DNS que reciben los clientes nuevos de la VPN (p. ej. `10.8.0.1`, un DNS propio en la VPN). Vacío: el de su red |
+| `andamio_open_ports` | Puertos abiertos a Internet a propósito, cada uno con su motivo: `andamio estado` los da por buenos |
+
+## Stacks propios
+
+Además de los de la plataforma, puedes correr los tuyos (un gestor de contraseñas, un DNS, un
+juego): una carpeta `stacks/<stack>/` con su `compose.yaml` y su `secrets.sops.env`, y en la config:
+
+```yaml
+andamio_stacks: [..., stacks/mi-stack]
+andamio_data_dirs:            # en /srv/andamio/data: entran al backup diario
+  - { name: mi-stack, owner: "1000", mode: "0750" }   # dueño root y 0700 si no se dicen
+andamio_stack_env:            # lo no secreto de su .env
+  stacks/mi-stack: { MI_VARIABLE: valor }
+andamio_extra_units: []       # units propios de host/systemd/ (se instalan y activan)
+```
+
+Si necesita una copia coherente (pausar el contenedor, un dump de su base), agrega
+`stacks/<stack>/backup-hook.sh`: el backup diario lo corre antes de subir, con la carpeta donde
+dejar lo suyo como argumento.
 
 ## Qué más es tuyo en tu copia
 

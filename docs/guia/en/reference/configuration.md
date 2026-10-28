@@ -40,6 +40,27 @@ andamio_telegram: false
 | `andamio_repo` | Your copy of andamio: the server pulls its configuration from there |
 | `andamio_provider`, `andamio_provider_user` | Where the VPS is and the user your provider gave you (set by `andamio security`; only used to get in the first time) |
 | `andamio_rate_average`, `andamio_rate_burst` | Per-IP request limit on public apps: per second sustained (100) and at once (300) |
+| `andamio_pipeline` | The repo your apps' pipeline comes from (`andamio-me/andamio`, set by `setup`). Without it, your copy's |
+| `andamio_vpn_dns` | The DNS new VPN clients get (e.g. `10.8.0.1`, your own DNS on the VPN). Empty: their network's |
+| `andamio_open_ports` | Ports open to the internet on purpose, each with its reason: `andamio status` treats them as fine |
+
+## Your own stacks
+
+Besides the platform's, you can run your own (a password manager, a DNS, a game): a
+`stacks/<stack>/` folder with its `compose.yaml` and `secrets.sops.env`, and in the config:
+
+```yaml
+andamio_stacks: [..., stacks/my-stack]
+andamio_data_dirs:            # under /srv/andamio/data: part of the daily backup
+  - { name: my-stack, owner: "1000", mode: "0750" }   # root and 0700 if not given
+andamio_stack_env:            # the non-secret part of its .env
+  stacks/my-stack: { MY_VARIABLE: value }
+andamio_extra_units: []       # your own units from host/systemd/ (installed and enabled)
+```
+
+If it needs a consistent copy (pausing the container, a dump of its database), add
+`stacks/<stack>/backup-hook.sh`: the daily backup runs it before uploading, with the folder to
+leave its files in as the argument.
 
 ## What else is yours in your copy
 

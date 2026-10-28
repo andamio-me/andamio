@@ -6319,10 +6319,8 @@ def internet_port_rows(cfg: dict, alias: str, listening: list[int], expected: se
     escuchan fuera de `expected` y el 22. Con la VPN activa, tus conexiones entran por ella y el
     firewall las trata distinto: no valdrían. Devuelve (filas, ¿por la VPN?)."""
     ip, ssh_port = cfg["andamio_server_ip"], int(cfg["andamio_ssh_port"])
-    honeypot = "stacks/honeypot" in (cfg.get("andamio_stacks") or [])   # SSH falso en el 22 (ADR 0034)
-    if honeypot:
-        expected = expected | {22}
     # Abiertos a propósito (andamio_open_ports, cada uno con su motivo): esperados, no una falla.
+    # También el 22, si algo tuyo lo usa a propósito (con SSH en otro puerto).
     opened = {int(p["port"]): p.get("motivo", "") for p in cfg.get("andamio_open_ports") or [] if str(p.get("port", "")).isdigit()}
     expected = expected | set(opened)
     on_vpn = remote(alias, 'echo "${SSH_CLIENT%% *}"').stdout.strip().startswith("10.8.0.")
@@ -6342,10 +6340,7 @@ def internet_port_rows(cfg: dict, alias: str, listening: list[int], expected: se
         if port in listening:
             net.append(["OK", "Internet", L(f"El puerto {port} está abierto a propósito: {motivo}",
                                             f"Port {port} is open on purpose: {motivo}"), ""])
-    if ssh_port != 22 and honeypot:
-        net.append(["OK", "Internet", L("El puerto 22 es el honeypot (SSH falso, sin salida a Internet)",
-                                        "Port 22 is the honeypot (fake SSH, no way out to the internet)"), ""])
-    elif ssh_port != 22:
+    if ssh_port != 22 and 22 not in opened:
         net.append(["FAIL", "Internet", L("El puerto 22 responde desde Internet", "Port 22 answers from the internet"),
                     L("ciérralo en el firewall de tu proveedor (y revisa sudo ufw status)",
                       "close it in your provider's firewall (and check sudo ufw status)")]

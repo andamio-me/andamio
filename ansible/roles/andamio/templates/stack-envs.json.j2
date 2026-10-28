@@ -1,14 +1,18 @@
 {# Los .env de andamio_env_stacks para andamio_files (stack-env.yml): secretos de sops + lo no secreto. #}
 [
 {% for s in andamio_env_stacks %}
+{# Lo que tu config le da a ese stack (andamio_stack_env), una línea por variable. #}
+{% set extra = namespace(env='') %}
+{% for k, v in (andamio_stack_env[s] | default({})).items() %}
+{% set extra.env = extra.env ~ k ~ '=' ~ v ~ '\n' %}
+{% endfor %}
 {{ {'dest': andamio_infra ~ '/' ~ s ~ '/.env', 'owner': andamio_user, 'group': andamio_user, 'mode': '0600',
     'content': lookup('community.sops.sops', playbook_dir ~ '/../' ~ s ~ '/secrets.sops.env',
                       input_type='dotenv', output_type='dotenv')
       ~ '\nANDAMIO_HOSTNAME=' ~ andamio_hostname ~ '\n'
       ~ ('COMPOSE_PROFILES=completo\n' if s == 'stacks/monitoring' and andamio_monitoring_level == 'completo' else '')
       ~ (andamio_data_env if s == 'stacks/data' else '')
-      ~ ('VW_SIGNUPS=' ~ (andamio_vaultwarden_signups | bool | lower) ~ '\n' if s == 'stacks/vaultwarden' else '')
-      ~ ('ANDAMIO_SERVER_IP=' ~ andamio_server_ip ~ '\n' if s == 'stacks/honeypot' else '')}
+      ~ extra.env}
    | to_json }}{{ ',' if not loop.last }}
 {% endfor %}
 ]

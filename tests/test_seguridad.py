@@ -212,7 +212,7 @@ def test_harden_fingerprint(andamio, tmp_path, monkeypatch):
     monkeypatch.setattr(andamio, "ROOT", tmp_path)
     cfg = {"andamio_ssh_port": 5022, "andamio_stacks": ["stacks/proxy"]}
     base = andamio.harden_fingerprint(cfg)
-    assert andamio.harden_fingerprint(dict(cfg, andamio_stacks=["stacks/proxy", "stacks/umami"])) == base
+    assert andamio.harden_fingerprint(dict(cfg, andamio_stacks=["stacks/proxy", "stacks/mi-stack"])) == base
     (tmp_path / "host/systemd/y.service").write_text("[Unit]\nDescription=otra\n")   # host/ que el blindaje no usa
     assert andamio.harden_fingerprint(cfg) == base
     assert andamio.harden_fingerprint(dict(cfg, andamio_ssh_port=6022)) != base

@@ -17,7 +17,7 @@ install -d -m 700 "$DIR"
 [ -e "$DIR/$NAME.conf" ] && { echo "Ya existe el cliente $NAME"; exit 1; }
 grep -q "AllowedIPs = 10.8.0.$OCT/32" /etc/wireguard/wg0.conf && { echo "La IP 10.8.0.$OCT ya está en uso"; exit 1; }
 
-# DNS para el cliente (AdGuard en la VPN, ADR 0033); sin él, usa el de su red.
+# DNS para el cliente (andamio_vpn_dns, p. ej. un DNS propio en la VPN); sin él, usa el de su red.
 DNS_LINE=${ANDAMIO_VPN_DNS:+DNS = $ANDAMIO_VPN_DNS}
 
 umask 077

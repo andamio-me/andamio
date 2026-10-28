@@ -72,7 +72,7 @@
     - { path: "{{ andamio_root }}", mode: "0750" }
     - { path: "{{ andamio_root }}/apps", mode: "0755" }
 
-# Datos en disco: de root (Seafile y los de cada app viven aquí); tu usuario solo la atraviesa
+# Datos en disco: de root (los de tus stacks y los de cada app viven aquí); tu usuario solo la atraviesa
 # para llegar a data/apps, que sí es suya (scripts/app-volumes.sh crea ahí las carpetas).
 - name: Carpeta de datos
   ansible.builtin.file:
@@ -231,70 +231,18 @@
 - name: Registro de apps
   ansible.builtin.include_tasks: registry.yml
 
-# Archivos de Seafile: dentro de /srv/andamio para que entren al backup diario.
-# 0711: se puede atravesar pero no listar. El nginx del contenedor corre como
-# www-data y sirve avatares y miniaturas desde aquí (con 0700 daba 403).
-- name: Carpeta de datos de Seafile
-  when: "'stacks/seafile' in andamio_stacks_active"
+# Las carpetas de datos de tus stacks propios (andamio_data_dirs): dentro de /srv/andamio, así
+# entran al backup diario. Dueño: el usuario con el que corre su imagen (root si no se dice).
+- name: Carpetas de datos de los stacks propios
   ansible.builtin.file:
-    path: "{{ andamio_root }}/data/seafile"
+    path: "{{ andamio_root }}/data/{{ item.name }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0711"
-
-# Datos de Vaultwarden: dentro de /srv/andamio (backup diario). Solo root: ahí está la base
-# con las bóvedas (cifradas) y la llave con la que firma las sesiones.
-- name: Carpeta de datos de Vaultwarden
-  when: "'stacks/vaultwarden' in andamio_stacks_active"
-  ansible.builtin.file:
-    path: "{{ andamio_root }}/data/vaultwarden"
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
-
-# Datos de AdGuard Home (config, filtros, estadísticas): dentro de /srv/andamio. Solo root.
-- name: Carpeta de datos de AdGuard Home
-  when: "'stacks/adguard' in andamio_stacks_active"
-  ansible.builtin.file:
-    path: "{{ andamio_root }}/data/adguard"
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
-
-# El mundo de Minecraft: del usuario con el que corre la imagen (1000). Dentro de /srv/andamio:
-# entra al backup diario.
-- name: Carpeta de datos de Minecraft
-  when: "'stacks/minecraft' in andamio_stacks_active"
-  ansible.builtin.file:
-    path: "{{ andamio_root }}/data/minecraft"
-    state: directory
-    owner: "1000"
-    group: "1000"
-    mode: "0750"
-
-# Base del colector del honeypot: del usuario de Cowrie (999), que es con el que corre.
-- name: Carpeta de datos del honeypot
-  when: "'stacks/honeypot' in andamio_stacks_active"
-  ansible.builtin.file:
-    path: "{{ andamio_root }}/data/honeypot"
-    state: directory
-    owner: "999"
-    group: "999"
-    mode: "0700"
-
-# Archivos de n8n (config y datos binarios de las ejecuciones): dentro de /srv/andamio. El
-# contenedor corre como el usuario node (UID 1000).
-- name: Carpeta de datos de n8n
-  when: "'stacks/n8n' in (andamio_db_stacks | map(attribute='stack'))"
-  ansible.builtin.file:
-    path: "{{ andamio_root }}/data/n8n"
-    state: directory
-    owner: "1000"
-    group: "1000"
-    mode: "0700"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default(item.owner | default('root')) }}"
+    mode: "{{ item.mode | default('0700') }}"
+  loop: "{{ andamio_data_dirs }}"
+  loop_control:
+    label: "{{ item.name }}"
 
 # La carpeta de la config dinámica puede no venir en el repo (git no guarda carpetas
 # vacías: su contenido se genera aquí).
@@ -428,7 +376,7 @@
     state: absent
 
 # Todos en una tarea (no una por stack). Si uno falla, se detiene ahí y dice cuál.
-# Servidores a demanda (etiqueta lazymc.enabled, ADR 0035): los prende lazymc cuando alguien entra.
+# Servidores a demanda (etiqueta lazymc.enabled): los prende un proxy lazymc cuando alguien entra.
 # `up` también los prendería, y lazymc no duerme lo que no prendió él: los que estaban apagados,
 # vuelven a apagarse. Los que estaban prendidos (alguien jugando) no se tocan.
 - name: Stacks levantados
@@ -510,25 +458,6 @@
   ansible.builtin.command: docker restart traefik
   when: andamio_acme_perms.changed and not ansible_check_mode
   changed_when: true
-
-# Seafile (stack propio, no de la plataforma): crea su seafile.conf en el primer
-# arranque; la cuota va después.
-- name: Cuota de Seafile
-  when: "'stacks/seafile' in andamio_stacks_active"
-  block:
-    - name: seafile.conf creado por Seafile
-      ansible.builtin.wait_for:
-        path: "{{ andamio_root }}/data/seafile/seafile/conf/seafile.conf"
-        timeout: 300
-
-    - name: Cuota de Seafile ({{ andamio_seafile_quota_gb }} GB por usuario)
-      community.general.ini_file:
-        path: "{{ andamio_root }}/data/seafile/seafile/conf/seafile.conf"
-        section: quota
-        option: default
-        value: "{{ andamio_seafile_quota_gb }}"
-        mode: "0644"
-      notify: Reiniciar Seafile
 
 # --- Stacks con base en el Postgres compartido ---
 # Crear usuario y base ANTES de levantarlos: su instalación inicial la necesita.

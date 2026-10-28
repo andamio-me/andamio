@@ -3,8 +3,8 @@
 # puede leer y sus dumps de PostgreSQL y de MariaDB (si alguna app la usa) cargan en bases
 # temporales, que se comparan con producción. No toca producción. Lo corre `andamio backups`; a mano: sudo scripts/restore-check.sh
 #
-# Para una prueba completa de tus propios datos (archivos, otras bases), ver
-# scripts/restore-drill.sh como ejemplo.
+# Los datos de tus stacks propios (archivos en /srv/andamio/data, lo de sus backup-hook.sh) van
+# en el mismo backup: restaurarlos es docs/runbooks/restaurar-backup.md.
 set -euo pipefail
 # Con sudo el entorno se pierde: entonces vale el idioma de /etc/andamio/andamio.env.
 LNG=en; lang=${ANDAMIO_LANG:-$(sed -n 's/^ANDAMIO_LANG=//p' /etc/andamio/andamio.env 2> /dev/null || true)}
