@@ -111,6 +111,11 @@ git add -A && git commit -m "andamio: my server" && git push
 andamio server
 ```
 
+**Only want a secure VPS, no platform yet?** `andamio security` just locks it down: your key,
+your user, SSH without passwords or root on another port (checked before moving it),
+firewall and fail2ban, verified from the outside. It needs no GitHub account; `andamio setup`
+connects it later if you want the rest.
+
 ### Before `andamio server`: two checks at your provider
 
 1. **Its firewall.** Azure, AWS, Oracle and Google Cloud (and some Hetzner or
@@ -378,6 +383,14 @@ case renewal breaks). Renewing is the same command with the new files.
 A Cloudflare Origin Certificate is only trusted through Cloudflare's proxy. Your VPN-only
 panels don't go through it, so browsers will reject it there. If your domain is already on
 Cloudflare, `cloudflare` mode is free, renews itself and works for both.
+
+### Your own stacks
+
+Beyond apps, you can run your own services (a password manager, a DNS for your VPN, a game
+server): a `stacks/<stack>/` folder in your copy with its `compose.yaml` and encrypted
+secrets, listed in `andamio_stacks`. Your config declares what else it needs (data folders
+that join the daily backup, settings for its `.env`, a systemd unit) and an optional
+`backup-hook.sh` makes a consistent copy (a pause, a dump). See the configuration reference.
 
 ## Security model, honestly
 

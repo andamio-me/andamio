@@ -115,6 +115,11 @@ git add -A && git commit -m "andamio: mi servidor" && git push
 andamio servidor
 ```
 
+**¿Solo quieres un VPS seguro, sin la plataforma todavía?** `andamio seguridad` solo lo
+blinda: tu llave, tu usuario, SSH sin contraseñas ni root en otro puerto (comprobado antes
+de moverlo), firewall y fail2ban, verificado desde afuera. No necesita cuenta de GitHub;
+`andamio setup` lo conecta después si quieres el resto.
+
 ### Antes de `andamio servidor`: dos comprobaciones en tu proveedor
 
 1. **Su firewall.** Azure, AWS, Oracle y Google Cloud (y algunos Hetzner o DigitalOcean)
@@ -386,6 +391,15 @@ Un Origin Certificate de Cloudflare solo es válido a través del proxy de Cloud
 paneles privados (por la VPN) no pasan por ahí, así que los navegadores lo rechazarán en
 ellos. Si tu dominio ya está en Cloudflare, el modo `cloudflare` es gratis, se renueva solo
 y sirve para ambos.
+
+### Tus propios stacks
+
+Además de apps, puedes correr servicios tuyos (un gestor de contraseñas, un DNS para tu VPN,
+un servidor de un juego): una carpeta `stacks/<stack>/` en tu copia con su `compose.yaml` y
+sus secretos cifrados, en la lista `andamio_stacks`. Tu config declara lo demás que necesita
+(carpetas de datos que entran al backup diario, ajustes de su `.env`, un unit de systemd) y un
+`backup-hook.sh` opcional hace una copia coherente (una pausa, un dump). Ver la referencia de
+configuración.
 
 ## El modelo de seguridad, con honestidad
 
