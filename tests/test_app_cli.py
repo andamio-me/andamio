@@ -8,6 +8,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+import yaml
 
 from conftest import APP_YML, git
 
@@ -193,6 +194,37 @@ def test_ci_snippet_for_one_of_several_apps(fake_copy, env):
     plain = subprocess.run([str(fake_copy / "bin" / "forge"), "ci-snippet", "yo/infra", "a" * 40], cwd=fake_copy, env=env,
                            capture_output=True, text=True).stdout
     assert "andamio.yml" in plain and "paths:" not in plain and "deploy_key" not in plain
+
+
+def test_ci_snippet_passes_secrets_across_owners(fake_copy, env):
+    """inherit no cruza de dueño: los secretos van explícitos; --inherit, para versiones viejas del pipeline."""
+    forge = str(fake_copy / "bin" / "forge")
+    out = subprocess.run([forge, "ci-snippet", "andamio-me/andamio", "a" * 40], cwd=fake_copy, env=env,
+                         capture_output=True, text=True).stdout
+    assert "uses: andamio-me/andamio/.github/workflows/app-build.yml@" + "a" * 40 in out
+    assert "ANDAMIO_SECRETS: ${{ toJSON(secrets) }}" in out and "secrets: inherit" not in out
+    yaml.safe_load(out)
+    old = subprocess.run([forge, "ci-snippet", "yo/infra", "a" * 40, "--inherit"], cwd=fake_copy, env=env,
+                         capture_output=True, text=True).stdout
+    assert "secrets: inherit" in old and "ANDAMIO_SECRETS" not in old
+
+
+def test_ci_repin_moves_to_the_public_pipeline(fake_copy, env, tmp_path):
+    """Un pipeline viejo (de tu copia, con inherit) pasa al público, con los secretos explícitos."""
+    wf = tmp_path / ".github" / "workflows" / "andamio.yml"
+    wf.parent.mkdir(parents=True)
+    wf.write_text(f"jobs:\n  build:\n    uses: yo/infra/.github/workflows/app-build.yml@{'a' * 40}\n"
+                  "    with:\n      image: web\n    secrets: inherit   # la llave de deploy\n")
+    forge = str(fake_copy / "bin" / "forge")
+    r = subprocess.run([forge, "ci-repin", str(tmp_path), "andamio-me/andamio", "b" * 40], cwd=fake_copy, env=env,
+                       capture_output=True, text=True)
+    assert r.stdout.strip() == f"{'a' * 40} {'b' * 40}", r.stderr
+    job = yaml.safe_load(wf.read_text())["jobs"]["build"]
+    assert job["uses"] == f"andamio-me/andamio/.github/workflows/app-build.yml@{'b' * 40}"
+    assert job["secrets"] == {"ANDAMIO_SECRETS": "${{ toJSON(secrets) }}"}
+    again = subprocess.run([forge, "ci-repin", str(tmp_path), "andamio-me/andamio", "b" * 40], cwd=fake_copy, env=env,
+                           capture_output=True, text=True)
+    assert again.stdout.strip() == ""
 
 
 def test_ci_runs_rejects_a_bad_workflow_name(fake_copy, env):

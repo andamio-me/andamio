@@ -97,3 +97,21 @@
     name: wg-quick@wg0
     state: started
     enabled: true
+
+# Docker arranca después de la VPN: así puede publicar puertos en 10.8.0.1 (DNS de AdGuard).
+- name: Carpeta de overrides de docker.service
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Docker después de la VPN
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../host/systemd/docker.service.d/after-wireguard.conf"
+    dest: /etc/systemd/system/docker.service.d/after-wireguard.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Recargar systemd (Docker después de la VPN)

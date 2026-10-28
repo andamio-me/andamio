@@ -8,13 +8,13 @@ description: Deja tu máquina lista y crea tu copia privada de andamio.
 En tu máquina (Linux, macOS o la terminal de Ubuntu en WSL):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/andamio-me/andamio/main/install.sh | sh
 ```
 
 Es corto: léelo antes si prefieres. Hace lo mismo que esto, a mano:
 
 ```bash
-git clone https://github.com/Geovani29/andamio.git ~/andamio
+git clone https://github.com/andamio-me/andamio.git ~/andamio
 ~/andamio/bin/andamio setup
 ```
 

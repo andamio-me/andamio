@@ -23,6 +23,11 @@ OWNER=$(cfg andamio_github_owner)
 DOMAIN=$(cfg andamio_domain)
 # Este repo en GitHub (dueño/nombre), de andamio_repo: ahí vive el workflow app-build.yml.
 INSTANCE_REPO=$(cfg andamio_repo | sed -E 's#^[^:]+:##; s#\.git$##')
+# El pipeline que usan las apps: el público de andamio (andamio_pipeline, lo escribe setup), que
+# sirve a repos públicos y de cualquier dueño; sin él, el de esta copia (como antes).
+PIPELINE_REPO=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1])).get("andamio_pipeline") or "")' \
+  "$INFRA/ansible/group_vars/all.yml")
+PIPELINE_REPO=${PIPELINE_REPO:-$INSTANCE_REPO}
 # Con varios servidores, a cuál va este comando (lo decide la carpeta donde estás).
 COPIES="${XDG_CONFIG_HOME:-$HOME/.config}/andamio/copias"
 if [ -f "$COPIES" ] && [ "$(grep -c . "$COPIES")" -gt 1 ] && [ $# -ge 2 ]; then
@@ -264,12 +269,12 @@ app_create() {
   forge auth-ok || die "$(L "Tu CLI de $(forge name) no tiene sesión iniciada" "Your $(forge name) CLI isn't logged in") ($(forge tools | cut -f2))"
   [ -z "$repo" ] || forge repo-exists "$repo" \
     || die "$(L "No existe $repo en $(forge name) (o no tienes acceso)" "$repo doesn't exist on $(forge name) (or you have no access)")"
-  # GitHub no deja que un repo público use un workflow de un repo privado (este, que guarda
-  # tu configuración): el deploy fallaría sin logs. Mejor avisar antes de tocar nada.
-  if [ -n "$repo" ] && ! forge repo-private "$repo" && forge repo-private "$INSTANCE_REPO"; then
-    die "$(L "$repo es público y el pipeline vive en $INSTANCE_REPO, que es privado: $(forge name) no deja que un repo público lo use.
+  # GitHub no deja que un repo público use un workflow de un repo privado (como esta copia, si
+  # el pipeline sale de aquí): el deploy fallaría sin logs. Mejor avisar antes de tocar nada.
+  if [ -n "$repo" ] && ! forge repo-private "$repo" && forge repo-private "$PIPELINE_REPO"; then
+    die "$(L "$repo es público y el pipeline vive en $PIPELINE_REPO, que es privado: $(forge name) no deja que un repo público lo use.
   Haz privado el repo de tu app (gh repo edit $repo --visibility private) y vuelve a correr." \
-             "$repo is public and the pipeline lives in $INSTANCE_REPO, which is private: $(forge name) doesn't let a public repo use it.
+             "$repo is public and the pipeline lives in $PIPELINE_REPO, which is private: $(forge name) doesn't let a public repo use it.
   Make your app's repo private (gh repo edit $repo --visibility private) and run again.")"
   fi
 
@@ -390,8 +395,8 @@ EOF
             "Server: .env, database, Redis and deploy key (asks for your sudo password)")"
   "$INFRA/bin/andamio" _apply "$name" --registry   # el registro de apps y esta app; nada más
 
-  # El CI de la app usa el pipeline de ESTE repo: si es privado, la forja exige permitirlo.
-  [ "$(forge ci-allow-reuse "$INSTANCE_REPO")" = cambiado ] \
+  # Si el CI de la app usa el pipeline de ESTE repo y es privado, la forja exige permitirlo.
+  [ "$PIPELINE_REPO" = "$INSTANCE_REPO" ] && [ "$(forge ci-allow-reuse "$INSTANCE_REPO")" = cambiado ] \
     && step "$(L "Permití que tus repos usen el pipeline de $INSTANCE_REPO" "Allowed your repos to use $INSTANCE_REPO's pipeline")"
 
   local vpn=""; [ "$access" = vpn ] && vpn="  ($(L "con la VPN" "over the VPN"))"
@@ -420,14 +425,33 @@ EOF
 EOF
 }
 
+# Versión fija del pipeline (SHA): el último tag app-build-vN. Del público se le pregunta a
+# GitHub; de esta copia, su tag local, o el último commit que cambió app-build.yml.
+pipeline_sha() {
+  if [ "$PIPELINE_REPO" = "$INSTANCE_REPO" ]; then
+    git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
+      || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml
+    return
+  fi
+  local refs tag sha
+  refs=$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags "https://github.com/$PIPELINE_REPO.git" 'app-build-v*' 2> /dev/null) \
+    || die "$(L "No pude consultar las versiones del pipeline en $PIPELINE_REPO (¿sin internet, o el repo no es público?)" \
+               "Couldn't look up the pipeline versions in $PIPELINE_REPO (no internet, or the repo isn't public?)")"
+  tag=$(sed -E 's#.*refs/tags/##; s#\^\{\}$##' <<< "$refs" | sort -uV | tail -1)
+  [ -n "$tag" ] || die "$(L "$PIPELINE_REPO no tiene versiones del pipeline (tags app-build-v*)" \
+                            "$PIPELINE_REPO has no pipeline versions (app-build-v* tags)")"
+  # Un tag anotado apunta a sí mismo: su commit es la línea ^{}.
+  sha=$(awk -v t="refs/tags/$tag^{}" '$2 == t { print $1 }' <<< "$refs")
+  [ -n "$sha" ] || sha=$(awk -v t="refs/tags/$tag" '$2 == t { print $1 }' <<< "$refs")
+  echo "$sha"
+}
+
 # Sube al repo de la app lo que le falte para desplegarse: el Dockerfile generado y el
 # pipeline (.github/workflows/andamio.yml), en un commit, por SSH (con tu llave: el token
 # de gh no necesita permiso de workflows). Pregunta antes; el push dispara el primer deploy.
 push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   local dir=$1 repo=$2 name=$3
-  # Versión fija del pipeline: el último tag app-build-v*, o el último commit que lo cambió.
-  local sha; sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*' 2> /dev/null)" 2> /dev/null \
-    || git -C "$INFRA" log -1 --format=%H -- .github/workflows/app-build.yml)
+  local sha; sha=$(pipeline_sha)
   # Una de varias apps del repo (APPDIR): su propio archivo, andamio-<app>.yml.
   local wfile=andamio.yml snippet=(--branch "${BRANCH:-main}")
   if [ -n "${APPDIR:-}" ]; then
@@ -437,14 +461,14 @@ push_pipeline() {  # push_pipeline <clon> <dueño/repo> <app>
   fi
   if [ -n "${APPDIR:-}" ] && [ ! -f "$dir/.github/workflows/$wfile" ]; then
     mkdir -p "$dir/.github/workflows"
-    forge ci-snippet "$INSTANCE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/$wfile"
+    forge ci-snippet "$PIPELINE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/$wfile"
   elif [ -z "${APPDIR:-}" ] && ! grep -rqs "workflows/app-build.yml@" "$dir/.github/workflows"; then
     mkdir -p "$dir/.github/workflows"
-    forge ci-snippet "$INSTANCE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/andamio.yml"
+    forge ci-snippet "$PIPELINE_REPO" "$sha" "${snippet[@]}" > "$dir/.github/workflows/andamio.yml"
   else
     # Ya trae pipeline, pero puede ser de otra copia de andamio (otro servidor, una prueba) o de
     # otra versión: se pone al día con esta, y así el push de abajo dispara el primer deploy.
-    forge ci-repin "$dir" "$INSTANCE_REPO" "$sha" > /dev/null
+    forge ci-repin "$dir" "$PIPELINE_REPO" "$sha" > /dev/null
   fi
   if [ ! -f "$dir/${APPDIR:+$APPDIR/}Dockerfile" ]; then
     echo
@@ -903,10 +927,15 @@ app_ci_update() {
     for n in "$INFRA"/apps/*/app.yml; do [ -f "$n" ] && names+=("$(basename "$(dirname "$n")")"); done
   fi
   [ ${#names[@]} -gt 0 ] || die "$(L "No hay apps" "No apps")"
-  # La versión que ya está en GitHub (la que el pipeline de las apps puede usar).
-  git -C "$INFRA" fetch -q origin main
-  sha=$(git -C "$INFRA" rev-parse origin/main)
-  L "Pipeline: $INSTANCE_REPO @ ${sha:0:8}" "Pipeline: $INSTANCE_REPO @ ${sha:0:8}"; echo
+  # La versión que ya está en GitHub (la que el pipeline de las apps puede usar): la última
+  # publicada del público, o el main de esta copia.
+  if [ "$PIPELINE_REPO" = "$INSTANCE_REPO" ]; then
+    git -C "$INFRA" fetch -q origin main
+    sha=$(git -C "$INFRA" rev-parse origin/main)
+  else
+    sha=$(pipeline_sha)
+  fi
+  echo "Pipeline: $PIPELINE_REPO @ ${sha:0:8}"
   ask "$(L "¿Desplegar cada app ahora con el pipeline nuevo? Si no, lo usa en su próximo push" \
            "Deploy each app now with the new pipeline? Otherwise it's used on its next push")" n && skip=""
   for n in "${names[@]}"; do
@@ -915,7 +944,7 @@ app_ci_update() {
     if ! git clone -q --depth 1 --branch "$br" "$(forge clone-url "$repo")" "$tmp/r" 2> /dev/null; then
       L "  ! $n: no pude clonar $repo ($br)" "  ! $n: couldn't clone $repo ($br)"; echo; rm -rf "$tmp"; continue
     fi
-    change=$(forge ci-repin "$tmp/r" "$INSTANCE_REPO" "$sha")
+    change=$(forge ci-repin "$tmp/r" "$PIPELINE_REPO" "$sha")
     if [ -z "$change" ]; then
       L "  ✓ $n: ya está al día" "  ✓ $n: already up to date"; echo
     else
@@ -1190,14 +1219,20 @@ PY
   [ -f "$work/repo/$newdir/Dockerfile" ] \
     || die "$(L "$repo no tiene $newdir/Dockerfile (agrégalo, o crea la app de nuevo con andamio app create para que te proponga uno)" \
                "$repo has no $newdir/Dockerfile (add it, or create the app again with andamio app create to get one proposed)")"
-  local wf=$work/repo/.github/workflows/andamio-$name.yml sha
-  # La misma versión del pipeline que ya usa (actualizarla es andamio app ci-update).
-  sha=$(grep -m1 -oE 'app-build\.yml@[0-9a-f]{40}' "$wf" 2> /dev/null | cut -d@ -f2 || true)
-  [ -n "$sha" ] || sha=$(git -C "$INFRA" rev-list -n1 "$(git -C "$INFRA" describe --tags --abbrev=0 --match 'app-build-v*')")
+  local wf=$work/repo/.github/workflows/andamio-$name.yml sha uses
+  # El mismo pipeline, en la misma versión, que ya usa (actualizarlo es andamio app ci-update).
+  uses=$(grep -m1 -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/app-build\.yml@[0-9a-f]{40}' "$wf" 2> /dev/null || true)
+  if [ -n "$uses" ]; then
+    sha=${uses##*@}; uses=${uses%%/.github/*}
+  else
+    sha=$(pipeline_sha); uses=$PIPELINE_REPO
+  fi
   local args=(--branch "$branch" --app "$name" --dir "$newdir" ${newctx:+--context "$newctx"})
   for w in "${watch[@]}"; do [ -n "$w" ] && args+=(--watch "$w"); done
+  # Una versión vieja del pipeline sigue con sus secretos a la antigua (no conoce ANDAMIO_SECRETS).
+  grep -qE '^ +secrets: inherit' "$wf" 2> /dev/null && args+=(--inherit)
   mkdir -p "$(dirname "$wf")"
-  forge ci-snippet "$INSTANCE_REPO" "$sha" "${args[@]}" > "$wf"
+  forge ci-snippet "$uses" "$sha" "${args[@]}" > "$wf"
 
   echo "$(L Carpeta Folder):   $appdir → $newdir"
   echo "$(L "Se construye desde" "Built from"):  ${context:-$appdir} → ${newctx:-$newdir}"

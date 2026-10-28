@@ -18,21 +18,39 @@ If for now you only want the VPS safe (or you'll set up the platform later):
 andamio security
 ```
 
-It asks three things (the IP, your user and the new SSH port) and does the same as
-`andamio server`'s lockdown, without installing anything else:
+If you come from `andamio setup` choosing "only lock down my VPS", it starts by itself. It asks:
+
+- the VPS's **IP**;
+- **where it is** (Azure, AWS, Hetzner…) and the **user your provider gave you** (the one that
+  already exists: `azureuser`, `ubuntu`, `root` or the one you picked when creating it);
+- **your new user**, different from the provider's (if you type the same, it's refused right
+  away). The provider's keeps existing and works on its web console, but can no longer log
+  in over SSH;
+- the **new SSH port**: Enter takes a random one. If your provider has a firewall, that's
+  where you open this same number (andamio tells you if you forget);
+- the **name to log in with** (`ssh <name>`): it suggests one that says which server it is.
+
+And it does the same as `andamio server`'s lockdown, without installing anything else:
 
 1. Creates your SSH key if you don't have one, and warns you it'll be your only way in (keep it).
 2. Checks the server's fingerprint and installs your key with the password or `.pem` your
    provider gave you (once).
 3. **Before moving SSH, it tests that the new port reaches the server.** If your provider's
    firewall blocks it, it stops and tells you where to open it: you don't get locked out.
+   Open it and run the command again: it resumes where it stopped.
 4. Creates your user and, in the same step, turns off passwords and root and turns on the firewall.
 5. Checks it from outside: root and the other users get refused with a password, and `22`
    no longer answers.
-6. Automatic patches, strict sshd, fail2ban, and the server's security check.
+6. Automatic patches, strict sshd and fail2ban.
+7. Applies the **pending patches** your provider's image ships with right away and, if they
+   need a reboot (the kernel), offers to do it now: nothing runs on the server yet.
+8. The server's security check, all in view.
 
-When you want the platform: `andamio init` fills in what's missing (domain, repo, HTTPS)
-without asking the above again, and then `andamio server`.
+Safe to repeat: what's done is skipped.
+
+When you want the platform: if your copy is local only (`setup` made it when you chose "only
+lock down"), `andamio setup` inside it connects it to GitHub. Then `andamio init` fills in
+what's missing (domain, repo, HTTPS) without asking the above again, and `andamio server`.
 
 ## Before: two checks at your provider
 

@@ -5,7 +5,9 @@ description: What andamio sets up on your server, how to check it and its limits
 
 ## What's done for you
 
-Without asking, `andamio server` leaves:
+Without asking, `andamio server` leaves (and `andamio security`, if you only want the VPS
+locked down, leaves the same except Docker, Traefik and the VPN; see
+[Your server](/en/docs/start/server/#only-lock-down-the-vps-andamio-security)):
 
 - **Your own user**, with sudo and a password. Root can't log in, and its password (the one
   your provider sends) is locked, on the web console too.

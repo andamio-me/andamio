@@ -1,10 +1,11 @@
-# El .env de un stack (andamio_stack): sus secretos vienen cifrados del repo
+# El .env de los stacks (andamio_env_stacks): sus secretos vienen cifrados del repo
 # (<stack>/secrets.sops.env) y se descifran en tu WSL con tu llave age; el servidor nunca tiene
 # la llave. Al final, lo no secreto que necesita (group_vars/all.yml). Lo usan main.yml (todos
-# los stacks) y servicios.yml (solo stacks/data, al cambiar PostgreSQL o Redis).
+# los stacks), servicios.yml y app.yml (solo stacks/data, al cambiar PostgreSQL o Redis).
+# Todos en una sola tarea (andamio_files): una ida y vuelta al servidor, no una por stack.
 
 - name: PostgreSQL y Redis caben en la memoria del servidor
-  when: andamio_stack == 'stacks/data'
+  when: "'stacks/data' in andamio_env_stacks"
   ansible.builtin.assert:
     that: >-
       (andamio_postgres_mem_mb | int) + (andamio_redis_mem_mb | int) * 3 // 2
@@ -16,17 +17,8 @@
       Bájalo con andamio servicios.
     quiet: true
 
-- name: .env de {{ andamio_stack }} (desde sops)
-  ansible.builtin.copy:
-    # Comillas dobles: así YAML convierte \n en salto de línea (en >- quedaría literal).
-    content: "{{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ andamio_stack ~ '/secrets.sops.env',
-      input_type='dotenv', output_type='dotenv') ~ '\nANDAMIO_HOSTNAME=' ~ andamio_hostname ~ '\n'
-      ~ ('COMPOSE_PROFILES=completo\n' if andamio_stack == 'stacks/monitoring' and andamio_monitoring_level == 'completo' else '')
-      ~ (andamio_data_env if andamio_stack == 'stacks/data' else '') }}"
-    dest: "{{ andamio_infra }}/{{ andamio_stack }}/.env"
-    owner: "{{ andamio_user }}"
-    group: "{{ andamio_user }}"
-    mode: "0600"
-  register: andamio_stack_env
+- name: .env de {{ andamio_env_stacks | length }} stack(s) (desde sops)
+  andamio_files:
+    files: "{{ lookup('template', 'stack-envs.json.j2') | from_json }}"
   no_log: true   # nunca mostrar secretos, ni en errores
   diff: false

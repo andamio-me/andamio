@@ -75,7 +75,7 @@ services:
   valkey:
     <<: *kv
     profiles: [valkey]
-    image: valkey/valkey:9.0.6-alpine
+    image: valkey/valkey:9.1.2-alpine
     command: >
       valkey-server
       --aclfile /etc/redis/acl/users.acl

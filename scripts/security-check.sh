@@ -189,5 +189,6 @@ fi
 fi   # fin de lo de la plataforma
 
 # --- Puertos que escuchan fuera de localhost (andamio los prueba desde Internet) ---
-ss -H -tln | awk '{ print $4 }' | grep -vE '^(127\.|\[::1\]|.*%lo)' | sed 's/.*://' | sort -un \
+# (Las direcciones de las redes de Docker, 172.16.0.0/12, no se alcanzan desde Internet.)
+ss -H -tln | awk '{ print $4 }' | grep -vE '^(127\.|172\.(1[6-9]|2[0-9]|3[01])\.|\[::1\]|.*%lo)' | sed 's/.*://' | sort -un \
   | while read -r port; do echo "LISTEN|tcp|$port"; done

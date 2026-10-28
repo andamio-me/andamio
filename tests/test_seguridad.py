@@ -196,3 +196,25 @@ def test_setup_again_reuses_the_local_copy(andamio, make_repo, tmp_path, monkeyp
     monkeypatch.setattr(andamio, "ask_yes", lambda *a, **k: False)
     andamio.setup_local_copy([])
     assert (existing / "ansible" / "group_vars" / "all.yml").read_text() == PARTIAL, "lo que ya tenía se queda"
+
+
+def test_harden_fingerprint(andamio, tmp_path, monkeypatch):
+    """El blindaje se salta solo si no cambió nada de lo que lo decide; agregar un stack no cuenta."""
+    (tmp_path / "ansible/roles/ssh/tasks").mkdir(parents=True)
+    (tmp_path / "ansible/site.yml").write_text("- hosts: servers\n")
+    role = tmp_path / "ansible/roles/ssh/tasks/main.yml"
+    role.write_text("- copy: {src: \"{{ playbook_dir }}/../host/ssh/x.conf\", dest: /etc/x}\n"
+                    "- debug: {msg: \"{{ andamio_ssh_port }}\"}\n")
+    for d in ("ssh", "systemd"):
+        (tmp_path / "host" / d).mkdir(parents=True)
+    (tmp_path / "host/ssh/x.conf").write_text("Port {{ andamio_ssh_port }}\n")
+    (tmp_path / "host/systemd/y.service").write_text("[Unit]\n")
+    monkeypatch.setattr(andamio, "ROOT", tmp_path)
+    cfg = {"andamio_ssh_port": 5022, "andamio_stacks": ["stacks/proxy"]}
+    base = andamio.harden_fingerprint(cfg)
+    assert andamio.harden_fingerprint(dict(cfg, andamio_stacks=["stacks/proxy", "stacks/umami"])) == base
+    (tmp_path / "host/systemd/y.service").write_text("[Unit]\nDescription=otra\n")   # host/ que el blindaje no usa
+    assert andamio.harden_fingerprint(cfg) == base
+    assert andamio.harden_fingerprint(dict(cfg, andamio_ssh_port=6022)) != base
+    (tmp_path / "host/ssh/x.conf").write_text("Port {{ andamio_ssh_port }}\nMaxAuthTries 3\n")
+    assert andamio.harden_fingerprint(cfg) != base

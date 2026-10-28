@@ -111,6 +111,9 @@ andamio_db_stacks: []   # p. ej. { stack: stacks/x, db: x }
 # estos días se borra en el respaldo diario. Para entonces ya está en los respaldos mensuales.
 andamio_archive_days: 90
 
+# Vaultwarden (stack propio): registro de cuentas abierto solo mientras creas la tuya.
+andamio_vaultwarden_signups: false
+
 # Límite de peticiones por IP en todas las apps públicas (Traefik): frena bots y abusos sin
 # tocar a un usuario normal (una página pesada pide 50 a 100 recursos de golpe; el burst los cubre).
 andamio_rate_average: 100   # por segundo, sostenido
@@ -123,15 +126,19 @@ andamio_seafile_quota_gb: 30
 # se levantan después de los stacks).
 
 # Units: la salud de contenedores siempre; backup y Telegram si están activados.
+# DNS que wg-add-client pone a los clientes nuevos de la VPN: AdGuard, si su stack está activo (ADR 0033).
+andamio_vpn_dns: "{{ '10.8.0.1' if 'stacks/adguard' in andamio_stacks else '' }}"
 andamio_units: >-
   {{ ['andamio-container-health.service', 'andamio-container-health.timer']
      + (['andamio-backup.service', 'andamio-backup.timer'] if andamio_backups | bool else [])
      + (['andamio-daily-summary.service', 'andamio-daily-summary.timer',
-         'andamio-telegram-bot.service'] if andamio_telegram | bool else []) }}
+         'andamio-telegram-bot.service'] if andamio_telegram | bool else [])
+     + (['andamio-honeypot-fw.service'] if 'stacks/honeypot' in andamio_stacks else []) }}
 andamio_enabled_units: >-
   {{ ['andamio-container-health.timer']
      + (['andamio-backup.timer'] if andamio_backups | bool else [])
-     + (['andamio-daily-summary.timer', 'andamio-telegram-bot.service'] if andamio_telegram | bool else []) }}
+     + (['andamio-daily-summary.timer', 'andamio-telegram-bot.service'] if andamio_telegram | bool else [])
+     + (['andamio-honeypot-fw.service'] if 'stacks/honeypot' in andamio_stacks else []) }}
 # Zona horaria de las tareas programadas de las apps (cron: en app.yml). La pone
 # `andamio app cron add` la primera vez (la de tu máquina); el servidor sigue en UTC.
 andamio_timezone: UTC

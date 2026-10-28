@@ -38,6 +38,8 @@ andamio_telegram: false
 | `andamio_registry` | The registry for your apps' images (`ghcr.io`) |
 | `andamio_github_owner` | The user or organization that owns your apps |
 | `andamio_repo` | Your copy of andamio: the server pulls its configuration from there |
+| `andamio_provider`, `andamio_provider_user` | Where the VPS is and the user your provider gave you (set by `andamio security`; only used to get in the first time) |
+| `andamio_rate_average`, `andamio_rate_burst` | Per-IP request limit on public apps: per second sustained (100) and at once (300) |
 
 ## What else is yours in your copy
 

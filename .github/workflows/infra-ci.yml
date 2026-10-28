@@ -1,12 +1,21 @@
 # CI de andamio: scripts, Ansible y secretos. Corre en cada push y PR a main.
 # Las herramientas van fijadas por versión (y gitleaks verificado por checksum).
+# Dónde corre: en el runner propio si el repo tiene la variable RUNNER=self-hosted
+# (tools/runner.sh), si no en los de GitHub. Un cambio que solo toca docs no lo corre.
 name: infra-ci
 
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
   pull_request:
     branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
+
+# Dos push seguidos: la corrida del primero ya no sirve.
+concurrency:
+  group: infra-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,19 +23,19 @@ permissions:
 jobs:
   shellcheck:
     name: Scripts (shellcheck)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
       - name: shellcheck
         run: |
-          pipx install shellcheck-py==0.11.0.1
+          pipx install --force shellcheck-py==0.11.0.1
           shellcheck --version
-          shellcheck -S warning scripts/*.sh bin/andamio-app ansible/hl tools/tests.sh tools/ui-build.sh tests/build-fixtures.sh
+          shellcheck -S warning scripts/*.sh bin/andamio-app ansible/hl tools/tests.sh tools/ui-build.sh tools/runner.sh tests/build-fixtures.sh
 
   # Los tests de andamio (tests/): update, Dockerfiles generados, revisión previa, andamio app.
   tests:
     name: Tests (pytest)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
       - name: pytest
@@ -36,7 +45,7 @@ jobs:
   # exactamente lo que compila ui-src/.
   panel:
     name: Panel (tipos y ui/ al día)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
       - name: compilar y comparar
@@ -45,7 +54,7 @@ jobs:
   # Los Dockerfiles que genera andamio, construidos y arrancados de verdad (Node, Python, Go, estático).
   dockerfiles:
     name: Dockerfiles generados (build y arranque)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
       - name: build y arranque
@@ -53,7 +62,7 @@ jobs:
 
   ansible-lint:
     name: Ansible (ansible-lint)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: ansible
@@ -63,13 +72,16 @@ jobs:
         env:
           ANSIBLE_COLLECTIONS_PATH: ${{ runner.temp }}/collections
         run: |
-          pipx install ansible-lint==26.9.0
+          # --include-deps: también ansible-galaxy (de ansible-core). En los runners de GitHub
+          # viene instalado; en uno propio, no. --force: en un runner propio pipx recuerda lo de
+          # antes, y sin esto no cambiaría a la versión fijada.
+          pipx install --force --include-deps ansible-lint==26.9.0
           ansible-galaxy collection install -r requirements.yml -p "$ANSIBLE_COLLECTIONS_PATH"
           ansible-lint --nocolor
 
   gitleaks:
     name: Secretos (gitleaks)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
     env:
       GITLEAKS_VERSION: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb

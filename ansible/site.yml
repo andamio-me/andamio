@@ -5,6 +5,7 @@
 - name: Servidor de andamio
   hosts: servers
   become: true
+  gather_subset: [hardware]   # memoria y CPUs; sin red ni el resto (más rápido)
   roles:
     - { role: base, tags: base }
     - { role: ssh, tags: ssh }

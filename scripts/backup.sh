@@ -47,6 +47,15 @@ if docker ps --format '{{.Names}}' | grep -qx seafile-mysql; then
   mv "$STAGING/seafile-mysql.sql.tmp" "$STAGING/seafile-mysql.sql"
 fi
 
+# Vaultwarden: su base SQLite (con WAL) copiada en vivo podría quedar a medias. En pausa un
+# instante (no recibe peticiones, sus archivos quietos) se copia la carpeta entera, coherente.
+if docker ps --format '{{.Names}}' | grep -qx vaultwarden; then
+  echo "==> Vaultwarden (copia coherente)"
+  docker pause vaultwarden > /dev/null
+  tar czf "$STAGING/vaultwarden.tgz" -C /srv/andamio/data/vaultwarden . || true
+  docker unpause vaultwarden > /dev/null
+fi
+
 # Solo en el nivel de monitoreo completo (en el mínimo no hay Uptime Kuma).
 if docker volume inspect uptime-kuma_kuma_data > /dev/null 2>&1; then
   echo "==> Uptime Kuma (volumen)"

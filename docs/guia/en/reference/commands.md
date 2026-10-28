@@ -13,7 +13,7 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 | `andamio setup` | Gets your machine ready: installs git, gh, sops, age and Ansible, and creates your private copy |
 | `andamio init` | Guided questions: configuration, encryption key and secrets. Local only |
 | `andamio security` | Only locks down the VPS: your key, your user, SSH without passwords or root, firewall and fail2ban. Safe to repeat |
-| `andamio server` | Sets up the VPS: user, SSH, firewall, VPN and the platform. Safe to repeat |
+| `andamio server` | Sets up the VPS: user, SSH, firewall, VPN and the platform. Safe to repeat: the hardening only re-runs if it changed (or every 7 days); `--full` forces it |
 | `andamio backups` | Daily, encrypted, off-server backups (B2 or S3), tested |
 | `andamio backups now\|list` | A backup right now / the ones there are (date, duration, size) |
 | `andamio alerts` | Phone notice (ntfy, no account) if a container goes down or the disk fills up |

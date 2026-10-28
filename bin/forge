@@ -24,9 +24,10 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge ci-allow-reuse DUEÑO/REPO          permite que tus otros repos usen su pipeline
   forge default-branch DUEÑO/REPO          su rama principal (main, production…)
   forge pr-create DUEÑO/REPO BASE RAMA TÍTULO   abre un PR (el cuerpo por stdin) y dice su URL
-  forge ci-snippet DUEÑO/REPO VERSIÓN [--branch B] [--app A --dir D [--context C] [--watch P]...]
+  forge ci-snippet DUEÑO/REPO VERSIÓN [--branch B] [--app A --dir D [--context C] [--watch P]...] [--inherit]
                                            el archivo de CI que una app agrega para desplegar
-                                           (con --app: una de varias apps del repo, en su carpeta)
+                                           (con --app: una de varias apps del repo, en su carpeta;
+                                           --inherit: secretos a la antigua, para app-build-v11 o antes)
   forge ci-watch [DUEÑO/REPO [SHA]]        sigue la corrida de ese commit (o la última)
   forge ci-last-failed DUEÑO/REPO          id de la última corrida de main si falló (si no, nada)
   forge ci-runs DUEÑO/REPO [N]             las últimas N corridas de main (deploys; 8), como JSON
@@ -84,6 +85,18 @@ def watch_pattern(w: str) -> str:
     if "*" in w or (not w.endswith("/") and "." in w.rsplit("/", 1)[-1]):
         return w
     return w.rstrip("/") + "/**"
+
+
+# Cómo el CI de una app le pasa sus secretos (la llave de deploy, los de build_secrets) al pipeline.
+INHERIT_LINE = "    secrets: inherit"
+
+
+def secrets_block() -> str:
+    """Explícitos y no 'inherit': inherit no cruza de dueño (una app tuya con el pipeline público)."""
+    return (f"""    # {L("La llave de deploy y los de build_secrets. Explícitos y no 'inherit': inherit no cruza de dueño.",
+                 "The deploy key and the build_secrets ones. Explicit, not 'inherit': inherit doesn't cross owners.")}
+    secrets:
+      ANDAMIO_SECRETS: ${{{{ toJSON(secrets) }}}}""")
 
 
 class GitHub:
@@ -189,7 +202,8 @@ class GitHub:
         return r.stdout.strip() or "main"
 
     def ci_snippet(self, repo: str, version: str, app: str = "", dir: str = "", context: str = "",
-                   watch: list[str] | None = None, branch: str = "main") -> str:
+                   watch: list[str] | None = None, branch: str = "main", inherit: bool = False) -> str:
+        """inherit: para versiones del pipeline anteriores a ANDAMIO_SECRETS (app-build-v11 y antes)."""
         if not app:
             head, image, extra = "andamio.yml", "${{ github.event.repository.name }}", ""
             on = f"""  push: {{ branches: [{branch}] }}
@@ -226,10 +240,11 @@ jobs:
       deploy_port: ${{{{ vars.DEPLOY_PORT }}}}
       deploy_user: ${{{{ vars.DEPLOY_USER }}}}
       deploy_known_hosts: ${{{{ vars.DEPLOY_KNOWN_HOSTS }}}}
+      runner: ${{{{ vars.RUNNER || 'ubuntu-24.04' }}}}       # self-hosted: un runner propio (solo repos privados)
       # {L("Secretos que el Dockerfile necesita AL CONSTRUIR (RUN --mount=type=secret,id=NOMBRE):",
            "Secrets the Dockerfile needs AT BUILD TIME (RUN --mount=type=secret,id=NAME):")}
       # build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
-    secrets: inherit   # {L("la llave de deploy y los de build_secrets", "the deploy key and the build_secrets ones")}"""
+""" + (INHERIT_LINE if inherit else secrets_block())
 
     def ci_watch(self, repo: str | None = None, sha: str | None = None, workflow: str = "") -> int:
         """Sigue la corrida de ese commit (recién empujado: espera hasta 1 min a que aparezca),
@@ -254,17 +269,20 @@ jobs:
         return rc
 
     def ci_repin(self, d: str, uses_repo: str, sha: str) -> str:
-        """Pone el pipeline de una app (clonada en d) en esa versión de app-build.yml.
+        """Pone el pipeline de una app (clonada en d) en esa versión de app-build.yml (y sus
+        secretos de 'inherit' a ANDAMIO_SECRETS, que la versión nueva entiende).
         Devuelve "viejo nuevo" si cambió algo, o vacío si ya estaba al día."""
         pat = re.compile(r"(uses:\s*)[\w.-]+/[\w.-]+(/\.github/workflows/app-build\.yml@)([0-9a-f]{40})[^\n]*")
+        inherit = re.compile(r"^    secrets: inherit\b[^\n]*$", re.M)
         old = ""
         for f in sorted((Path(d) / ".github" / "workflows").glob("*.y*ml")):
             text = f.read_text()
             m = pat.search(text)
-            if not m or (m.group(3) == sha and uses_repo in m.group(0)):
+            if not m or (m.group(3) == sha and uses_repo in m.group(0) and not inherit.search(text)):
                 continue
             old = m.group(3)
-            f.write_text(pat.sub(lambda m: f"{m.group(1)}{uses_repo}{m.group(2)}{sha}", text))
+            text = pat.sub(lambda m: f"{m.group(1)}{uses_repo}{m.group(2)}{sha}", text)
+            f.write_text(inherit.sub(lambda _: secrets_block(), text))
         return f"{old} {sha}" if old else ""
 
     def ci_last_failed(self, repo: str, workflow: str = "", branch: str = "main") -> str:
@@ -428,7 +446,9 @@ def main() -> None:
     pos: list[str] = []
     it = iter(rest)
     for a in it:
-        if a.startswith("--") and a[2:] in ("workflow", "app", "dir", "context", "watch", "branch"):
+        if a == "--inherit":
+            opts["inherit"] = ["1"]
+        elif a.startswith("--") and a[2:] in ("workflow", "app", "dir", "context", "watch", "branch"):
             v = next(it, None)
             if v is None:
                 fail(L(f"falta el valor de {a}", f"missing value for {a}"), 2)
@@ -469,7 +489,8 @@ def main() -> None:
         "default-branch": lambda: f.default_branch(*need(1)),
         "repos": lambda: json.dumps(f.repos()),
         "ci-snippet": lambda: f.ci_snippet(*need(2), app=(opts.get("app") or [""])[0], dir=(opts.get("dir") or [""])[0],
-                                           context=(opts.get("context") or [""])[0], watch=opts.get("watch"), branch=br),
+                                           context=(opts.get("context") or [""])[0], watch=opts.get("watch"), branch=br,
+                                           inherit="inherit" in opts),
         "registry": lambda: f.registry(),
         "registry-name": lambda: f.registry_name(),
         "registry-token-help": lambda: f.registry_token_help(),

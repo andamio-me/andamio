@@ -9,6 +9,8 @@ services:
     ports:
       - "127.0.0.1:9091:9090"   # solo local: túnel SSH para desarrollo
     container_name: prometheus
+    extra_hosts:
+      - host.docker.internal:host-gateway   # node-exporter, que corre con la red del host
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -31,17 +33,23 @@ services:
       retries: 3
 
   node-exporter:
-    hostname: ${ANDAMIO_HOSTNAME:?falta en .env}   # sin esto, el dashboard muestra el ID del contenedor
     image: prom/node-exporter:v1.12.1
     container_name: node-exporter
     restart: unless-stopped
+    # Red del host: dentro de una red de Docker solo vería el tráfico de su propio contenedor, no
+    # el del servidor. Escucha solo en docker0 (172.17.0.1), nunca en la IP pública; Prometheus
+    # llega por host.docker.internal y el firewall abre el 9100 solo a las redes de Docker.
+    # (Con la red del host, el nombre que reporta ya es el del servidor: no hace falta hostname.)
+    network_mode: host
     command:
       - --path.rootfs=/host
+      - --web.listen-address=172.17.0.1:9100
       - --collector.textfile.directory=/host/var/lib/node_exporter/textfile   # scripts/container-health.sh
+      # Las interfaces virtuales de Docker y la VPN no son tráfico propio del servidor.
+      - --collector.netdev.device-exclude=^(lo|veth.*|docker.*|br-.*|wg.*)$
     pid: host
     volumes:
       - /:/host:ro,rslave
-    networks: [monitoring]
     security_opt: [no-new-privileges:true]
     mem_limit: 128m
     memswap_limit: 128m

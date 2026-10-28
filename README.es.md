@@ -97,9 +97,9 @@ está escrita.
 #    gh, sops, age, ansible y sus colecciones (preguntando antes; sops se verifica contra
 #    su checksum), configura tu identidad de git, inicia sesión en GitHub con una llave
 #    SSH, y crea TU copia privada de andamio desde este template, y la clona.
-curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/andamio-me/andamio/main/install.sh | sh
 #    (¿prefieres leerlo antes? es corto; lo mismo a mano es
-#     git clone https://github.com/Geovani29/andamio.git ~/andamio && ~/andamio/bin/andamio setup)
+#     git clone https://github.com/andamio-me/andamio.git ~/andamio && ~/andamio/bin/andamio setup)
 
 # 2. En tu copia: responde unas preguntas. Crea tu configuración, una llave de cifrado
 #    (age) y los secretos de la plataforma, todo cifrado. No toca ningún servidor.
@@ -256,7 +256,8 @@ tu app:
 ```yaml
     with:
       build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
-    secrets: inherit
+    secrets:
+      ANDAMIO_SECRETS: ${{ toJSON(secrets) }}   # ya viene así
 ```
 
 ```dockerfile

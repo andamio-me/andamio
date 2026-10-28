@@ -30,6 +30,8 @@ your VPS ◄── SSH with a key that can only run "deploy <this app>" ◄─�
    check: your `--health` route, or the image's `HEALTHCHECK`, or 10 s without restarting.
 8. **The switch.** Only then is the old one stopped. If something failed, the old one keeps
    running and the pipeline tells you why: see [When something fails](/en/docs/apps/failures/).
+9. **Cleanup.** Only the new image and the previous one stay on the server; the rest are
+   removed so the disk doesn't fill up (they stay on GHCR: `andamio app rollback` pulls them again).
 
 Images are built on GitHub Actions, never on your VPS: that's why a small server is enough.
 
@@ -43,7 +45,8 @@ and are named in its workflow:
 # .github/workflows/andamio.yml
     with:
       build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
-    secrets: inherit
+    secrets:
+      ANDAMIO_SECRETS: ${{ toJSON(secrets) }}   # already there
 ```
 
 And in your Dockerfile:

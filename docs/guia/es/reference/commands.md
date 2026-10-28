@@ -13,7 +13,7 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 | `andamio setup` | Deja tu máquina lista: instala git, gh, sops, age y Ansible, y crea tu copia privada |
 | `andamio init` | Preguntas guiadas: configuración, llave de cifrado y secretos. Solo local |
 | `andamio seguridad` | Solo blinda el VPS: tu llave, tu usuario, SSH sin contraseñas ni root, firewall y fail2ban. Se puede repetir |
-| `andamio servidor` | Prepara el VPS: usuario, SSH, firewall, VPN y la plataforma. Se puede repetir |
+| `andamio servidor` | Prepara el VPS: usuario, SSH, firewall, VPN y la plataforma. Se puede repetir: el blindaje solo se repite si cambió (o cada 7 días); `--completo` lo fuerza |
 | `andamio backups` | Backups diarios, cifrados y fuera del servidor (B2 o S3), con prueba |
 | `andamio backups now\|list` | Un respaldo ya / los que hay (fecha, duración, tamaño) |
 | `andamio alertas` | Aviso al celular (ntfy, sin cuenta) si un contenedor se cae o el disco se llena |

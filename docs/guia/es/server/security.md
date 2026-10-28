@@ -5,7 +5,9 @@ description: Lo que andamio deja hecho en tu servidor, cómo revisarlo y sus lí
 
 ## Lo que queda hecho
 
-Sin que lo pidas, `andamio servidor` deja:
+Sin que lo pidas, `andamio servidor` deja (y `andamio seguridad`, si solo quieres blindar el
+VPS, deja lo mismo salvo Docker, Traefik y la VPN; ver
+[Tu servidor](/es/docs/start/server/#solo-blindar-el-vps-andamio-seguridad)):
 
 - **Tu propio usuario**, con sudo y contraseña. Root no puede entrar, y su contraseña (la que
   manda el proveedor) queda bloqueada, también para la consola web.

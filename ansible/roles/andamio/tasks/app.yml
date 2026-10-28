@@ -151,7 +151,7 @@
     - name: "{{ andamio_app_name }}: .env de stacks/data"
       ansible.builtin.include_tasks: stack-env.yml
       vars:
-        andamio_stack: stacks/data
+        andamio_env_stacks: [stacks/data]
         andamio_monitoring_level: ""
 
     - name: "{{ andamio_app_name }}: MariaDB arriba"

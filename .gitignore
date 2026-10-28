@@ -22,3 +22,10 @@ stacks/monitoring/grafana/provisioning/alerting/contact-points.yml
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 desktop/src-tauri/icons/
+
+# Terraform: los plugins se bajan con init; el state (IDs, IPs y a veces secretos) nunca va al repo.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log

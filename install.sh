@@ -3,13 +3,13 @@
 # it clones andamio into ~/andamio and starts `bin/andamio setup`, which asks before
 # installing anything. It never runs as root (it asks for sudo only to install packages).
 #
-#   curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/andamio-me/andamio/main/install.sh | sh
 #
 # Instalador para TU computador (no para el servidor). Léelo antes de correrlo: clona
 # andamio en ~/andamio y abre `bin/andamio setup`, que pregunta antes de instalar nada.
 set -eu
 
-REPO="${ANDAMIO_REPO:-https://github.com/Geovani29/andamio.git}"
+REPO="${ANDAMIO_REPO:-https://github.com/andamio-me/andamio.git}"
 DIR="${ANDAMIO_DIR:-$HOME/andamio}"
 
 es() { case "${ANDAMIO_LANG:-${LANG:-}}" in es*) return 0 ;; *) return 1 ;; esac; }

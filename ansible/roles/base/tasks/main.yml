@@ -16,12 +16,14 @@
     name: "{{ base_packages }}"
     state: present
     update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: 86400   # las actualizaciones automáticas ya la refrescan cada día
 
-- name: Sin el restic de Ubuntu (viejo)
+# restic: el de Ubuntu es viejo (se instala el oficial abajo). snapd: un VPS no lo usa.
+- name: Sin el restic de Ubuntu ni snapd
   ansible.builtin.apt:
-    name: restic
+    name: [restic, snapd]
     state: absent
+    purge: true
 
 - name: ¿Qué restic hay instalado?
   ansible.builtin.command: /usr/local/bin/restic version
@@ -50,12 +52,6 @@
         mv /usr/local/bin/restic.new /usr/local/bin/restic &&
         rm /tmp/{{ base_restic_file }}
       changed_when: true
-
-- name: Sin snapd
-  ansible.builtin.apt:
-    name: snapd
-    state: absent
-    purge: true
 
 - name: Actualizaciones automáticas
   ansible.builtin.copy:
@@ -88,6 +84,8 @@
 - name: ¿Existe /swapfile?
   ansible.builtin.stat:
     path: /swapfile
+    get_checksum: false   # si no, lee los GB del swap para calcular su hash (~12 s)
+    get_mime: false
   register: base_swapfile
 
 - name: Crear swap de {{ base_swap_size }}
@@ -117,29 +115,26 @@
 
 # --- Servicios innecesarios ---
 
-- name: Unidades instaladas
-  ansible.builtin.stat:
-    path: /usr/lib/systemd/system/{{ item }}
-  loop: "{{ base_masked_units + base_disabled_units }}"
-  register: base_units
-
-- name: Detener y enmascarar
-  ansible.builtin.systemd_service:
-    name: "{{ item.item }}"
-    state: stopped
-    enabled: false
-    masked: true
-  loop: "{{ base_units.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when: item.stat.exists and item.item in base_masked_units
-
-- name: Detener y desactivar
-  ansible.builtin.systemd_service:
-    name: "{{ item.item }}"
-    state: stopped
-    enabled: false
-  loop: "{{ base_units.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when: item.stat.exists and item.item in base_disabled_units
+# Todos en una tarea (con systemd_service en un loop eran ~3 s por unidad). Solo las que
+# están instaladas; enmascaradas: ni otro paquete ni una dependencia las vuelve a arrancar.
+- name: Servicios innecesarios detenidos (enmascarados o desactivados)
+  ansible.builtin.shell: |
+    set -u
+    off() {   # $1: mask o disable; el resto, las unidades
+      how=$1; shift
+      for u in "$@"; do
+        [ -e "/usr/lib/systemd/system/$u" ] || continue
+        state=$(systemctl is-enabled "$u" 2>/dev/null || true)
+        if systemctl is-active -q "$u"; then systemctl stop "$u"; echo "detenido: $u"; fi
+        if [ "$how" = mask ] && [ "$state" != masked ]; then
+          systemctl mask "$u" >/dev/null 2>&1 && echo "enmascarado: $u"
+        elif [ "$how" = disable ] && [ "$state" = enabled ]; then
+          systemctl disable "$u" >/dev/null 2>&1 && echo "desactivado: $u"
+        fi
+      done
+    }
+    off mask {{ base_masked_units | join(' ') }}
+    off disable {{ base_disabled_units | join(' ') }}
+    exit 0
+  register: base_units_off
+  changed_when: base_units_off.stdout | length > 0

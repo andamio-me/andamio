@@ -18,21 +18,40 @@ Si por ahora solo quieres el VPS a salvo (o vas a montar la plataforma más tard
 andamio seguridad
 ```
 
-Pregunta tres cosas (la IP, tu usuario y el puerto SSH nuevo) y deja hecho lo mismo que el
-blindaje de `andamio servidor`, sin instalar nada más:
+Si vienes de `andamio setup` eligiendo "solo blindar mi VPS", ya arranca solo. Pregunta:
+
+- la **IP** del VPS;
+- **dónde está** (Azure, AWS, Hetzner…) y el **usuario que te dio el proveedor** (el que ya
+  existe: `azureuser`, `ubuntu`, `root` o el que elegiste al crearlo);
+- **tu usuario nuevo**, distinto del del proveedor (si pones el mismo, lo rechaza al
+  instante). El del proveedor sigue existiendo y sirve en su consola web, pero deja de
+  entrar por SSH;
+- el **puerto SSH nuevo**: Enter acepta uno al azar. Si tu proveedor tiene firewall, ahí
+  abres este mismo número (andamio te avisa si lo olvidas);
+- el **nombre para entrar** (`ssh <nombre>`): sugiere uno que diga cuál servidor es.
+
+Y deja hecho lo mismo que el blindaje de `andamio servidor`, sin instalar nada más:
 
 1. Crea tu llave SSH si no tienes, y te avisa que va a ser tu única entrada (guárdala).
 2. Comprueba la huella del servidor e instala tu llave con la contraseña o el `.pem` que te
    dio el proveedor (una sola vez).
 3. **Antes de mover SSH, prueba que el puerto nuevo llega al servidor.** Si el firewall de
    tu proveedor lo bloquea, se detiene y te dice dónde abrirlo: no te quedas afuera.
+   Ábrelo y vuelve a correr el comando: retoma donde quedó.
 4. Crea tu usuario y, en el mismo paso, apaga las contraseñas y root y enciende el firewall.
 5. Lo comprueba desde afuera: root y los demás usuarios con contraseña reciben un rechazo, y
    el `22` ya no responde.
-6. Parches automáticos, sshd estricto, fail2ban, y el chequeo de seguridad del servidor.
+6. Parches automáticos, sshd estricto y fail2ban.
+7. Aplica ya los **parches pendientes** que trae la imagen del proveedor y, si piden
+   reiniciar (el kernel), te ofrece hacerlo en el momento: todavía no hay nada corriendo.
+8. El chequeo de seguridad del servidor, todo a la vista.
 
-Cuando quieras la plataforma: `andamio init` completa lo que falta (dominio, repo, HTTPS) sin
-volver a preguntar lo anterior, y después `andamio servidor`.
+Se puede repetir: lo ya hecho se salta.
+
+Cuando quieras la plataforma: si tu copia es solo local (la creó `setup` al elegir "solo
+blindar"), `andamio setup` dentro de ella la conecta con GitHub. Después `andamio init`
+completa lo que falta (dominio, repo, HTTPS) sin volver a preguntar lo anterior, y
+`andamio servidor`.
 
 ## Antes: dos comprobaciones en tu proveedor
 

@@ -1,12 +1,17 @@
 # Workflow reutilizable: check, build, escaneo y deploy de una app de andamio.
 # Uso desde el repo de la app: .github/workflows/andamio.yml (lo escribe `andamio app create`).
-# Las apps lo fijan por SHA (tag app-build-vN). Runner fijo en ubuntu-24.04:
-# cambiar de Ubuntu es una decisión, no algo que pase solo con ubuntu-latest.
+# Las apps lo fijan por SHA (tag app-build-vN). Runner: ubuntu-24.04 (cambiar de Ubuntu es una
+# decisión, no algo que pase solo con ubuntu-latest), o el propio si la app pasa
+# runner: self-hosted (tools/runner.sh; solo repos privados).
 name: app-build
 
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Dónde corre (ubuntu-24.04, o self-hosted con un runner propio de tools/runner.sh)
+        type: string
+        default: ubuntu-24.04
       image:
         description: Nombre de la imagen en GHCR (p. ej. mi-app)
         required: true
@@ -19,8 +24,8 @@ on:
         description: >-
           Secretos de Actions que el Dockerfile recibe al construir, separados por espacio
           (p. ej. "NPM_TOKEN SENTRY_AUTH_TOKEN"). En el Dockerfile:
-          RUN --mount=type=secret,id=NPM_TOKEN ... (quedan fuera de la imagen). Necesita
-          "secrets: inherit" en el ci.yml de la app. Los de ejecución van con andamio app secret.
+          RUN --mount=type=secret,id=NPM_TOKEN ... (quedan fuera de la imagen). Llegan en
+          ANDAMIO_SECRETS (o con "secrets: inherit"). Los de ejecución van con andamio app secret.
         type: string
         default: ""
       dir:
@@ -67,6 +72,13 @@ on:
       DEPLOY_SSH_KEY:
         description: Llave SSH de deploy de la app (forced command en el VPS)
         required: false
+      # "secrets: inherit" solo funciona entre repos del mismo dueño: una app de otra cuenta
+      # que usa este workflow público le pasa sus secretos aquí, como toJSON(secrets). Fijado
+      # por SHA, el workflow recibe lo mismo que con inherit; de aquí salen la llave de deploy
+      # (deploy_key) y los de build_secrets.
+      ANDAMIO_SECRETS:
+        description: Los secretos de Actions del repo de la app, en JSON (toJSON(secrets))
+        required: false
     outputs:
       tag:
         description: Tag de la imagen publicada (hash del commit)
@@ -84,7 +96,7 @@ jobs:
   #  - si es un proyecto pnpm (pnpm-lock.yaml): lint, typecheck y test de package.json.
   check:
     name: Revisión
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
     steps:
@@ -127,7 +139,7 @@ jobs:
         if: inputs.build_secrets != ''
         env:
           NAMES: ${{ inputs.build_secrets }}
-          ALL: ${{ toJSON(secrets) }}
+          ALL: ${{ secrets.ANDAMIO_SECRETS || toJSON(secrets) }}
         run: |
           d="$RUNNER_TEMP/build-secrets"; install -m 700 -d "$d"
           files=""; flags=""
@@ -135,7 +147,7 @@ jobs:
             [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "::error::Nombre de secreto de build inválido: $n"; exit 1; }
             v=$(jq -r --arg n "$n" '.[$n] // empty' <<< "$ALL")
             if [ -z "$v" ]; then
-              echo "::error title=Falta el secreto $n::Agrégalo en el repo de la app (Settings → Secrets and variables → Actions) y usa 'secrets: inherit' en su ci.yml."
+              echo "::error title=Falta el secreto $n::Agrégalo en el repo de la app (Settings → Secrets and variables → Actions); su workflow lo pasa con ANDAMIO_SECRETS."
               exit 1
             fi
             printf '%s' "$v" > "$d/$n"
@@ -186,7 +198,7 @@ jobs:
   build:
     name: Construir y publicar imágenes
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       packages: write
@@ -239,7 +251,7 @@ jobs:
         if: inputs.build_secrets != ''
         env:
           NAMES: ${{ inputs.build_secrets }}
-          ALL: ${{ toJSON(secrets) }}
+          ALL: ${{ secrets.ANDAMIO_SECRETS || toJSON(secrets) }}
         run: |
           d="$RUNNER_TEMP/build-secrets"; install -m 700 -d "$d"
           files=""; flags=""
@@ -247,7 +259,7 @@ jobs:
             [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "::error::Nombre de secreto de build inválido: $n"; exit 1; }
             v=$(jq -r --arg n "$n" '.[$n] // empty' <<< "$ALL")
             if [ -z "$v" ]; then
-              echo "::error title=Falta el secreto $n::Agrégalo en el repo de la app (Settings → Secrets and variables → Actions) y usa 'secrets: inherit' en su ci.yml."
+              echo "::error title=Falta el secreto $n::Agrégalo en el repo de la app (Settings → Secrets and variables → Actions); su workflow lo pasa con ANDAMIO_SECRETS."
               exit 1
             fi
             printf '%s' "$v" > "$d/$n"
@@ -354,7 +366,7 @@ jobs:
     name: Desplegar en el VPS
     needs: [check, build]
     if: inputs.deploy && github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     permissions: {}
     concurrency:
       group: deploy-${{ inputs.image }}
@@ -377,7 +389,7 @@ jobs:
 
       - name: Configurar SSH
         env:
-          SSH_KEY: ${{ secrets[inputs.deploy_key] }}
+          SSH_KEY: ${{ secrets[inputs.deploy_key] || fromJSON(secrets.ANDAMIO_SECRETS || '{}')[inputs.deploy_key] }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key

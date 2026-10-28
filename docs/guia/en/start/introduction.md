@@ -34,7 +34,7 @@ repo.
 
 ```bash
 # 1. On your machine (Linux, macOS or WSL): installs what's missing and creates your private copy
-curl -fsSL https://raw.githubusercontent.com/Geovani29/andamio/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/andamio-me/andamio/main/install.sh | sh
 
 # 2. Your configuration: guided questions, all local
 cd ~/my-andamio

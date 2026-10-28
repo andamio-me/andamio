@@ -999,11 +999,17 @@ def write_config(a: dict, recipient: str, pre: dict | None = None) -> None:
         "registry": ("registro de las imágenes de tus apps", "registry for your apps' images"),
         "backups": ("se activa con andamio backups", "turned on by andamio backups"),
         "telegram": ("se activa con su configuración (bot y chat)", "turned on with its configuration (bot and chat)"),
+        "pipeline": ("el pipeline público de tus apps (versiones fijas: andamio app ci-update)",
+                     "your apps' public pipeline (pinned versions: andamio app ci-update)"),
     }.items()}
     pre = pre or {}
     if pre:   # la de `andamio seguridad`: se reescribe completa, con lo que ya tenía
         CONFIG.unlink()
     host_key = pre.get("andamio_ssh_host_key") or ""
+    # Las apps usan el pipeline del repo público de andamio, no el de tu copia privada: GitHub no
+    # deja que un repo público use un workflow privado. Sin upstream (fuera de la plantilla), el tuyo.
+    pipeline = "" if UPSTREAM_DEFAULT.startswith("@") else \
+        f"\nandamio_pipeline: {re.sub(r'[.]git$', '', UPSTREAM_DEFAULT.split('github.com/')[-1])}          # {c['pipeline']}"
     write_if_missing(CONFIG, f"""{c['head']}
 andamio_user: {a['user']}              # {c['user']}
 andamio_uid: {pre.get('andamio_uid') or 1001}
@@ -1017,7 +1023,7 @@ andamio_acme_email: "{a['email']}"
 andamio_forge: {forge_out('name').lower()}              # {c['forge']}
 andamio_registry: {forge_out('registry')}          # {c['registry']}
 andamio_github_owner: {a['owner']}
-andamio_repo: git@github-andamio:{a['repo']}.git
+andamio_repo: git@github-andamio:{a['repo']}.git{pipeline}
 andamio_monitoring: {a['monitoring']}
 andamio_backups: false              # {c['backups']}
 andamio_telegram: false             # {c['telegram']}
@@ -1871,12 +1877,49 @@ The server is configured from your repo on {name}: whatever isn't pushed doesn't
     ok(L("Todo subido", "Everything pushed"))
 
 
-def step_harden(cfg: dict, alias: str) -> None:
+HARDEN_ROLES = ("base", "ssh", "firewall", "fail2ban", "docker", "wireguard")
+HARDEN_MARK = "~/.config/andamio/blindaje"   # en el servidor: "<huella> <epoch>" del último blindaje completo
+HARDEN_MAX_AGE = 7 * 86400                   # pasado esto se repite igual (corrige cambios hechos a mano)
+
+
+def harden_fingerprint(cfg: dict) -> str:
+    """Huella de todo lo que decide el blindaje: sus roles, los archivos de host/ que usan y las
+    variables de group_vars que leen. No todo group_vars: agregar un stack no lo cambia."""
+    import hashlib
+    import json
+    files = [ROOT / "ansible" / "site.yml"]
+    for r in HARDEN_ROLES:
+        files += sorted(p for p in (ROOT / "ansible" / "roles" / r).rglob("*") if p.is_file())
+    text = "".join(p.read_text(errors="replace") for p in files)
+    for d in sorted(set(re.findall(r"host/([\w.-]+)/", text))):
+        files += sorted(p for p in (ROOT / "host" / d).rglob("*") if p.is_file())
+    h = hashlib.sha256()
+    for p in files:
+        h.update(str(p.relative_to(ROOT)).encode() + b"\0" + p.read_bytes() + b"\0")
+    used = set(re.findall(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", "".join(p.read_text(errors="replace") for p in files)))
+    h.update(json.dumps({k: cfg[k] for k in sorted(used & cfg.keys())}, sort_keys=True, default=str).encode())
+    return h.hexdigest()
+
+
+def step_harden(cfg: dict, alias: str, full: bool = False) -> None:
     title(L("5. Endurecimiento: SSH, firewall, fail2ban, parches, Docker y VPN",
             "5. Hardening: SSH, firewall, fail2ban, patches, Docker and VPN"))
+    fp = harden_fingerprint(cfg)
+    if not full:
+        mark = remote(alias, f"cat {HARDEN_MARK} 2>/dev/null || true").stdout.split()
+        age = time.time() - int(mark[1]) if len(mark) == 2 and mark[1].isdigit() else None
+        if mark and mark[0] == fp and age is not None and age < HARDEN_MAX_AGE:
+            when = L(f"hace {int(age // 3600)} h", f"{int(age // 3600)} h ago") if age < 172800 else \
+                L(f"hace {int(age // 86400)} días", f"{int(age // 86400)} days ago")
+            ok(L(f"Sin cambios desde el último ({when}): no lo repito. Para forzarlo: andamio servidor --completo",
+                 f"No changes since the last one ({when}): skipped. To force it: andamio server --full"))
+            return
+    # Sin marca mientras corre: si falla a medias, la próxima vez se repite completo.
+    remote(alias, f"rm -f {HARDEN_MARK}")
     if ansible(["site.yml", "--tags", "base,ssh,firewall,fail2ban,docker,wireguard"], cfg, alias) != 0:
         die(L("El endurecimiento falló (el detalle está arriba). Corrígelo y vuelve a correr `andamio servidor`.",
               "Hardening failed (details above). Fix it and run `andamio server` again."))
+    remote(alias, f"mkdir -p ~/.config/andamio && echo '{fp} {int(time.time())}' > {HARDEN_MARK}")
     ok(L("Servidor endurecido", "Server hardened"))
 
 
@@ -2163,7 +2206,7 @@ def cmd_servidor(args: argparse.Namespace) -> None:
     title(L("4c. Contraseña de sudo", "4c. Sudo password"))
     sudo_password_file(cfg, alias)
     try:
-        step_harden(cfg, alias)
+        step_harden(cfg, alias, full=getattr(args, "completo", False))
         step_repo_key(cfg, alias)
         step_registry(cfg, alias, token)
         step_platform(cfg, alias)
@@ -5262,7 +5305,9 @@ def ui_create_preview(repo: str, sub: str = "") -> dict:
     if sub and (not DIR_RX.fullmatch(sub) or ".." in sub):
         return {"error": L(f"Carpeta inválida: {sub}", f"Invalid folder: {sub}")}
     cfg = ui_config()
-    instance = re.sub(r"^[^:]+:", "", str(cfg.get("andamio_repo", ""))).removesuffix(".git")
+    # Donde vive el pipeline de las apps: el público (andamio_pipeline) o esta copia.
+    instance = str(cfg.get("andamio_pipeline") or "") or \
+        re.sub(r"^[^:]+:", "", str(cfg.get("andamio_repo", ""))).removesuffix(".git")
     # Las consultas a GitHub, a la vez (una tras otra eran ~20 s).
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(4) as pool:
@@ -5938,7 +5983,7 @@ def cmd_ui(args: argparse.Namespace) -> None:
 # ================= update =================
 
 # El extractor (tools/extraer-plataforma.py) pone aquí la URL del repo público de andamio.
-UPSTREAM_DEFAULT = "https://github.com/Geovani29/andamio.git"
+UPSTREAM_DEFAULT = "https://github.com/andamio-me/andamio.git"
 UPSTREAM_FILE = ROOT / ".andamio" / "upstream"
 UPSTREAM_CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "andamio" / "upstream.git"
 # Lo tuyo: andamio update nunca lo toca (fnmatch: * también cruza carpetas).
@@ -6274,6 +6319,12 @@ def internet_port_rows(cfg: dict, alias: str, listening: list[int], expected: se
     escuchan fuera de `expected` y el 22. Con la VPN activa, tus conexiones entran por ella y el
     firewall las trata distinto: no valdrían. Devuelve (filas, ¿por la VPN?)."""
     ip, ssh_port = cfg["andamio_server_ip"], int(cfg["andamio_ssh_port"])
+    honeypot = "stacks/honeypot" in (cfg.get("andamio_stacks") or [])   # SSH falso en el 22 (ADR 0034)
+    if honeypot:
+        expected = expected | {22}
+    # Abiertos a propósito (andamio_open_ports, cada uno con su motivo): esperados, no una falla.
+    opened = {int(p["port"]): p.get("motivo", "") for p in cfg.get("andamio_open_ports") or [] if str(p.get("port", "")).isdigit()}
+    expected = expected | set(opened)
     on_vpn = remote(alias, 'echo "${SSH_CLIENT%% *}"').stdout.strip().startswith("10.8.0.")
     net = []
     if on_vpn:
@@ -6287,7 +6338,14 @@ def internet_port_rows(cfg: dict, alias: str, listening: list[int], expected: se
         else:
             net.append(["OK", "Internet", L(f"El puerto {port} escucha, pero el firewall lo bloquea desde Internet",
                                             f"Port {port} listens, but the firewall blocks it from the internet"), ""])
-    if ssh_port != 22:
+    for port, motivo in sorted(opened.items()):
+        if port in listening:
+            net.append(["OK", "Internet", L(f"El puerto {port} está abierto a propósito: {motivo}",
+                                            f"Port {port} is open on purpose: {motivo}"), ""])
+    if ssh_port != 22 and honeypot:
+        net.append(["OK", "Internet", L("El puerto 22 es el honeypot (SSH falso, sin salida a Internet)",
+                                        "Port 22 is the honeypot (fake SSH, no way out to the internet)"), ""])
+    elif ssh_port != 22:
         net.append(["FAIL", "Internet", L("El puerto 22 responde desde Internet", "Port 22 answers from the internet"),
                     L("ciérralo en el firewall de tu proveedor (y revisa sudo ufw status)",
                       "close it in your provider's firewall (and check sudo ufw status)")]
@@ -6720,6 +6778,9 @@ def main() -> None:
     p_sec.set_defaults(func=cmd_seguridad)
     p_srv = sub.add_parser("servidor", aliases=["server"],
                            help=L("prepara el VPS (parte 2; se puede repetir)", "sets up the VPS (part 2; safe to repeat)"))
+    p_srv.add_argument("--completo", "--full", action="store_true",
+                       help=L("repite también el blindaje aunque no haya cambiado",
+                              "also re-runs the hardening even if it didn't change"))
     p_srv.set_defaults(func=cmd_servidor)
     p_st = sub.add_parser("estado", aliases=["status"],
                           help=L("chequeo de seguridad y salud del servidor", "security and health check of the server"))

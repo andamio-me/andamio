@@ -1,0 +1,9 @@
+{# Los units de andamio_units para andamio_files: los que llevan el usuario de operación son .j2. #}
+[
+{% for u in andamio_units %}
+{% set src = playbook_dir ~ '/../host/systemd/' ~ u %}
+{{ {'dest': '/etc/systemd/system/' ~ u, 'owner': 'root', 'group': 'root', 'mode': '0644',
+    'content': lookup('template', src ~ '.j2' if (src ~ '.j2') is file else src)}
+   | to_json }}{{ ',' if not loop.last }}
+{% endfor %}
+]

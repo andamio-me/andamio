@@ -30,6 +30,8 @@ tu VPS ◄── SSH con una llave que solo puede correr "deploy <esta app>" ◄
    salud: tu ruta `--health`, o el `HEALTHCHECK` de la imagen, o 10 s sin reiniciarse.
 8. **El cambio.** Recién ahí se apaga la anterior. Si algo falló, sigue la anterior y el
    pipeline te dice por qué: ver [Cuando algo falla](/es/docs/apps/failures/).
+9. **Limpieza.** En el servidor quedan solo la imagen nueva y la anterior; las demás se
+   borran para no llenar el disco (siguen en GHCR: `andamio app rollback` las vuelve a bajar).
 
 Las imágenes se construyen en GitHub Actions, nunca en tu VPS: por eso alcanza un servidor
 chico.
@@ -44,7 +46,8 @@ del repo de tu app en GitHub, y se nombran en su workflow:
 # .github/workflows/andamio.yml
     with:
       build_secrets: NPM_TOKEN SENTRY_AUTH_TOKEN
-    secrets: inherit
+    secrets:
+      ANDAMIO_SECRETS: ${{ toJSON(secrets) }}   # ya viene así
 ```
 
 Y en tu Dockerfile:

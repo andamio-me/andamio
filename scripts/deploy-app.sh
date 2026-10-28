@@ -86,6 +86,19 @@ wait_healthy() {  # wait_healthy <contenedor>
   done
   return 1
 }
+# Imágenes viejas de esta app (también las de migraciones): quedan la versión nueva y la
+# anterior; el resto sigue en el registro (andamio app rollback la vuelve a bajar). Sin esto,
+# cada deploy deja cientos de MB en el disco para siempre. Nunca corta el deploy.
+prune_images() {
+  local repo tag
+  for repo in $(docker compose --profile migrate config --images 2> /dev/null | sed 's/:[^:/]*$//' | sort -u); do
+    docker images "$repo" --format '{{.Tag}}' | while read -r tag; do
+      case $tag in "$SHA" | "$PREV" | "<none>") continue ;; esac
+      docker rmi "$repo:$tag" > /dev/null 2>&1 && echo "   $(L "borrada" "removed") ${repo##*/}:${tag:0:7}"
+    done
+  done
+  return 0
+}
 fail() {  # deja la versión anterior en .env, registra y avisa
   sed -i "s/^TAG=.*/TAG=$PREV/" .env
   record failed
@@ -199,5 +212,7 @@ if [ -n "$OLD" ]; then
 fi
 
 record success
+echo "==> $(L "Limpiando imágenes viejas" "Cleaning old images")"
+prune_images || true
 notify "✅ $APP $VERSION desplegada (${SHA:0:7})"
 echo "✅ $APP $VERSION en producción"

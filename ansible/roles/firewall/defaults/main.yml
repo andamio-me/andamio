@@ -8,3 +8,5 @@ firewall_rules:
   - { port: "80", proto: tcp, rule: allow, comment: Traefik HTTP }
   - { port: "443", proto: tcp, rule: allow, comment: Traefik HTTPS }
   - { port: "51820", proto: udp, rule: allow, comment: WireGuard }
+  # node-exporter (red del host, en docker0): solo Prometheus y los contenedores, nunca Internet.
+  - { port: "9100", proto: tcp, rule: allow, from: 172.16.0.0/12, to: 172.17.0.1, comment: node-exporter desde Docker }

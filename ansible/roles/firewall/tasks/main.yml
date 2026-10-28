@@ -22,30 +22,29 @@
     delete: true
   when: andamio_ssh_port | string != "22"
 
-- name: Reglas
-  community.general.ufw:
-    rule: "{{ item.rule }}"
-    port: "{{ item.port }}"
-    proto: "{{ item.proto }}"
-    comment: "{{ item.comment | default(omit) }}"
-  loop: "{{ firewall_rules }}"
-  loop_control:
-    label: "{{ item.rule }} {{ item.port }}/{{ item.proto }}"
+# Reglas, políticas y registro en una tarea (con el módulo ufw en un loop eran ~2-3 s por
+# regla). ufw no duplica una regla que ya existe ("Skipping"): cambio = "added" o "updated".
+- name: Reglas, políticas por defecto y registro
+  ansible.builtin.shell: |
+    set -eu
+    {% for r in firewall_rules %}
+    ufw {{ r.rule }} proto {{ r.proto }} from {{ r.from | default('any') }} to {{ r.to | default('any') }}
+    {{- ' ' }}port {{ r.port }}{% if r.comment is defined %} comment {{ r.comment | quote }}{% endif %}
 
-- name: Políticas por defecto
-  community.general.ufw:
-    direction: "{{ item.direction }}"
-    default: "{{ item.policy }}"
-  loop:
-    - { direction: incoming, policy: deny }
-    - { direction: outgoing, policy: allow }
-    - { direction: routed, policy: deny }
-  loop_control:
-    label: "{{ item.direction }}: {{ item.policy }}"
-
-- name: Registro de paquetes bloqueados
-  community.general.ufw:
-    logging: low
+    {% endfor %}
+    status=$(ufw status verbose)
+    for p in "deny (incoming)" "allow (outgoing)" "deny (routed)"; do
+      case "$status" in
+        *"$p"*) ;;
+        *) set -- $p; dir=${2#(}; ufw default "$1" "${dir%)}"; echo "política: $p" ;;
+      esac
+    done
+    case "$status" in
+      *"Logging: on (low)"*) ;;
+      *) ufw logging low; echo "registro: low" ;;
+    esac
+  register: firewall_applied
+  changed_when: firewall_applied.stdout is search('Rule added|Rule updated|Rules updated|política|registro')
 
 - name: UFW activo
   community.general.ufw:

@@ -37,15 +37,8 @@
   tags: secretos
 
 - name: Secretos del host (desde sops)
-  ansible.builtin.copy:
-    content: >-
-      {{ lookup('community.sops.sops', playbook_dir ~ '/../' ~ item.src,
-                input_type='json', output_type='binary', rstrip=false) }}
-    dest: "{{ item.dest }}"
-    owner: root
-    group: "{{ item.group }}"
-    mode: "{{ item.mode }}"
-  loop: "{{ andamio_sops_files }}"
+  andamio_files:
+    files: "{{ lookup('template', 'host-secrets.json.j2') | from_json }}"
   no_log: true
   diff: false
   tags: secretos
@@ -110,9 +103,8 @@
 
 - name: .env de cada stack
   ansible.builtin.include_tasks: stack-env.yml
-  loop: "{{ andamio_stacks_active + (andamio_db_stacks | map(attribute='stack')) }}"
-  loop_control:
-    loop_var: andamio_stack
+  vars:
+    andamio_env_stacks: "{{ andamio_stacks_active + (andamio_db_stacks | map(attribute='stack')) }}"
 
 # --- Acceso: tu llave + llaves de deploy con comando forzado ---
 
@@ -167,15 +159,10 @@
     mode: "0644"
   notify: Recargar systemd
 
-# template (no copy): las que llevan el usuario de operación son .j2 (group_vars/all.yml).
+# Todos en una tarea (units.json.j2): las que llevan el usuario de operación son .j2.
 - name: Units de andamio
-  ansible.builtin.template:
-    src: "{{ playbook_dir }}/../host/systemd/{{ item }}{{ '.j2' if (playbook_dir ~ '/../host/systemd/' ~ item ~ '.j2') is file else '' }}"
-    dest: /etc/systemd/system/{{ item }}
-    owner: root
-    group: root
-    mode: "0644"
-  loop: "{{ andamio_units }}"
+  andamio_files:
+    files: "{{ lookup('template', 'units.json.j2') | from_json }}"
   notify:
     - Recargar systemd
     - Reiniciar bot de Telegram
@@ -183,12 +170,18 @@
 - name: Aplicar units nuevos antes de activarlos
   ansible.builtin.meta: flush_handlers
 
+# Uno por uno con systemd_service serían ~3 s por unit; así, uno solo para todos.
 - name: Units activos
-  ansible.builtin.systemd_service:
-    name: "{{ item }}"
-    state: started
-    enabled: true
-  loop: "{{ andamio_enabled_units }}"
+  ansible.builtin.shell: |
+    set -eu
+    for u in {{ andamio_enabled_units | join(' ') }}; do
+      if ! systemctl is-enabled -q "$u" || ! systemctl is-active -q "$u"; then
+        systemctl enable --now "$u"
+        echo "activado: $u"
+      fi
+    done
+  register: andamio_units_on
+  changed_when: "'activado' in andamio_units_on.stdout"
 
 # andamio telegram desactivar: el bot y el resumen se apagan, y sin telegram.env nadie avisa por ahí.
 - name: Telegram apagado
@@ -250,6 +243,59 @@
     group: root
     mode: "0711"
 
+# Datos de Vaultwarden: dentro de /srv/andamio (backup diario). Solo root: ahí está la base
+# con las bóvedas (cifradas) y la llave con la que firma las sesiones.
+- name: Carpeta de datos de Vaultwarden
+  when: "'stacks/vaultwarden' in andamio_stacks_active"
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/vaultwarden"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Datos de AdGuard Home (config, filtros, estadísticas): dentro de /srv/andamio. Solo root.
+- name: Carpeta de datos de AdGuard Home
+  when: "'stacks/adguard' in andamio_stacks_active"
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/adguard"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# El mundo de Minecraft: del usuario con el que corre la imagen (1000). Dentro de /srv/andamio:
+# entra al backup diario.
+- name: Carpeta de datos de Minecraft
+  when: "'stacks/minecraft' in andamio_stacks_active"
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/minecraft"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0750"
+
+# Base del colector del honeypot: del usuario de Cowrie (999), que es con el que corre.
+- name: Carpeta de datos del honeypot
+  when: "'stacks/honeypot' in andamio_stacks_active"
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/honeypot"
+    state: directory
+    owner: "999"
+    group: "999"
+    mode: "0700"
+
+# Archivos de n8n (config y datos binarios de las ejecuciones): dentro de /srv/andamio. El
+# contenedor corre como el usuario node (UID 1000).
+- name: Carpeta de datos de n8n
+  when: "'stacks/n8n' in (andamio_db_stacks | map(attribute='stack'))"
+  ansible.builtin.file:
+    path: "{{ andamio_root }}/data/n8n"
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: "0700"
+
 # La carpeta de la config dinámica puede no venir en el repo (git no guarda carpetas
 # vacías: su contenido se genera aquí).
 - name: Carpeta de la configuración dinámica de Traefik
@@ -263,17 +309,18 @@
 # Config de Traefik con el dominio, el email y la IP de este servidor. El estático se lee
 # al arrancar (cambio = reinicio); el dinámico se recarga solo.
 - name: Configuración de Traefik
-  ansible.builtin.template:
-    src: "{{ playbook_dir }}/../{{ item.src }}"
-    dest: "{{ andamio_infra }}/{{ item.dest }}"
-    owner: "{{ andamio_user }}"
-    group: "{{ andamio_user }}"
-    mode: "0644"
-  loop:
-    - { src: stacks/proxy/traefik.yml.j2, dest: stacks/proxy/traefik.yml }
-    - { src: stacks/proxy/middlewares.yml.j2, dest: stacks/proxy/dynamic/middlewares.yml }
-  loop_control:
-    label: "{{ item.dest }}"
+  andamio_files:
+    files:
+      - dest: "{{ andamio_infra }}/stacks/proxy/traefik.yml"
+        content: "{{ lookup('template', playbook_dir ~ '/../stacks/proxy/traefik.yml.j2') }}"
+        owner: "{{ andamio_user }}"
+        group: "{{ andamio_user }}"
+        mode: "0644"
+      - dest: "{{ andamio_infra }}/stacks/proxy/dynamic/middlewares.yml"
+        content: "{{ lookup('template', playbook_dir ~ '/../stacks/proxy/middlewares.yml.j2') }}"
+        owner: "{{ andamio_user }}"
+        group: "{{ andamio_user }}"
+        mode: "0644"
   register: andamio_traefik_conf
 
 # Certificado propio (andamio_tls: custom). La carpeta existe siempre: compose la monta.
@@ -356,7 +403,8 @@
   become_user: "{{ andamio_user }}"
   ansible.builtin.command: docker restart traefik
   when:
-    - andamio_traefik_conf.results[0].changed or andamio_tls_cert.changed | default(false)
+    - (andamio_infra ~ '/stacks/proxy/traefik.yml') in andamio_traefik_conf.files
+      or andamio_tls_cert.changed | default(false)
       or andamio_tls_key.changed | default(false)
     - andamio_traefik_exists.rc == 0
     - not ansible_check_mode
@@ -379,15 +427,28 @@
     path: "{{ andamio_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
     state: absent
 
+# Todos en una tarea (no una por stack). Si uno falla, se detiene ahí y dice cuál.
+# Servidores a demanda (etiqueta lazymc.enabled, ADR 0035): los prende lazymc cuando alguien entra.
+# `up` también los prendería, y lazymc no duerme lo que no prendió él: los que estaban apagados,
+# vuelven a apagarse. Los que estaban prendidos (alguien jugando) no se tocan.
 - name: Stacks levantados
   become: true
   become_user: "{{ andamio_user }}"
-  ansible.builtin.command: docker compose up -d --quiet-pull
+  ansible.builtin.shell: |
+    set -euo pipefail
+    awake=$(docker ps --filter label=lazymc.enabled=true --format '{{ '{{' }}.Names{{ '}}' }}')
+    for s in {{ andamio_stacks_active | join(' ') }}; do
+      echo "== $s"
+      cd "{{ andamio_infra }}/$s"
+      docker compose up -d --quiet-pull 2>&1
+    done
+    for c in $(docker ps --filter label=lazymc.enabled=true --format '{{ '{{' }}.Names{{ '}}' }}'); do
+      grep -qx "$c" <<< "$awake" || { docker stop "$c" > /dev/null; echo "dormido de nuevo: $c"; }
+    done
   args:
-    chdir: "{{ andamio_infra }}/{{ item }}"
-  loop: "{{ andamio_stacks_active }}"
+    executable: /bin/bash
   register: andamio_up
-  changed_when: andamio_up.stderr is search('Creat|Recreat|Start')
+  changed_when: andamio_up.stdout is search('Creat|Recreat|Start')
 
 # Sin su archivo de usuarios, un motor de Redis podría quedar sin clave (Dragonfly lo haría si
 # no tuviera DFLY_requirepass). Si responde sin pedirla, el apply falla: que no pase en silencio.
