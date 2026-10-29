@@ -168,7 +168,13 @@ jobs:
             echo "El Dockerfile no tiene etapa \"test\": sin tests en imagen."
           fi
 
-      # pnpm: el de la carpeta de la app (o el de la raíz si la app está en la raíz).
+      # pnpm: el de la carpeta de la app (o el de la raíz si la app está en la raíz). Node va antes:
+      # su instalador necesita Node 20+, y un runner propio puede traer uno viejo (Ubuntu: 18). La
+      # caché de pnpm va en el segundo setup-node, que necesita pnpm ya instalado.
+      - if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - name: pnpm
         if: hashFiles(format('{0}/pnpm-lock.yaml', steps.where.outputs.dir)) != ''
         uses: pnpm/action-setup@v6
