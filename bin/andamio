@@ -18,6 +18,9 @@
   andamio certificado [cert llave]
                     tu propio certificado HTTPS (andamio_tls: custom): sin argumentos
                     muestra el actual; con ellos lo valida y lo reemplaza (renovación)
+  andamio registro [renovar]
+                    el acceso del servidor a tus imágenes: si su token sirve y cuándo vence;
+                    renovar lo reemplaza (andamio estado avisa 30 días antes)
   andamio use [carpeta|dominio]
                     con varios servidores: qué copia usa `andamio` fuera de sus carpetas
                     (dentro de una, usa esa; `andamio` se instala en ~/.local/bin)
@@ -31,6 +34,7 @@ tiene sus dos versiones juntas: L("español", "English").
 from __future__ import annotations
 
 import argparse
+import datetime
 import getpass
 import ipaddress
 import os
@@ -2006,6 +2010,81 @@ def step_registry(cfg: dict, alias: str, token: str | None) -> None:
     if r.returncode != 0:
         die(L(f"docker login falló: {r.stderr.strip()}", f"docker login failed: {r.stderr.strip()}"))
     ok(L(f"Login en {name} hecho (el token queda solo en el servidor)", f"Logged in to {name} (the token stays only on the server)"))
+
+
+REGISTRY_WARN_DAYS = 30
+
+
+def registry_check(alias: str) -> tuple[str, str]:
+    """El token con el que el servidor baja tus imágenes, revisado allá (no sale del servidor):
+    (estado, detalle). Estado: ok (detalle: su vencimiento, o vacío si no vence), invalid, nologin,
+    unknown o error."""
+    r = remote(alias, "python3 -", stdin=forge_out("registry-check-script"))
+    state, _, detail = (r.stdout.strip().splitlines() or [""])[-1].partition(" ")
+    if r.returncode != 0 or not state:
+        return "error", r.stderr.strip()[-200:] or L("sin respuesta del servidor", "no answer from the server")
+    return state, detail.strip()
+
+
+def registry_rows(cfg: dict, alias: str, today: datetime.date | None = None) -> list:
+    """La fila de andamio estado (y de andamio registro) sobre el acceso a tus imágenes."""
+    _, name = registry(cfg)
+    area, fix = L("Imágenes", "Images"), "andamio registro renovar"
+    state, detail = registry_check(alias)
+    if state == "ok":
+        if not detail:
+            return [["OK", area, L(f"El servidor baja tus imágenes de {name} (token sin vencimiento)",
+                                   f"The server pulls your images from {name} (token with no expiry)"), ""]]
+        try:
+            expires = datetime.date.fromisoformat(detail[:10])
+        except ValueError:
+            return [["OK", area, L(f"El servidor baja tus imágenes de {name} (vence: {detail})",
+                                   f"The server pulls your images from {name} (expires: {detail})"), ""]]
+        days = (expires - (today or datetime.date.today())).days
+        if days > REGISTRY_WARN_DAYS:
+            return [["OK", area, L(f"El servidor baja tus imágenes de {name} (su token vence el {expires}, en {days} días)",
+                                   f"The server pulls your images from {name} (its token expires on {expires}, in {days} days)"), ""]]
+        return [["WARN", area, L(f"El token de {name} del servidor vence el {expires} (en {days} días): después, ningún deploy baja su imagen",
+                                 f"The server's {name} token expires on {expires} (in {days} days): after that, no deploy can pull its image"), fix]]
+    if state == "invalid":
+        return [["FAIL", area, L(f"El token de {name} del servidor ya no sirve (vencido o revocado): los deploys no bajan imágenes",
+                                 f"The server's {name} token no longer works (expired or revoked): deploys can't pull images"), fix]]
+    if state == "nologin":
+        return [["FAIL", area, L(f"El servidor no tiene login en {name}: los deploys no bajan imágenes",
+                                 f"The server isn't logged in to {name}: deploys can't pull images"), fix]]
+    if state == "unknown":
+        return [["WARN", area, L(f"Docker guarda la clave de {name} en un almacén aparte: no puedo revisarla",
+                                 f"Docker keeps the {name} key in a separate store: I can't check it"), ""]]
+    return [["WARN", area, L(f"No pude revisar el token de {name}: {detail}", f"Couldn't check the {name} token: {detail}"), ""]]
+
+
+def cmd_registro(args: argparse.Namespace) -> None:
+    """El acceso del servidor a tus imágenes (su token de solo lectura): verlo, o renovarlo antes
+    de que venza. El token viaja de tu teclado al servidor; no queda en tu máquina ni en el repo."""
+    cfg = load_config()
+    alias = server_alias()
+    if not ssh_ok([alias]):
+        die(L(f"No entro al servidor ({alias}) por SSH: corre primero `andamio servidor`.",
+              f"Can't reach the server ({alias}) over SSH: run `andamio server` first."))
+    host, name = registry(cfg)
+    title(L(f"Acceso a tus imágenes ({name})", f"Access to your images ({name})"))
+    rows = registry_rows(cfg, alias)
+    print_rows(rows)
+    if args.accion not in ("renovar", "renew"):
+        if rows[0][0] != "OK":
+            note(L("Renuévalo: andamio registro renovar", "Renew it: andamio registry renew"))
+        return
+    print()
+    note(forge_out("registry-token-help"))
+    token = ask_secret(L("Token nuevo de solo lectura de imágenes (no se ve al escribir)",
+                         "New read-only image token (hidden while typing)"), registry_token_problem)
+    r = remote(alias, f"docker login {host} -u {cfg['andamio_github_owner']} --password-stdin", stdin=token + "\n")
+    if r.returncode != 0:
+        die(L(f"docker login falló: {r.stderr.strip()}", f"docker login failed: {r.stderr.strip()}"))
+    ok(L(f"Login en {name} renovado (el token queda solo en el servidor)", f"{name} login renewed (the token stays only on the server)"))
+    print_rows(registry_rows(cfg, alias))
+    note(L("Borra el token viejo en GitHub (Settings → Developer settings → Personal access tokens): ya no se usa.",
+           "Delete the old token on GitHub (Settings → Developer settings → Personal access tokens): it's no longer used."))
 
 
 def step_platform(cfg: dict, alias: str) -> None:
@@ -6262,6 +6341,8 @@ def cmd_estado(args: argparse.Namespace) -> None:
         results, listening = server_check(cfg, alias, f"BACKUPS={'true' if backups else 'false'}")
     finally:
         wipe_sudo()
+    # El token con el que bajan las imágenes: si vence, ningún deploy funciona (y nada avisa antes).
+    results += registry_rows(cfg, alias)
     net, on_vpn = internet_port_rows(cfg, alias, listening, {80, 443})
     ip = cfg["andamio_server_ip"]
     # Let's Encrypt (modo http) valida por el 80, y la redirección a HTTPS vive ahí.
@@ -6752,7 +6833,7 @@ def main() -> None:
         sys.exit(rc)
     known = {"setup", "init", "seguridad", "security", "servidor", "server", "estado", "status", "backups", "update", "actualizar",
              "certificado", "certificate", "use", "usar", "olvidar", "forget", "alertas", "alerts", "ui",
-             "zona", "timezone", "telegram", "servicios", "services"}
+             "zona", "timezone", "telegram", "servicios", "services", "registro", "registry"}
     if args[0] not in known:
         die(L(f"Comando desconocido: {args[0]}. Mira `andamio help`.", f"Unknown command: {args[0]}. See `andamio help`."))
     parser = argparse.ArgumentParser(prog="andamio", description=L(
@@ -6823,6 +6904,13 @@ def main() -> None:
     p_tg.add_argument("--chat", help=L("tu ID de chat (si no, se encuentra solo)", "your chat ID (otherwise it's found for you)"))
     p_tg.add_argument("--token-stdin", action="store_true", help=L("lee el token de la entrada (para el panel)", "read the token from stdin (for the panel)"))
     p_tg.set_defaults(func=cmd_telegram)
+    p_rg = sub.add_parser("registro", aliases=["registry"], help=L(
+        "el acceso del servidor a tus imágenes (su token): verlo, o renovarlo antes de que venza",
+        "the server's access to your images (its token): see it, or renew it before it expires"))
+    p_rg.add_argument("accion", nargs="?", choices=["renovar", "renew"],
+                      help=L("renovar: pide un token nuevo y hace el login en el servidor",
+                             "renew: asks for a new token and logs the server in"))
+    p_rg.set_defaults(func=cmd_registro)
     p_tz = sub.add_parser("zona", aliases=["timezone"], help=L("la zona horaria de tus tareas programadas: verla o cambiarla",
                                                                "your scheduled tasks' time zone: see it or change it"))
     p_tz.add_argument("zona", nargs="?", help="America/Bogota, Europe/Madrid, UTC…")

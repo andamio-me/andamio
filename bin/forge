@@ -40,6 +40,7 @@ con los mismos métodos y su pipeline de CI; nada más de andamio cambia.
   forge registry-name                      su nombre para mostrar (p. ej. GHCR)
   forge registry-token-help                cómo crear un token de solo lectura de imágenes
   forge registry-token-check               valida el token (por stdin); el problema, si hay
+  forge registry-check-script              script (python3) que revisa en el servidor el token de Docker y su vencimiento
 
 Con varias apps en un repo, ci-watch, ci-last-failed y ci-runs aceptan --workflow ARCHIVO
 (p. ej. andamio-api.yml): solo las corridas de esa app. ci-last-failed y ci-runs aceptan
@@ -401,6 +402,30 @@ packages. Create it at  https://github.com/settings/tokens/new  (classic):
   - Scope: ONLY read:packages
 and paste it here (it isn't shown or kept in your history).""")
 
+    def registry_check_script(self) -> str:
+        """Lo que corre en el servidor (python3, por la entrada) para revisar el token con el que
+        Docker baja tus imágenes, sin que el token salga de ahí. Imprime una línea: ok [vencimiento],
+        invalid <código HTTP>, nologin, unknown (Docker guarda sus claves en otro lado) o error <motivo>."""
+        return f'''import base64, json, os, urllib.error, urllib.request
+try:
+    conf = json.load(open(os.path.expanduser("~/.docker/config.json")))
+except (OSError, ValueError):
+    conf = {{}}
+auth = conf.get("auths", {{}}).get("{self.registry()}", {{}}).get("auth")
+if not auth:
+    print("unknown" if conf.get("credsStore") else "nologin")
+    raise SystemExit
+token = base64.b64decode(auth).decode().partition(":")[2]
+req = urllib.request.Request("https://api.github.com/user", headers={{"Authorization": "Bearer " + token, "User-Agent": "andamio"}})
+try:
+    with urllib.request.urlopen(req, timeout=15) as r:
+        print("ok", r.headers.get("github-authentication-token-expiration") or "")
+except urllib.error.HTTPError as e:
+    print("invalid", e.code)
+except OSError as e:
+    print("error", e)
+'''
+
     def registry_token_check(self, token: str) -> str | None:
         if not re.fullmatch(r"gh[pousr]_[A-Za-z0-9]{20,}", token):
             return L("Eso no parece un token de GitHub (empiezan con ghp_).", "That doesn't look like a GitHub token (they start with ghp_).")
@@ -494,6 +519,7 @@ def main() -> None:
         "registry": lambda: f.registry(),
         "registry-name": lambda: f.registry_name(),
         "registry-token-help": lambda: f.registry_token_help(),
+        "registry-check-script": lambda: f.registry_check_script(),
     }
     if cmd in exit_bool:
         sys.exit(0 if exit_bool[cmd]() else 1)

@@ -67,6 +67,7 @@ one. Spanish names work too: `servidor`, `estado`, `certificado`, `olvidar`.
 | `andamio status` | Security and health check, from the server and from the internet. Changes nothing |
 | `andamio update [--check]` | Brings in andamio's improvements and patches, never touching yours |
 | `andamio certificate [cert key]` | Your own HTTPS certificate: show or replace |
+| `andamio registry [renew]` | The server's access to your images: whether its token works and when it expires; `renew` replaces it. `andamio status` warns 30 days ahead |
 | `andamio server` | Also re-applies everything |
 | `andamio use [folder\|domain]` | With several servers: which copy `andamio` uses outside their folders |
 | `andamio forget` | Wipes your remembered sudo password now |

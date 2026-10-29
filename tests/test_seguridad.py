@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import socket
 import subprocess
+from pathlib import Path
 
 import pytest
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def test_probe_port_open_and_closed(andamio):
@@ -218,3 +221,37 @@ def test_harden_fingerprint(andamio, tmp_path, monkeypatch):
     assert andamio.harden_fingerprint(dict(cfg, andamio_ssh_port=6022)) != base
     (tmp_path / "host/ssh/x.conf").write_text("Port {{ andamio_ssh_port }}\nMaxAuthTries 3\n")
     assert andamio.harden_fingerprint(cfg) != base
+
+
+@pytest.mark.parametrize("check, level, says", [
+    (("ok", "2027-10-29 05:00:00 UTC"), "OK", "en 365 días"),
+    (("ok", "2026-11-08 05:00:00 UTC"), "WARN", "en 10 días"),
+    (("ok", ""), "OK", "sin vencimiento"),
+    (("invalid", "401"), "FAIL", "ya no sirve"),
+    (("nologin", ""), "FAIL", "no tiene login"),
+    (("error", "timeout"), "WARN", "No pude revisar"),
+])
+def test_registry_rows_warn_before_the_token_expires(andamio, monkeypatch, check, level, says):
+    """andamio estado avisa 30 días antes de que venza el token con el que bajan las imágenes."""
+    monkeypatch.setattr(andamio, "registry_check", lambda alias: check)
+    monkeypatch.setattr(andamio, "registry", lambda cfg: ("ghcr.io", "GHCR"))
+    [row] = andamio.registry_rows({}, "srv", today=andamio.datetime.date(2026, 10, 29))
+    assert row[0] == level and says in row[2], row
+    renew = level == "FAIL" or (level == "WARN" and check[0] == "ok")
+    assert row[3] == ("andamio registro renovar" if renew else "")
+
+
+def test_registry_check_script_never_needs_the_network_without_login(tmp_path):
+    """El script que revisa el token en el servidor: sin login (o con las claves en otro almacén)
+    lo dice sin ir a GitHub."""
+    script = subprocess.run([str(ROOT_DIR / "bin" / "forge"), "registry-check-script"],
+                            capture_output=True, text=True, check=True).stdout
+    home = tmp_path / "home"
+    (home / ".docker").mkdir(parents=True)
+    run = lambda: subprocess.run(["python3", "-"], input=script, capture_output=True, text=True,
+                                 env={"HOME": str(home), "PATH": "/usr/bin:/bin"}).stdout.strip()
+    assert run() == "nologin"   # sin config.json
+    (home / ".docker/config.json").write_text('{"auths": {"docker.io": {"auth": "eDp5"}}}')
+    assert run() == "nologin"   # login en otro registro, no en ghcr.io
+    (home / ".docker/config.json").write_text('{"credsStore": "desktop"}')
+    assert run() == "unknown"

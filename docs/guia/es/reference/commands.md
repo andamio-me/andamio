@@ -67,6 +67,7 @@ uno. Los nombres en inglés también funcionan: `server`, `status`, `certificate
 | `andamio estado` | Chequeo de seguridad y salud, desde el servidor y desde internet. No cambia nada |
 | `andamio update [--check]` | Trae las mejoras y los parches de andamio sin tocar lo tuyo |
 | `andamio certificado [cert llave]` | Tu propio certificado HTTPS: ver o reemplazar |
+| `andamio registro [renovar]` | El acceso del servidor a tus imágenes: si su token sirve y cuándo vence; `renovar` lo reemplaza. `andamio estado` avisa 30 días antes |
 | `andamio servidor` | También vuelve a aplicar todo |
 | `andamio use [carpeta\|dominio]` | Con varios servidores: qué copia usa `andamio` fuera de sus carpetas |
 | `andamio olvidar` | Borra ya tu contraseña de sudo recordada |
