@@ -16,7 +16,16 @@ INFRA=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 LNG=en; [[ ${ANDAMIO_LANG:-${LANG:-}} == es* ]] && LNG=es
 export ANDAMIO_LANG=$LNG    # bin/forge y ansible/hl lo heredan
 L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
-# La configuración de este servidor vive en un solo lugar: ansible/group_vars/all.yml.
+# La configuración de este servidor vive en un solo lugar: ansible/group_vars/all.yml. Sin ella
+# (el andamio público, o una copia sin andamio init), un aviso claro y no un error de Python.
+if [ ! -f "$INFRA/ansible/group_vars/all.yml" ]; then
+  L "✗ $INFRA no tiene configuración: ¿es el andamio público (el template)? Corre esto en tu copia
+  (cd a su carpeta, o andamio use). ¿Aún no tienes una? bin/andamio setup la crea." \
+    "✗ $INFRA has no configuration: is it the public andamio (the template)? Run this in your copy
+  (cd into its folder, or andamio use). Don't have one yet? bin/andamio setup creates it." >&2
+  echo >&2
+  exit 1
+fi
 cfg() { python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' \
   "$INFRA/ansible/group_vars/all.yml" "$1"; }
 OWNER=$(cfg andamio_github_owner)

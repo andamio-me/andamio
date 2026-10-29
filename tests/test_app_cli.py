@@ -196,6 +196,13 @@ def test_ci_snippet_for_one_of_several_apps(fake_copy, env):
     assert "andamio.yml" in plain and "paths:" not in plain and "deploy_key" not in plain
 
 
+def test_without_config_it_says_where_to_go(fake_copy, env):
+    """En el andamio público (sin config), un aviso claro y no un error de Python."""
+    (fake_copy / "ansible/group_vars/all.yml").unlink()
+    r = app(fake_copy, env, "list")
+    assert r.returncode == 1 and "no tiene configuración" in r.stderr and "Traceback" not in r.stderr
+
+
 def test_ci_snippet_passes_secrets_across_owners(fake_copy, env):
     """inherit no cruza de dueño: los secretos van explícitos; --inherit, para versiones viejas del pipeline."""
     forge = str(fake_copy / "bin" / "forge")
