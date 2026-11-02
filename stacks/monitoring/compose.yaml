@@ -5,7 +5,7 @@
 #    como objetivos caídos: es esperado, no hay Grafana que alerte.
 services:
   prometheus:
-    image: prom/prometheus:v3.15.0
+    image: prom/prometheus:v3.15.1
     ports:
       - "127.0.0.1:9091:9090"   # solo local: túnel SSH para desarrollo
     container_name: prometheus
