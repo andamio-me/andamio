@@ -42,7 +42,9 @@ andamio_telegram: false
 | `andamio_rate_average`, `andamio_rate_burst` | Per-IP request limit on public apps: per second sustained (100) and at once (300) |
 | `andamio_pipeline` | The repo your apps' pipeline comes from (`andamio-me/andamio`, set by `setup`). Without it, your copy's |
 | `andamio_vpn_dns` | The DNS new VPN clients get (e.g. `10.8.0.1`, your own DNS on the VPN). Empty: their network's |
-| `andamio_open_ports` | Ports open to the internet on purpose, each with its reason: `andamio status` treats them as fine |
+| `andamio_open_ports` | Ports open to the internet on purpose, each with its reason: `andamio status` treats them as fine (also when a container publishes them outside Traefik) |
+| `andamio_docker_socket` | Containers that mount the Docker socket on purpose, each with its reason: `{ container: my-gate, motivo: "…" }`. The socket is root-equivalent: declare it only if it's filtered |
+| `andamio_scrape_targets` | Metrics of apps running **outside** this server (Railway, another VPS) that Prometheus reads over the internet: `{ name: my-api, url: https://api.example.com/metrics, token: MY_API_METRICS_TOKEN, interval: 60s }`. `token` is the name of its variable in `stacks/monitoring/secrets.sops.env` (Bearer); store it with `sops set stacks/monitoring/secrets.sops.env '["MY_API_METRICS_TOKEN"]' '"…"'` |
 
 ## Your own stacks
 

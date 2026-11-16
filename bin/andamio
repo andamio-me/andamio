@@ -6374,10 +6374,20 @@ def cmd_estado(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def declared_env(cfg: dict) -> str:
+    """Lo abierto a propósito, para security-check.sh: OPEN_PORTS (andamio_open_ports) y SOCKET_OK
+    (andamio_docker_socket: contenedores que montan el socket de Docker con su motivo, p. ej. una
+    aduana que lo filtra). Solo números y nombres de contenedor válidos: van a una línea de bash."""
+    ports = [str(int(p["port"])) for p in cfg.get("andamio_open_ports") or [] if str(p.get("port", "")).isdigit()]
+    names = [str(s["container"]) for s in cfg.get("andamio_docker_socket") or []
+             if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", str(s.get("container", "")))]
+    return f"OPEN_PORTS='{' '.join(ports)}' SOCKET_OK='{' '.join(names)}'"
+
+
 def server_check(cfg: dict, alias: str, extra_env: str = "") -> tuple[list, list[int]]:
     """scripts/security-check.sh en el servidor, con sudo: (filas OK/WARN/FAIL, puertos que escuchan).
     La contraseña de sudo queda en su archivo: quien llama la borra (wipe_sudo)."""
-    script = f"ANDAMIO_LANG={LANG} SSH_PORT={int(cfg['andamio_ssh_port'])} {extra_env}\n" + \
+    script = f"ANDAMIO_LANG={LANG} SSH_PORT={int(cfg['andamio_ssh_port'])} {declared_env(cfg)} {extra_env}\n" + \
         (ROOT / "scripts" / "security-check.sh").read_text()
     pw = sudo_password_file(cfg, alias).read_text()
     # sudo lee la primera línea (la contraseña); bash, el resto (el script). Nada en argv.

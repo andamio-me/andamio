@@ -375,6 +375,54 @@
     path: "{{ andamio_infra }}/stacks/monitoring/grafana/provisioning/alerting/contact-points.yml"
     state: absent
 
+# Métricas de apps que corren fuera de este servidor (andamio_scrape_targets): un job de
+# Prometheus por objetivo en prometheus/externos/, con su token en un archivo aparte que solo lee
+# Prometheus. Los que se quitan de la config se borran.
+- name: Objetivos externos de Prometheus bien escritos
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z0-9][a-z0-9-]{0,40}$')
+      - item.url is match('^https?://[^/]+')
+      - item.token is not defined or item.token is match('^[A-Z][A-Z0-9_]*$')
+    fail_msg: >-
+      andamio_scrape_targets: {{ item }} no sirve. Cada uno: name (minúsculas, números y -),
+      url (https://…/metrics) y, si pide token, token (el NOMBRE de su variable en
+      stacks/monitoring/secrets.sops.env, p. ej. MI_API_METRICS_TOKEN).
+    quiet: true
+  loop: "{{ andamio_scrape_targets }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Carpeta de objetivos externos de Prometheus
+  ansible.builtin.file:
+    path: "{{ andamio_infra }}/stacks/monitoring/prometheus/externos"
+    state: directory
+    owner: "{{ andamio_user }}"
+    group: "{{ andamio_user }}"
+    mode: "0755"
+
+- name: Objetivos externos de Prometheus
+  when: andamio_scrape_targets | length > 0
+  andamio_files:
+    files: "{{ lookup('template', 'scrape-targets.json.j2') | from_json }}"
+  no_log: true   # los tokens
+  diff: false
+  register: andamio_scrape
+
+- name: Objetivos externos que ya no están en la config
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cd "{{ andamio_infra }}/stacks/monitoring/prometheus/externos"
+    keep=" {{ andamio_scrape_targets | map(attribute='name') | join(' ') }} "
+    for f in *.yml *.token; do
+      [ -e "$f" ] || continue
+      [[ $keep == *" ${f%.*} "* ]] || { rm -f "$f"; echo "quitado: $f"; }
+    done
+  args:
+    executable: /bin/bash
+  register: andamio_scrape_gone
+  changed_when: andamio_scrape_gone.stdout != ''
+
 # Todos en una tarea (no una por stack). Si uno falla, se detiene ahí y dice cuál.
 # Servidores a demanda (etiqueta lazymc.enabled): los prende un proxy lazymc cuando alguien entra.
 # `up` también los prendería, y lazymc no duerme lo que no prendió él: los que estaban apagados,
@@ -397,6 +445,14 @@
     executable: /bin/bash
   register: andamio_up
   changed_when: andamio_up.stdout is search('Creat|Recreat|Start')
+
+# Prometheus relee su config (y los objetivos externos) con SIGHUP, sin perder nada.
+- name: Prometheus recarga sus objetivos externos
+  when: (andamio_scrape is changed) or (andamio_scrape_gone is changed)
+  become: true
+  become_user: "{{ andamio_user }}"
+  ansible.builtin.command: docker kill -s HUP prometheus
+  changed_when: true
 
 # Sin su archivo de usuarios, un motor de Redis podría quedar sin clave (Dragonfly lo haría si
 # no tuviera DFLY_requirepass). Si responde sin pedirla, el apply falla: que no pase en silencio.

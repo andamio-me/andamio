@@ -115,6 +115,20 @@ def test_security_check_skips_the_platform(andamio):
     assert "# --- SSH ---" not in guarded and "fail2ban" not in guarded
 
 
+def test_declared_env_passes_only_safe_values(andamio):
+    """Lo abierto a propósito llega al chequeo como una línea de bash: solo números y nombres válidos."""
+    cfg = {"andamio_open_ports": [{"port": 25565, "motivo": "juego"}, {"port": "22"}, {"port": "1; rm -rf /"}],
+           "andamio_docker_socket": [{"container": "docker-gate", "motivo": "aduana"}, {"container": "x'; reboot #"}]}
+    assert andamio.declared_env(cfg) == "OPEN_PORTS='25565 22' SOCKET_OK='docker-gate'"
+    assert andamio.declared_env({}) == "OPEN_PORTS='' SOCKET_OK=''"
+
+
+def test_security_check_accepts_what_you_declared(andamio):
+    """Un puerto de andamio_open_ports o un contenedor de andamio_docker_socket no es una falla."""
+    script = (andamio.ROOT / "scripts" / "security-check.sh").read_text()
+    assert 'listed "$p" "$OPEN_PORTS"' in script and 'listed "$name" "$SOCKET_OK"' in script
+
+
 def test_rename_operator_updates_config_and_alias(andamio, tmp_path, monkeypatch):
     """Si eligió el mismo usuario que el del proveedor: otro nombre, en la configuración y en su alias."""
     cfg = tmp_path / "all.yml"

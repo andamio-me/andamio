@@ -123,6 +123,11 @@ andamio_data_dirs: []
 andamio_stack_env: {}
 andamio_extra_units: []
 
+# Métricas de apps fuera de este servidor (Railway, otro VPS…) que Prometheus va a leer por
+# Internet. Cada una: { name: mi-api, url: https://api.ejemplo.com/metrics, token: MI_API_METRICS_TOKEN,
+# interval: 60s }. token es el NOMBRE de la variable en stacks/monitoring/secrets.sops.env (opcional).
+andamio_scrape_targets: []
+
 # Límite de peticiones por IP en todas las apps públicas (Traefik): frena bots y abusos sin
 # tocar a un usuario normal (una página pesada pide 50 a 100 recursos de golpe; el burst los cubre).
 andamio_rate_average: 100   # por segundo, sostenido

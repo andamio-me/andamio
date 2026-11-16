@@ -19,6 +19,7 @@ services:
       - --storage.tsdb.retention.size=5GB
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/externos:/etc/prometheus/externos:ro   # andamio_scrape_targets (los genera Ansible)
       - prometheus_data:/prometheus
     networks: [monitoring, host-access]   # host-access: sin ella no se puede publicar el puerto
     security_opt: [no-new-privileges:true]

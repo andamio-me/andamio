@@ -2,6 +2,10 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
 
+# Apps fuera de este servidor (andamio_scrape_targets): un archivo por objetivo, los genera Ansible.
+scrape_config_files:
+  - /etc/prometheus/externos/*.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs: [{ targets: ["localhost:9090"] }]

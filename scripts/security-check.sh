@@ -4,7 +4,8 @@
 #   OK|área|qué           WARN|área|qué|arreglo           FAIL|área|qué|arreglo
 #   LISTEN|tcp|puerto     (puertos que escuchan fuera de localhost; andamio los prueba desde afuera)
 # Variables: SSH_PORT, BACKUPS (true/false), ANDAMIO_LANG (es/en), SOLO (seguridad: andamio seguridad,
-# sin plataforma: sin backups, certificados, contenedores, alertas ni VPN).
+# sin plataforma: sin backups, certificados, contenedores, alertas ni VPN), OPEN_PORTS (puertos de
+# andamio_open_ports) y SOCKET_OK (contenedores de andamio_docker_socket): declarados a propósito.
 set -uo pipefail
 # Con sudo el entorno se pierde: entonces vale el idioma de /etc/andamio/andamio.env.
 LNG=en; lang=${ANDAMIO_LANG:-$(sed -n 's/^ANDAMIO_LANG=//p' /etc/andamio/andamio.env 2> /dev/null || true)}
@@ -13,6 +14,10 @@ L() { if [ "$LNG" = es ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 [ "$(id -u)" = 0 ] || { echo "FAIL|andamio|$(L "El chequeo necesita sudo" "The check needs sudo")|"; exit 1; }
 SSH_PORT=${SSH_PORT:-22}
 BACKUPS=${BACKUPS:-false}
+OPEN_PORTS=${OPEN_PORTS:-}
+SOCKET_OK=${SOCKET_OK:-}
+# ¿Está $1 en la lista separada por espacios $2?
+listed() { [[ " $2 " == *" $1 "* ]]; }
 
 ok() { echo "OK|$1|$2"; }
 warn() { echo "WARN|$1|$2|$3"; }
@@ -141,14 +146,17 @@ if [ "$(jq -r '.ip // empty' "$dj" 2> /dev/null)" = 127.0.0.1 ] && [ "$(jq -r '.
 else
   warn "$A_ISO" "$(L "Docker publica en todas las interfaces por defecto (se salta UFW)" "Docker publishes on all interfaces by default (it bypasses UFW)")" "$REAPPLY"
 fi
-iso=0
+iso=0 declared=0
 while IFS='|' read -r name priv pid sock ports; do
   name=${name#/}
   if [ "$priv" = true ]; then
     fail "$A_ISO" "$(L "$name es privilegiado: tiene control total del servidor" "$name is privileged: it has full control of the server")" \
       "$(L "quita privileged: true de su compose" "remove privileged: true from its compose")"; iso=1
   fi
-  if [ "$sock" = SI ] && [ "$name" != socket-proxy ]; then
+  if [ "$sock" = SI ] && listed "$name" "$SOCKET_OK"; then
+    ok "$A_ISO" "$(L "$name monta el socket de Docker a propósito (andamio_docker_socket)" \
+                     "$name mounts the Docker socket on purpose (andamio_docker_socket)")"; declared=1
+  elif [ "$sock" = SI ] && [ "$name" != socket-proxy ]; then
     fail "$A_ISO" "$(L "$name monta el socket de Docker: puede controlar todo el servidor" "$name mounts the Docker socket: it can control the whole server")" \
       "$(L "usa el socket-proxy (solo lectura)" "use the socket-proxy (read-only)")"; iso=1
   fi
@@ -158,13 +166,22 @@ while IFS='|' read -r name priv pid sock ports; do
   fi
   for p in $ports; do
     [ "$name" = traefik ] && [[ $p = 80 || $p = 443 ]] && continue
+    if listed "$p" "$OPEN_PORTS"; then
+      ok "$A_ISO" "$(L "$name publica el puerto $p a propósito (andamio_open_ports)" \
+                       "$name publishes port $p on purpose (andamio_open_ports)")"; declared=1; continue
+    fi
     fail "$A_ISO" "$(L "$name publica el puerto $p en todas las interfaces: Docker se salta UFW" "$name publishes port $p on all interfaces: Docker bypasses UFW")" \
       "$(L "en su compose usa \"127.0.0.1:$p:...\", o publícalo por Traefik" "in its compose use \"127.0.0.1:$p:...\", or publish it through Traefik")"; iso=1
   done
 done < <(docker ps -q | xargs -r docker inspect --format \
   '{{.Name}}|{{.HostConfig.Privileged}}|{{.HostConfig.PidMode}}|{{range .Mounts}}{{if eq .Source "/var/run/docker.sock"}}SI{{end}}{{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{if or (eq .HostIp "") (eq .HostIp "0.0.0.0") (eq .HostIp "::")}}{{.HostPort}} {{end}}{{end}}{{end}}')
-[ "$iso" = 0 ] && ok "$A_ISO" "$(L "Ningún contenedor privilegiado, con el socket de Docker o con puertos fuera de Traefik" \
-                                   "No privileged containers, none with the Docker socket or ports outside Traefik")"
+if [ "$iso" = 0 ] && [ "$declared" = 0 ]; then
+  ok "$A_ISO" "$(L "Ningún contenedor privilegiado, con el socket de Docker o con puertos fuera de Traefik" \
+                   "No privileged containers, none with the Docker socket or ports outside Traefik")"
+elif [ "$iso" = 0 ]; then
+  ok "$A_ISO" "$(L "Fuera de lo declarado: ningún contenedor privilegiado, con el socket de Docker o con puertos fuera de Traefik" \
+                   "Beyond what you declared: no privileged containers, none with the Docker socket or ports outside Traefik")"
+fi
 
 # --- Alertas (scripts/alerts.sh: contenedor caído, disco casi lleno) ---
 A_AL=$(L Alertas Alerts)

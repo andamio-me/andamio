@@ -1,0 +1,21 @@
+{# andamio_scrape_targets para andamio_files: por objetivo, su job de Prometheus y (si lo pide) su
+   token, que sale de stacks/monitoring/secrets.sops.env y solo lo lee Prometheus (nobody, 65534). #}
+{% set secrets = lookup('community.sops.sops', playbook_dir ~ '/../stacks/monitoring/secrets.sops.env',
+                        input_type='dotenv', output_type='json') | from_json %}
+{% set dir = andamio_infra ~ '/stacks/monitoring/prometheus/externos/' %}
+{% set out = [] %}
+{% for t in andamio_scrape_targets %}
+{%   set job = {'job_name': t.name, 'scheme': t.url | urlsplit('scheme'),
+                'metrics_path': t.url | urlsplit('path') or '/metrics',
+                'scrape_interval': t.interval | default('60s'),
+                'static_configs': [{'targets': [t.url | urlsplit('netloc')], 'labels': {'origen': 'externo'}}]} %}
+{%   if t.token is defined %}
+{%     set job = job | combine({'authorization': {'type': 'Bearer',
+                                                  'credentials_file': '/etc/prometheus/externos/' ~ t.name ~ '.token'}}) %}
+{%     set _ = out.append({'dest': dir ~ t.name ~ '.token', 'owner': '65534', 'group': '65534', 'mode': '0400',
+                           'content': secrets[t.token]}) %}
+{%   endif %}
+{%   set _ = out.append({'dest': dir ~ t.name ~ '.yml', 'owner': andamio_user, 'group': andamio_user, 'mode': '0644',
+                         'content': {'scrape_configs': [job]} | to_nice_yaml}) %}
+{% endfor %}
+{{ out | to_json }}
